@@ -8,10 +8,23 @@ use extenddb_storage::error::StorageError;
 
 use crate::TidbEngine;
 use crate::table_helpers::{IndexRow, TableRow};
+use crate::tidb_util::retry_tidb_transaction;
 
 impl TidbEngine {
     /// Core implementation of `delete_table`.
     pub(crate) async fn delete_table_impl(
+        &self,
+        account_id: &str,
+        input: DeleteTableInput,
+    ) -> Result<TableDescription, StorageError> {
+        retry_tidb_transaction("delete_table", || {
+            let input = input.clone();
+            async move { self.delete_table_impl_once(account_id, input).await }
+        })
+        .await
+    }
+
+    async fn delete_table_impl_once(
         &self,
         account_id: &str,
         input: DeleteTableInput,

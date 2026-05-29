@@ -10,6 +10,7 @@ use extenddb_storage::error::StorageError;
 
 use crate::TidbEngine;
 use crate::throughput::provisioned_throughput_description;
+use crate::tidb_util::retry_tidb_transaction;
 
 impl TidbEngine {
     /// Core implementation of `update_table` (REQ-CTRL-003).
@@ -18,6 +19,27 @@ impl TidbEngine {
         account_id: &str,
         input: UpdateTableInput,
     ) -> Result<TableDescription, StorageError> {
+        let has_control_plane_updates = retry_tidb_transaction("update_table", || async {
+            self.update_table_catalog_update_once(account_id, &input)
+                .await
+        })
+        .await?;
+
+        let desc = self
+            .build_table_description(account_id, &input.table_name)
+            .await?;
+        if has_control_plane_updates {
+            self.control_plane_notify.notify_one();
+        }
+
+        Ok(desc)
+    }
+
+    async fn update_table_catalog_update_once(
+        &self,
+        account_id: &str,
+        input: &UpdateTableInput,
+    ) -> Result<bool, StorageError> {
         Self::validate_account_id(account_id)?;
         let mut tx = self
             .pool
@@ -292,13 +314,6 @@ impl TidbEngine {
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        let desc = self
-            .build_table_description(account_id, &input.table_name)
-            .await?;
-        if has_control_plane_updates {
-            self.control_plane_notify.notify_one();
-        }
-
-        Ok(desc)
+        Ok(has_control_plane_updates)
     }
 }

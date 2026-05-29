@@ -93,7 +93,12 @@ storage_uri = "s3://extenddb-backups/prod"
 send_credentials_to_tikv = false
 ```
 
-Use TiDB-native HA for the cluster and BR for physical backup/restore.
+Use TiDB-native HA for the cluster and BR for physical backup/restore. Multiple
+extenddb frontends can point at the same TiDB cluster; DynamoDB API traffic does
+not require sticky sessions. The TiDB backend configures each SQL session for
+pessimistic transactions, uses TiDB native secondary indexes and TTL, and
+retries only TiDB-documented whole-transaction retry errors such as
+schema-change conflicts, write conflicts, deadlocks, and lock wait timeouts.
 
 ### Containerized
 
@@ -228,6 +233,11 @@ Multiple extenddb instances can connect to the same catalog. However:
 - This means multiple instances see consistent data without cache invalidation
 - The storage backend's connection pool and transaction model handle concurrent access
 - Ensure `pool_size × instance_count + worker overhead` fits the backend's connection limits
+- The DynamoDB API is stateless across frontends; the optional web console uses
+  per-frontend sessions, so route console users with load-balancer affinity.
+- For TiDB, all frontends should use the same TiDB cluster for the catalog and
+  data databases so TiDB owns transaction coordination, online DDL, native TTL,
+  and BR-based backup/restore as one distributed database.
 
 ## Performance Tuning
 

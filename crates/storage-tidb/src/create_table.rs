@@ -13,7 +13,7 @@ use extenddb_storage::util::{index_arn, stream_arn, table_arn};
 
 use crate::TidbEngine;
 use crate::throughput::provisioned_throughput_description;
-use crate::tidb_util::is_unique_violation;
+use crate::tidb_util::{is_unique_violation, retry_tidb_transaction};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum CreateTableActivation {
@@ -78,6 +78,22 @@ impl TidbEngine {
 
     /// Core implementation of `create_table`.
     pub(crate) async fn create_table_impl_with_activation(
+        &self,
+        account_id: &str,
+        input: CreateTableInput,
+        activation: CreateTableActivation,
+    ) -> Result<TableDescription, StorageError> {
+        retry_tidb_transaction("create_table", || {
+            let input = input.clone();
+            async move {
+                self.create_table_impl_with_activation_once(account_id, input, activation)
+                    .await
+            }
+        })
+        .await
+    }
+
+    async fn create_table_impl_with_activation_once(
         &self,
         account_id: &str,
         input: CreateTableInput,

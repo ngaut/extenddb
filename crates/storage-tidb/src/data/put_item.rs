@@ -14,6 +14,7 @@ use super::query::check_condition;
 use super::tx_helpers::write_stream_record_in_tx;
 use super::{data_table_name, json_to_item};
 use crate::TidbEngine;
+use crate::tidb_util::retry_tidb_transaction;
 
 impl TidbEngine {
     /// Implementation of `DataEngine::put_item`.
@@ -26,15 +27,31 @@ impl TidbEngine {
         maps: &ExpressionMaps,
         stream: Option<&StreamCapture>,
     ) -> Result<Option<Item>, StorageError> {
+        retry_tidb_transaction("put_item", || async {
+            self.put_item_impl_once(key_info, &item, return_old, condition, maps, stream)
+                .await
+        })
+        .await
+    }
+
+    async fn put_item_impl_once(
+        &self,
+        key_info: &TableKeyInfo,
+        item: &Item,
+        return_old: bool,
+        condition: Option<&Expr>,
+        maps: &ExpressionMaps,
+        stream: Option<&StreamCapture>,
+    ) -> Result<Option<Item>, StorageError> {
         let ddb_table = data_table_name(&key_info.table_id);
 
-        let pk_text = composite_pk_to_text(&item, &key_info.key_schema)?;
+        let pk_text = composite_pk_to_text(item, &key_info.key_schema)?;
 
         let item_json =
-            serde_json::to_value(&item).map_err(|e| StorageError::Internal(e.to_string()))?;
+            serde_json::to_value(item).map_err(|e| StorageError::Internal(e.to_string()))?;
 
         let index_keys = fetch_write_index_key_schemas(&key_info.table_id, &self.pool).await?;
-        validate_item_index_key_types(&item, &index_keys, &key_info.attribute_definitions)?;
+        validate_item_index_key_types(item, &index_keys, &key_info.attribute_definitions)?;
 
         // When there's a condition, return_old, or stream capture, we need a transaction.
         let needs_tx = condition.is_some() || return_old || stream.is_some();
@@ -120,7 +137,7 @@ impl TidbEngine {
                         key_info,
                         capture,
                         old_for_stream.as_ref(),
-                        Some(&item),
+                        Some(item),
                     )
                     .await?;
                 }
@@ -225,7 +242,7 @@ impl TidbEngine {
                         key_info,
                         capture,
                         old_for_stream.as_ref(),
-                        Some(&item),
+                        Some(item),
                     )
                     .await?;
                 }

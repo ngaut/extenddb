@@ -19,10 +19,21 @@ use super::tx_helpers::{
     upsert_item_in_tx, write_stream_record_in_tx,
 };
 use crate::TidbEngine;
+use crate::tidb_util::retry_tidb_transaction;
 
 impl TidbEngine {
     /// Implementation of `DataEngine::transact_get_items`.
     pub(crate) async fn transact_get_items_impl(
+        &self,
+        ops: &[TransactGetOp<'_>],
+    ) -> Result<Vec<Option<Item>>, StorageError> {
+        retry_tidb_transaction("transact_get_items", || async {
+            self.transact_get_items_impl_once(ops).await
+        })
+        .await
+    }
+
+    async fn transact_get_items_impl_once(
         &self,
         ops: &[TransactGetOp<'_>],
     ) -> Result<Vec<Option<Item>>, StorageError> {
@@ -68,6 +79,17 @@ impl TidbEngine {
 
     /// Implementation of `DataEngine::transact_write_items`.
     pub(crate) async fn transact_write_items_impl(
+        &self,
+        ops: &[TransactWriteOp<'_>],
+        token: Option<(&str, &str)>,
+    ) -> Result<(), StorageError> {
+        retry_tidb_transaction("transact_write_items", || async {
+            self.transact_write_items_impl_once(ops, token).await
+        })
+        .await
+    }
+
+    async fn transact_write_items_impl_once(
         &self,
         ops: &[TransactWriteOp<'_>],
         token: Option<(&str, &str)>,

@@ -81,7 +81,8 @@ inventory::submit! {
         factory: |connection_string| {
             let connection_string = config::sqlx_connection_string(connection_string);
             Box::pin(async move {
-                let pool = sqlx::MySqlPool::connect(&connection_string)
+                let pool = crate::tidb_util::tidb_pool_options()
+                    .connect(&connection_string)
                     .await
                     .map_err(|e| extenddb_storage::settings_store::SettingsStoreError::ConnectionFailed(e.to_string()))?;
                 Ok(Box::new(TidbCatalogStore::new(pool)) as Box<dyn extenddb_storage::management_store::SettingsStore>)
@@ -97,7 +98,8 @@ inventory::submit! {
         factory: |connection_string| {
             let connection_string = config::sqlx_connection_string(connection_string);
             Box::pin(async move {
-                let pool = sqlx::MySqlPool::connect(&connection_string)
+                let pool = crate::tidb_util::tidb_pool_options()
+                    .connect(&connection_string)
                     .await
                     .map_err(|e| extenddb_storage::diagnostics_store::DiagnosticsStoreError::ConnectionFailed(e.to_string()))?;
                 Ok(Box::new(TidbCatalogStore::new(pool)) as Box<dyn extenddb_storage::diagnostics::DiagnosticsStore>)
@@ -111,7 +113,6 @@ use std::sync::Arc;
 use extenddb_core::version::CatalogVersion;
 use extenddb_storage::error::StorageError;
 use sqlx::MySqlPool;
-use sqlx::mysql::MySqlPoolOptions;
 
 /// Expected catalog version — compiled into the binary (REQ-CAT-006, D-9).
 ///
@@ -176,11 +177,7 @@ impl TidbEngine {
 
         // P79/P6: Set min_connections to avoid cold-start latency on first requests.
         let min_conns = pool_size.min(2);
-        let pool = MySqlPoolOptions::new()
-            .max_connections(pool_size)
-            .min_connections(min_conns)
-            .test_before_acquire(false)
-            .max_lifetime(std::time::Duration::from_secs(1800))
+        let pool = crate::tidb_util::sized_tidb_pool_options(pool_size, min_conns)
             .connect(&crate::config::sqlx_connection_string(
                 &config.connection_string,
             ))
@@ -195,16 +192,14 @@ impl TidbEngine {
         .fetch_optional(&pool)
         .await
         {
-            Ok(Some((data_conn,))) if !data_conn.is_empty() => MySqlPoolOptions::new()
-                .max_connections(pool_size)
-                .min_connections(min_conns)
-                .test_before_acquire(false)
-                .max_lifetime(std::time::Duration::from_secs(1800))
-                .connect(&crate::config::sqlx_connection_string(&data_conn))
-                .await
-                .map_err(|e| {
-                    StorageError::Connection(format!("data database connection failed: {e}"))
-                })?,
+            Ok(Some((data_conn,))) if !data_conn.is_empty() => {
+                crate::tidb_util::sized_tidb_pool_options(pool_size, min_conns)
+                    .connect(&crate::config::sqlx_connection_string(&data_conn))
+                    .await
+                    .map_err(|e| {
+                        StorageError::Connection(format!("data database connection failed: {e}"))
+                    })?
+            }
             _ => pool.clone(),
         };
 
@@ -436,11 +431,10 @@ inventory::submit! {
                 } else {
                     max_catalog_connections
                 };
-                let catalog_pool = MySqlPoolOptions::new()
-                    .max_connections(catalog_pool_size)
-                    .min_connections(catalog_pool_size.min(2))
-                    .test_before_acquire(false)
-                    .max_lifetime(std::time::Duration::from_secs(1800))
+                let catalog_pool = crate::tidb_util::sized_tidb_pool_options(
+                    catalog_pool_size,
+                    catalog_pool_size.min(2),
+                )
                     .connect(&crate::config::sqlx_connection_string(&connection_string))
                     .await
                     .map_err(|e| BackendError::ConnectionFailed {

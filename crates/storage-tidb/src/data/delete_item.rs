@@ -13,10 +13,27 @@ use super::query::check_condition;
 use super::tx_helpers::write_stream_record_in_tx;
 use super::{data_table_name, json_to_item};
 use crate::TidbEngine;
+use crate::tidb_util::retry_tidb_transaction;
 
 impl TidbEngine {
     /// Implementation of `DataEngine::delete_item`.
     pub(crate) async fn delete_item_impl(
+        &self,
+        key_info: &TableKeyInfo,
+        key: &Item,
+        return_old: bool,
+        condition: Option<&Expr>,
+        maps: &ExpressionMaps,
+        stream: Option<&StreamCapture>,
+    ) -> Result<Option<Item>, StorageError> {
+        retry_tidb_transaction("delete_item", || async {
+            self.delete_item_impl_once(key_info, key, return_old, condition, maps, stream)
+                .await
+        })
+        .await
+    }
+
+    async fn delete_item_impl_once(
         &self,
         key_info: &TableKeyInfo,
         key: &Item,

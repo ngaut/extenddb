@@ -87,6 +87,11 @@ Available when the binary is built with the `tidb` feature.
 | `pool_size` | `20` | Maximum concurrent database connections (minimum: 10) |
 | `catalog_pool_size` | (= `pool_size`) | Maximum connections for management/authz pool (minimum: 10) |
 
+Each TiDB pool configures checked-out sessions for pessimistic transactions and
+in-place pessimistic unique-constraint checks. This makes conditional writes,
+transactional stream capture, control-plane ownership, and online DDL recovery
+behave consistently when several extenddb frontends share one TiDB cluster.
+
 #### [storage.tidb.backup]
 
 TiDB backup and restore uses native BR, not a logical row-copy table. Configure these fields before using `CreateBackup` with the TiDB backend.

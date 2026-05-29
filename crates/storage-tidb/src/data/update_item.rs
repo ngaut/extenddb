@@ -15,11 +15,33 @@ use super::query::check_condition;
 use super::tx_helpers::write_stream_record_in_tx;
 use super::{data_table_name, json_to_item};
 use crate::TidbEngine;
+use crate::tidb_util::retry_tidb_transaction;
 
 impl TidbEngine {
     /// Implementation of `DataEngine::update_item`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn update_item_impl(
+        &self,
+        key_info: &TableKeyInfo,
+        key: &Item,
+        actions: &[UpdateAction],
+        return_old: bool,
+        return_new: bool,
+        condition: Option<&Expr>,
+        maps: &ExpressionMaps,
+        stream: Option<&StreamCapture>,
+    ) -> Result<(Option<Item>, Option<Item>), StorageError> {
+        retry_tidb_transaction("update_item", || async {
+            self.update_item_impl_once(
+                key_info, key, actions, return_old, return_new, condition, maps, stream,
+            )
+            .await
+        })
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_item_impl_once(
         &self,
         key_info: &TableKeyInfo,
         key: &Item,

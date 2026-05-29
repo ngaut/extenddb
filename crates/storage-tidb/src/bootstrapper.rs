@@ -13,7 +13,7 @@ use extenddb_storage::bootstrapper::{
 };
 use extenddb_storage::management_store::{OpError, OpResult};
 use sqlx::MySqlPool;
-use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions};
+use sqlx::mysql::MySqlConnectOptions;
 use tokio::sync::OnceCell;
 
 use crate::CATALOG_VERSION;
@@ -62,7 +62,7 @@ impl TidbBootstrapper {
                 } else {
                     opts
                 };
-                MySqlPoolOptions::new()
+                crate::tidb_util::tidb_pool_options()
                     .max_connections(1)
                     .connect_with(opts)
                     .await
@@ -94,7 +94,7 @@ impl TidbBootstrapper {
 
     /// Open a one-shot pool to the given database as the application user.
     async fn app_pool(&self, database: &str) -> OpResult<MySqlPool> {
-        MySqlPoolOptions::new()
+        crate::tidb_util::tidb_pool_options()
             .max_connections(1)
             .connect_with(self.app_connect_opts(database))
             .await

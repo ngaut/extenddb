@@ -170,7 +170,7 @@ impl extenddb_storage::diagnostics::DiagnosticsStore for TidbCatalogStore {
             match (conn_row, name_row) {
                 (Some((conn,)), Some((name,))) => {
                     // Test connection
-                    sqlx::mysql::MySqlPoolOptions::new()
+                    crate::tidb_util::tidb_pool_options()
                         .max_connections(1)
                         .connect(&conn)
                         .await

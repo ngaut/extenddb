@@ -59,6 +59,8 @@
 #   backend = "tidb"
 # Connection string points to the CATALOG database. TiDB listens on port 4000 by default.
 # The `tidb://` scheme is accepted in config and converted to `mysql://` for sqlx.
+# Runtime pools configure TiDB sessions for pessimistic transactions so multiple
+# ExtendDB frontends can share the same TiDB cluster without frontend locks.
 # connection_string = "mysql://extenddb:extenddb-local-dev@localhost:4000/extenddb_catalog"
 # pool_size = 20
 # catalog_pool_size = 20

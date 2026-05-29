@@ -6,7 +6,7 @@
 use extenddb_storage::management_store::{OpError, OpResult, RoleDetail};
 
 use crate::catalog_store::TidbCatalogStore;
-use crate::tidb_util::{is_fk_violation, is_unique_violation};
+use crate::tidb_util::{is_fk_violation, is_unique_violation, retry_tidb_management_transaction};
 
 impl TidbCatalogStore {
     pub(crate) async fn create_role_impl(
@@ -165,9 +165,21 @@ impl TidbCatalogStore {
         role_name: &str,
         tags: &[(String, String)],
     ) -> OpResult<()> {
+        retry_tidb_management_transaction("tag_role", || async {
+            self.tag_role_once(account_id, role_name, tags).await
+        })
+        .await
+    }
+
+    async fn tag_role_once(
+        &self,
+        account_id: &str,
+        role_name: &str,
+        tags: &[(String, String)],
+    ) -> OpResult<()> {
         let mut tx = self.pool().begin().await.map_err(|e| {
             tracing::error!("tag_role begin: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
         for (key, value) in tags {
             let result = sqlx::query(
@@ -188,13 +200,13 @@ impl TidbCatalogStore {
                 }
                 Err(e) => {
                     tracing::error!("tag_role failed: {e}");
-                    return Err(OpError::Internal("Database error".to_owned()));
+                    return Err(OpError::Internal(e.to_string()));
                 }
             }
         }
         tx.commit().await.map_err(|e| {
             tracing::error!("tag_role commit: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })
     }
 
@@ -204,9 +216,21 @@ impl TidbCatalogStore {
         role_name: &str,
         tag_keys: &[String],
     ) -> OpResult<()> {
+        retry_tidb_management_transaction("untag_role", || async {
+            self.untag_role_once(account_id, role_name, tag_keys).await
+        })
+        .await
+    }
+
+    async fn untag_role_once(
+        &self,
+        account_id: &str,
+        role_name: &str,
+        tag_keys: &[String],
+    ) -> OpResult<()> {
         let mut tx = self.pool().begin().await.map_err(|e| {
             tracing::error!("untag_role begin: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
         for key in tag_keys {
             sqlx::query(
@@ -219,12 +243,12 @@ impl TidbCatalogStore {
             .await
             .map_err(|e| {
                 tracing::error!("untag_role failed: {e}");
-                OpError::Internal("Database error".to_owned())
+                OpError::Internal(e.to_string())
             })?;
         }
         tx.commit().await.map_err(|e| {
             tracing::error!("untag_role commit: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })
     }
 

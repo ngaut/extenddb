@@ -7,6 +7,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use extenddb_storage::error::StorageError;
+use extenddb_storage::management_store::OpError;
 use sqlx::mysql::MySqlPoolOptions;
 
 const MAX_TRANSACTION_RETRIES: usize = 3;
@@ -78,6 +79,42 @@ where
     }
 }
 
+/// Retry a whole TiDB management transaction when TiDB reports a safe retry.
+///
+/// Management APIs use `OpError`, but the retry boundary is the same as the
+/// data-plane storage transactions: only retry errors TiDB documents as
+/// rolled-back whole transactions, never validation, uniqueness, not-found, or
+/// unknown commit outcomes.
+pub(crate) async fn retry_tidb_management_transaction<T, F, Fut>(
+    operation: &'static str,
+    mut op: F,
+) -> Result<T, OpError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, OpError>>,
+{
+    let mut retries = 0;
+    loop {
+        match op().await {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if retries < MAX_TRANSACTION_RETRIES && is_retryable_tidb_op_error(&error) =>
+            {
+                retries += 1;
+                let delay = transaction_retry_delay(retries);
+                tracing::debug!(
+                    operation,
+                    retries,
+                    delay_ms = delay.as_millis(),
+                    "retrying TiDB management transaction after retryable error: {error:?}"
+                );
+                tokio::time::sleep(delay).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn transaction_retry_delay(retries: usize) -> Duration {
     let shift = u32::try_from(retries.saturating_sub(1)).unwrap_or(0);
     Duration::from_millis(10 * 2_u64.saturating_pow(shift))
@@ -86,6 +123,13 @@ fn transaction_retry_delay(retries: usize) -> Duration {
 fn is_retryable_tidb_storage_error(error: &StorageError) -> bool {
     match error {
         StorageError::Internal(message) => is_retryable_tidb_error_text(message),
+        _ => false,
+    }
+}
+
+fn is_retryable_tidb_op_error(error: &OpError) -> bool {
+    match error {
+        OpError::Internal(message) => is_retryable_tidb_error_text(message),
         _ => false,
     }
 }
@@ -144,8 +188,11 @@ pub(crate) fn is_fk_violation(e: &sqlx::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use extenddb_storage::error::StorageError;
+    use extenddb_storage::management_store::OpError;
 
-    use super::{is_retryable_tidb_storage_error, transaction_retry_delay};
+    use super::{
+        is_retryable_tidb_op_error, is_retryable_tidb_storage_error, transaction_retry_delay,
+    };
 
     #[test]
     fn retry_classifier_accepts_documented_whole_transaction_errors() {
@@ -172,6 +219,16 @@ mod tests {
         ] {
             assert!(!is_retryable_tidb_storage_error(&error));
         }
+    }
+
+    #[test]
+    fn management_retry_classifier_uses_same_tidb_error_set() {
+        assert!(is_retryable_tidb_op_error(&OpError::Internal(
+            "ERROR 8028 (HY000): Information schema is changed. [try again later]".to_owned(),
+        )));
+        assert!(!is_retryable_tidb_op_error(&OpError::AlreadyExists(
+            "already exists".to_owned(),
+        )));
     }
 
     #[test]

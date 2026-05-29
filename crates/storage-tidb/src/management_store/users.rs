@@ -6,10 +6,23 @@
 use extenddb_storage::management_store::{OpError, OpResult, UserDetail};
 
 use crate::catalog_store::TidbCatalogStore;
-use crate::tidb_util::{is_fk_violation, is_unique_violation};
+use crate::tidb_util::{is_fk_violation, is_unique_violation, retry_tidb_management_transaction};
 
 impl TidbCatalogStore {
     pub(crate) async fn create_user_impl(
+        &self,
+        account_id: &str,
+        user_name: &str,
+        password_hash: Option<&str>,
+    ) -> OpResult<()> {
+        retry_tidb_management_transaction("create_user", || async {
+            self.create_user_once(account_id, user_name, password_hash)
+                .await
+        })
+        .await
+    }
+
+    async fn create_user_once(
         &self,
         account_id: &str,
         user_name: &str,
@@ -19,7 +32,7 @@ impl TidbCatalogStore {
 
         let mut tx = self.pool().begin().await.map_err(|e| {
             tracing::error!("create_user begin transaction: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
 
         let result = sqlx::query(
@@ -43,7 +56,7 @@ impl TidbCatalogStore {
             }
             Err(e) => {
                 tracing::error!("create_user failed: {e}");
-                return Err(OpError::Internal("Database error".to_owned()));
+                return Err(OpError::Internal(e.to_string()));
             }
         }
 
@@ -73,12 +86,12 @@ impl TidbCatalogStore {
         .await
         {
             tracing::error!("seed self-service policy failed: {e}");
-            return Err(OpError::Internal("Database error".to_owned()));
+            return Err(OpError::Internal(e.to_string()));
         }
 
         tx.commit().await.map_err(|e| {
             tracing::error!("create_user commit: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
 
         Ok(())
@@ -271,9 +284,21 @@ impl TidbCatalogStore {
         user_name: &str,
         tags: &[(String, String)],
     ) -> OpResult<()> {
+        retry_tidb_management_transaction("tag_user", || async {
+            self.tag_user_once(account_id, user_name, tags).await
+        })
+        .await
+    }
+
+    async fn tag_user_once(
+        &self,
+        account_id: &str,
+        user_name: &str,
+        tags: &[(String, String)],
+    ) -> OpResult<()> {
         let mut tx = self.pool().begin().await.map_err(|e| {
             tracing::error!("tag_user begin: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
         for (key, value) in tags {
             let result = sqlx::query(
@@ -294,13 +319,13 @@ impl TidbCatalogStore {
                 }
                 Err(e) => {
                     tracing::error!("tag_user failed: {e}");
-                    return Err(OpError::Internal("Database error".to_owned()));
+                    return Err(OpError::Internal(e.to_string()));
                 }
             }
         }
         tx.commit().await.map_err(|e| {
             tracing::error!("tag_user commit: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })
     }
 
@@ -310,9 +335,21 @@ impl TidbCatalogStore {
         user_name: &str,
         tag_keys: &[String],
     ) -> OpResult<()> {
+        retry_tidb_management_transaction("untag_user", || async {
+            self.untag_user_once(account_id, user_name, tag_keys).await
+        })
+        .await
+    }
+
+    async fn untag_user_once(
+        &self,
+        account_id: &str,
+        user_name: &str,
+        tag_keys: &[String],
+    ) -> OpResult<()> {
         let mut tx = self.pool().begin().await.map_err(|e| {
             tracing::error!("untag_user begin: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
         for key in tag_keys {
             sqlx::query(
@@ -325,12 +362,12 @@ impl TidbCatalogStore {
             .await
             .map_err(|e| {
                 tracing::error!("untag_user failed: {e}");
-                OpError::Internal("Database error".to_owned())
+                OpError::Internal(e.to_string())
             })?;
         }
         tx.commit().await.map_err(|e| {
             tracing::error!("untag_user commit: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })
     }
 

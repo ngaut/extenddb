@@ -89,8 +89,9 @@ Available when the binary is built with the `tidb` feature.
 
 Each TiDB pool configures checked-out sessions for pessimistic transactions and
 in-place pessimistic unique-constraint checks. This makes conditional writes,
-transactional stream capture, control-plane ownership, and online DDL recovery
-behave consistently when several extenddb frontends share one TiDB cluster.
+transactional stream capture, catalog management mutations, control-plane
+ownership, and online DDL recovery behave consistently when several extenddb
+frontends share one TiDB cluster.
 
 #### [storage.tidb.backup]
 
@@ -500,7 +501,7 @@ Check that the configured storage backend is running and the connection string i
 **Catalog version mismatch:**
 
 ```
-Error: catalog version mismatch: found 1.0.0, expected 0.0.2
+Error: catalog version mismatch: found 1.0.0, expected <compiled catalog version>
 ```
 
 Run `extenddb migrate --config extenddb.toml` to upgrade the catalog schema.

@@ -460,7 +460,8 @@ The catalog database stores extenddb metadata: table definitions, indexes, tags,
 - REQ-TIDB-005: Use TiDB BR for native physical backup/restore instead of catalog row-copy backup data
 - REQ-TIDB-006: Use TiDB online DDL for physical table, generated-column, secondary-index, and TTL schema changes. Control-plane reconciliation must persist desired state in the catalog, keep a lease while executing DDL, and use `INFORMATION_SCHEMA.DDL_JOBS` to avoid competing with an active TiDB schema job after crash or failover.
 - REQ-TIDB-007: Every TiDB connection pool must configure sessions for pessimistic transactions and in-place pessimistic unique-constraint checks. The backend must not depend on cluster defaults for multi-frontend correctness.
-- REQ-TIDB-008: When TiDB returns a documented whole-transaction retry error such as schema change during commit, write conflict, deadlock, lock wait timeout, or resolve lock timeout, the TiDB backend retries the entire storage operation. It must not retry validation failures, conditional failures, connection-loss-at-commit outcomes, or unknown errors.
+- REQ-TIDB-008: When TiDB returns a documented whole-transaction retry error such as schema change during commit, write conflict, deadlock, lock wait timeout, or resolve lock timeout, the TiDB backend retries the entire storage or management operation. It must not retry validation failures, conditional failures, uniqueness conflicts, connection-loss-at-commit outcomes, or unknown errors.
+- REQ-TIDB-009: TransactWriteItems idempotency tokens live in the TiDB data database, not the catalog database, so token writes commit atomically with item writes and stream records.
 
 ## 9. Expression Engine Requirements
 

@@ -1,7 +1,7 @@
 -- Copyright 2026 ExtendDB contributors
 -- SPDX-License-Identifier: Apache-2.0
--- Consolidated catalog schema for extenddb (catalog version 0.0.2).
--- This is the complete schema applied on fresh installs.
+-- Initial catalog schema for extenddb. Later migrations advance the catalog
+-- version while keeping fresh installs on the same ordered migration path.
 
 -- Accounts — multi-account support (REQ-AUTH-005).
 CREATE TABLE IF NOT EXISTS accounts (
@@ -191,15 +191,6 @@ CREATE TABLE IF NOT EXISTS iam_permissions_boundaries (
     policy_document JSON NOT NULL,
     PRIMARY KEY (account_id, principal_type, principal_name) CLUSTERED
 );
-
--- Idempotency tokens for TransactWriteItems.
-CREATE TABLE IF NOT EXISTS idempotency_tokens (
-    token       VARCHAR(255) PRIMARY KEY CLUSTERED,
-    fingerprint TEXT NOT NULL,
-    created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-);
-
-CREATE INDEX idx_idempotency_tokens_created ON idempotency_tokens (created_at);
 
 -- Metrics (1-minute aggregation).
 CREATE TABLE IF NOT EXISTS metrics (

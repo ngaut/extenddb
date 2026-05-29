@@ -97,8 +97,9 @@ Use TiDB-native HA for the cluster and BR for physical backup/restore. Multiple
 extenddb frontends can point at the same TiDB cluster; DynamoDB API traffic does
 not require sticky sessions. The TiDB backend configures each SQL session for
 pessimistic transactions, uses TiDB native secondary indexes and TTL, and
-retries only TiDB-documented whole-transaction retry errors such as
-schema-change conflicts, write conflicts, deadlocks, and lock wait timeouts.
+retries only TiDB-documented whole-transaction retry errors for data-plane and
+catalog management transactions, such as schema-change conflicts, write
+conflicts, deadlocks, and lock wait timeouts.
 
 ### Containerized
 

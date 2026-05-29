@@ -48,6 +48,10 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
         "011_ttl_pending_action.sql",
         include_str!("../../storage-tidb/migrations/011_ttl_pending_action.sql"),
     ),
+    (
+        "012_drop_catalog_idempotency_tokens.sql",
+        include_str!("../../storage-tidb/migrations/012_drop_catalog_idempotency_tokens.sql"),
+    ),
 ];
 
 /// Run catalog migrations, skipping already-applied ones.

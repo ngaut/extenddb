@@ -6,7 +6,7 @@
 use extenddb_storage::management_store::{AccountDetail, OpError, OpResult};
 
 use crate::catalog_store::TidbCatalogStore;
-use crate::tidb_util::is_unique_violation;
+use crate::tidb_util::{is_unique_violation, retry_tidb_management_transaction};
 
 impl TidbCatalogStore {
     pub(crate) async fn create_account_impl(
@@ -32,9 +32,16 @@ impl TidbCatalogStore {
     }
 
     pub(crate) async fn delete_account_impl(&self, account_id: &str) -> OpResult<()> {
+        retry_tidb_management_transaction("delete_account", || async {
+            self.delete_account_once(account_id).await
+        })
+        .await
+    }
+
+    async fn delete_account_once(&self, account_id: &str) -> OpResult<()> {
         let mut tx = self.pool().begin().await.map_err(|e| {
             tracing::error!("delete_account begin transaction: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
 
         let locked = sqlx::query_as::<_, (String,)>(
@@ -45,7 +52,7 @@ impl TidbCatalogStore {
         .await
         .map_err(|e| {
             tracing::error!("delete_account lock account: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
 
         if locked.is_none() {
@@ -59,7 +66,7 @@ impl TidbCatalogStore {
                 .await
                 .map_err(|e| {
                     tracing::error!("delete_account check tables: {e}");
-                    OpError::Internal("Database error".to_owned())
+                    OpError::Internal(e.to_string())
                 })?;
 
         if has_tables {
@@ -74,7 +81,7 @@ impl TidbCatalogStore {
             .await
             .map_err(|e| {
                 tracing::error!("delete_account delete: {e}");
-                OpError::Internal("Database error".to_owned())
+                OpError::Internal(e.to_string())
             })?;
 
         if r.rows_affected() == 0 {
@@ -83,7 +90,7 @@ impl TidbCatalogStore {
 
         tx.commit().await.map_err(|e| {
             tracing::error!("delete_account commit: {e}");
-            OpError::Internal("Database error".to_owned())
+            OpError::Internal(e.to_string())
         })?;
 
         Ok(())

@@ -27,6 +27,7 @@ use crate::create_table::CreateTableActivation;
 use crate::data::physical_data_table_name;
 use crate::metadata_engine::drop_ttl_artifacts;
 use crate::throughput::provisioned_throughput_from_description;
+use crate::tidb_util::retry_tidb_transaction;
 
 const TIDB_BACKUP_BACKEND: &str = "tidb-br";
 
@@ -477,6 +478,16 @@ impl TidbEngine {
     async fn insert_backup_metadata(
         &self,
         insert: BackupInsert<'_>,
+    ) -> Result<time::OffsetDateTime, StorageError> {
+        retry_tidb_transaction("insert_backup_metadata", || async {
+            self.insert_backup_metadata_once(&insert).await
+        })
+        .await
+    }
+
+    async fn insert_backup_metadata_once(
+        &self,
+        insert: &BackupInsert<'_>,
     ) -> Result<time::OffsetDateTime, StorageError> {
         let key_schema_json = insert.snapshot.source.key_schema.clone();
         let attr_defs_json = insert.snapshot.source.attribute_definitions.clone();

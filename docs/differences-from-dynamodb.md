@@ -47,8 +47,8 @@ adaptation when switching between ExtendDB and the real service.
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
 | TTL attribute name | Any UTF-8 string (1–255 bytes) | Restricted to `[a-zA-Z0-9._-]+` (1–255 bytes). Names with spaces, quotes, or other special characters are rejected. This eliminates SQL injection risk in the TTL expression index. |
-| TTL deletion | Background process, items deleted within 48 hours of expiry | Backend-specific. PostgreSQL uses an indexed sweep. TiDB uses native table TTL for non-streaming tables and keeps an indexed worker only where DynamoDB Streams REMOVE records must be emitted. |
-| TTL stream records | REMOVE events with `userIdentity: {type: "Service", principalId: "dynamodb.amazonaws.com"}` | Supported — TTL deletions generate REMOVE stream records with the same `userIdentity` |
+| TTL deletion | Background process, items deleted within 48 hours of expiry | Backend-specific. PostgreSQL uses an indexed sweep. TiDB delegates all item TTL deletion to native TiDB table TTL. |
+| TTL stream records | REMOVE events with `userIdentity: {type: "Service", principalId: "dynamodb.amazonaws.com"}` | Backend-specific. PostgreSQL TTL sweeps emit REMOVE stream records. TiDB native TTL deletes rows inside TiDB and does not emit DynamoDB Streams REMOVE records. |
 | TTL modification cooldown | Enforces a cooldown period between enable/disable changes ("Time to live has been modified multiple times within a fixed interval") | No cooldown — TTL can be enabled and disabled immediately. Intentional divergence for faster local development. |
 
 ## Tagging

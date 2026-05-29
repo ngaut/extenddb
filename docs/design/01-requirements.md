@@ -189,7 +189,7 @@ These are the core CRUD operations. All must be fully implemented.
 - REQ-CTRL-003: UpdateTable must support adding/removing GSIs, changing billing mode, and modifying provisioned throughput
 - REQ-CTRL-004: DescribeTable must return accurate `TableSizeBytes` and `ItemCount` (may be approximate)
 - REQ-CTRL-005: ListTables must support `Limit` and `ExclusiveStartTableName` for pagination
-- REQ-CTRL-006: TTL worker must run as a background task, using an indexed sweep (expression index on TTL attribute) to efficiently find and delete expired items. Staleness metrics are recorded per deletion.
+- REQ-CTRL-006: TTL deletion is backend-specific. Worker-backed backends must use an indexed sweep to efficiently find and delete expired items. Backends with native row TTL may delegate deletion to the database and document any stream-record differences.
 
 ### 3.3 Import/Export Operations (In Scope)
 
@@ -456,8 +456,9 @@ The catalog database stores extenddb metadata: table definitions, indexes, tags,
 - REQ-TIDB-001: Use TiDB's MySQL-compatible SQL endpoint through the sqlx MySQL driver
 - REQ-TIDB-002: Use TiDB transactions for global consistency across base rows, secondary indexes, streams, and catalog updates
 - REQ-TIDB-003: Represent DynamoDB secondary indexes with generated columns and native TiDB secondary indexes; GSI versus LSI is API metadata, not separate physical index classes
-- REQ-TIDB-004: Use TiDB native TTL for non-streaming tables and retain an indexed worker path only when DynamoDB Streams REMOVE records must be emitted
+- REQ-TIDB-004: Use TiDB native TTL for all item TTL deletion. Do not run a custom item TTL worker in the TiDB backend.
 - REQ-TIDB-005: Use TiDB BR for native physical backup/restore instead of catalog row-copy backup data
+- REQ-TIDB-006: Use TiDB online DDL for physical table, generated-column, secondary-index, and TTL schema changes. Control-plane reconciliation must persist desired state in the catalog, keep a lease while executing DDL, and use `INFORMATION_SCHEMA.DDL_JOBS` to avoid competing with an active TiDB schema job after crash or failover.
 
 ## 9. Expression Engine Requirements
 

@@ -34,7 +34,7 @@ A new backend must implement **13 storage traits** plus the `CredentialStore` tr
 2. `DataEngine` — item CRUD, query, scan, transactions
 3. `MetadataEngine` — TTL, tags, table statistics
 4. `StreamEngine` — DynamoDB Streams
-5. `WorkerStore` — background worker operations (control-plane transitions, TTL cleanup)
+5. `WorkerStore` — background worker operations (for example, control-plane transitions)
 
 **Management and operational** (defined in `crates/storage/src/`):
 6. `ManagementStore` — IAM CRUD (users, groups, roles, policies, access keys, accounts)
@@ -117,7 +117,7 @@ TTL, tags, and table statistics:
 | `all_active_tables` | List active tables (all accounts) |
 
 Key design decisions:
-- TTL deletion is backend-specific. Backends may use an indexed worker path, or a native database TTL feature when stream REMOVE records are not required. When a worker deletes expired items, it must call `DataEngine::delete_item` so index sync and stream capture remain correct.
+- TTL deletion is backend-specific. Backends may use an indexed worker path or a native database TTL feature. When a worker deletes expired items, it must call `DataEngine::delete_item` so index sync and stream capture remain correct. When a native TTL feature owns deletion, document whether those database-owned deletes emit DynamoDB stream records; TiDB native TTL does not.
 - Tags are stored by ARN string.
 - Table size refresh is a background operation that counts rows and sums sizes.
 

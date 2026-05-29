@@ -131,8 +131,8 @@ written atomically with data writes when `stream` is `Some`.
 **MetadataEngine** (TTL, tags, table statistics):
 - `describe_ttl`, `update_ttl`
 - `tag_resource`, `untag_resource`, `list_tags`
-- `refresh_table_size` — updates cached table size and item count
-- `create_ttl_index`, `find_expired_items_indexed` — TTL cleanup support
+- `refresh_table_size` - updates cached table size and item count
+- `create_ttl_index`, `find_expired_items_indexed` - support for backends that implement TTL with an indexed sweep
 
 **StreamEngine** (DynamoDB Streams):
 - `write_stream_record` — writes stream record atomically with data write
@@ -973,10 +973,9 @@ internals):
 - PostgreSQL spawns its control-plane poller, pool metrics, GSI delay poller,
   TTL cleanup, stream cleanup, idempotency token cleanup, and table size refresh
   workers
-- TiDB spawns its control-plane poller, table size refresh, stream-emitting
-  item TTL cleanup, and pool metrics workers; TiDB native TTL handles
-  non-streaming item TTL plus stream-record, idempotency-token, metrics,
-  login-attempt, and assume-role session retention
+- TiDB spawns its control-plane poller, table size refresh, and pool metrics
+  workers; TiDB native TTL handles item TTL plus stream-record,
+  idempotency-token, metrics, login-attempt, and assume-role session retention
 - Other backends may spawn different workers or none at all
 
 Example PostgreSQL implementation:

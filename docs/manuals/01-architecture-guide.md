@@ -135,7 +135,7 @@ Thin binary that wires everything together:
 - CLI parsing (clap): `serve`, `init`, `destroy`, `verify`, `migrate`, `status`, `settings`, `manage`, `version`
 - Configuration loading (TOML + env vars)
 - Daemon lifecycle (bind socket → fork → syslog → serve)
-- Background tasks (log level polling, throttling polling, stream record cleanup, TTL expiry, metrics persistence)
+- Background tasks (log level polling, throttling polling, backend-specific retention, metrics persistence)
 
 ## Request Lifecycle
 
@@ -160,7 +160,7 @@ extenddb always runs as a daemon. There is no foreground mode.
 5. Connect to the configured storage backend (catalog + data databases)
 6. Verify catalog version matches binary expectation
 7. Start axum server on the pre-bound socket
-8. Spawn background tasks (log level polling, throttling polling, stream cleanup, TTL expiry, metrics persistence)
+8. Spawn background tasks (log level polling, throttling polling, backend-specific retention, metrics persistence)
 9. On SIGTERM/SIGINT: drain connections (5s timeout), exit
 
 ## Catalog Model
@@ -262,7 +262,7 @@ extenddb implements DynamoDB Streams for change data capture. Stream records are
 
 Supported operations: `ListStreams`, `DescribeStream`, `GetShardIterator`, `GetRecords`.
 
-Stream records are retained for 24 hours. A background worker cleans up expired records hourly.
+Stream records are retained for 24 hours. PostgreSQL uses a background cleanup worker; TiDB uses native table TTL for stream-record retention.
 
 ## Deployment Models
 

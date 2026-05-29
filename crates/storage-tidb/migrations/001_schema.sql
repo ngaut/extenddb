@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS tables (
     table_arn VARCHAR(512) NOT NULL,
     table_id VARCHAR(64) NOT NULL,
     ttl_attribute VARCHAR(255),
+    ttl_pending_action VARCHAR(16),
     deletion_protection_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     status_transition_at TIMESTAMP(6),
     stream_label VARCHAR(64),

@@ -26,8 +26,8 @@ impl TidbEngine {
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
         // Lock the row and fetch the durable table id used by data artifacts.
-        let row: Option<(String, String, Option<String>, bool)> = sqlx::query_as(
-            "SELECT table_status, table_id, ttl_attribute, ttl_native_enabled FROM tables \
+        let row: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT table_status, table_id, ttl_attribute FROM tables \
              WHERE account_id = ? AND table_name = ? FOR UPDATE",
         )
         .bind(account_id)
@@ -36,7 +36,7 @@ impl TidbEngine {
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        let (status, table_id, ttl_attribute, ttl_native_enabled) =
+        let (status, table_id, ttl_attribute) =
             row.ok_or_else(|| StorageError::TableNotFound(input.table_name.clone()))?;
         if status != "ACTIVE" {
             return Err(StorageError::TableNotActive(input.table_name.clone()));
@@ -52,7 +52,6 @@ impl TidbEngine {
         let changes_stream = input.stream_specification.is_some();
         let reconfigures_ttl = changes_stream && ttl_attribute.is_some();
         let has_control_plane_updates = has_gsi_updates || enables_stream || reconfigures_ttl;
-        let must_disable_native_ttl_before_stream_visible = enables_stream && ttl_native_enabled;
 
         // No-op rejection: setting same billing mode to PROVISIONED with same
         // throughput values is rejected by DynamoDB. This check runs under the
@@ -258,10 +257,6 @@ impl TidbEngine {
             if spec.stream_enabled {
                 Self::ensure_stream_shard_rows(&self.data_pool, &table_id).await?;
             }
-            if must_disable_native_ttl_before_stream_visible {
-                self.disable_native_ttl_for_table_id(&table_id).await?;
-            }
-
             let spec_json =
                 serde_json::to_value(spec).map_err(|e| StorageError::Internal(e.to_string()))?;
             let new_label = spec.stream_enabled.then(Self::new_stream_label);
@@ -281,7 +276,8 @@ impl TidbEngine {
 
             if reconfigures_ttl {
                 sqlx::query(
-                    "UPDATE tables SET ttl_index_ready = FALSE, ttl_native_enabled = FALSE \
+                    "UPDATE tables SET ttl_index_ready = FALSE, ttl_native_enabled = FALSE, \
+                         ttl_pending_action = 'ENABLE' \
                      WHERE account_id = ? AND table_name = ?",
                 )
                 .bind(account_id)

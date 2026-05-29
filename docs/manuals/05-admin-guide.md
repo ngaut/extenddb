@@ -19,7 +19,7 @@ extenddb always runs as a daemon. On startup it:
 5. Connects to the configured storage backend (catalog + data databases)
 6. Verifies catalog version matches the binary
 7. Starts the HTTP server
-8. Spawns background tasks (log level polling, stream cleanup, TTL expiry)
+8. Spawns background tasks (log level polling, backend-specific retention)
 
 ### Checking Status
 

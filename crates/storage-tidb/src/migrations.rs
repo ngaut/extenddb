@@ -44,6 +44,10 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
         "010_session_native_ttl.sql",
         include_str!("../../storage-tidb/migrations/010_session_native_ttl.sql"),
     ),
+    (
+        "011_ttl_pending_action.sql",
+        include_str!("../../storage-tidb/migrations/011_ttl_pending_action.sql"),
+    ),
 ];
 
 /// Run catalog migrations, skipping already-applied ones.

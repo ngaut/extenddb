@@ -268,7 +268,7 @@ extenddb enforces provisioned throughput limits using a token bucket per table a
 
 ### TTL Deletion Target
 
-Controls the target maximum time (in seconds) between an item's TTL expiry and its actual deletion. The TTL sweeper uses an indexed scan and runs every 60 seconds. Default: 300 seconds.
+Controls the target maximum time (in seconds) between an item's TTL expiry and its actual deletion for worker-backed TTL backends such as PostgreSQL. The TTL sweeper uses an indexed scan and runs every 60 seconds. Default: 300 seconds. TiDB ignores this setting for item TTL because TiDB native table TTL owns deletion scheduling.
 
 ```bash
 # Set to 60 seconds for faster TTL cleanup

@@ -27,7 +27,6 @@ mod table_engine;
 mod table_helpers;
 mod throughput;
 mod tidb_util;
-mod ttl_worker;
 mod update_table;
 mod worker_store;
 mod workers;
@@ -118,7 +117,7 @@ use sqlx::mysql::MySqlPoolOptions;
 ///
 /// The tuple is the single source of truth. Use `CATALOG_VERSION.to_string()`
 /// wherever a string representation is needed.
-pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 10);
+pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 11);
 
 /// Minimum number of connections allowed per pool.
 ///
@@ -304,7 +303,7 @@ impl TidbEngine {
     }
 
     /// Returns a reference to the data pool for use by background workers
-    /// that operate on `_ddb_*` tables (e.g., TTL cleanup, table size refresh).
+    /// that operate on `_ddb_*` tables (for example, table size refresh).
     pub fn data_pool(&self) -> &MySqlPool {
         &self.data_pool
     }
@@ -345,13 +344,7 @@ impl ServerRuntimeHooks for TidbRuntimeHooks {
         let storage_for_size = self.engine.clone();
         tokio::spawn(async move { workers::table_size_refresh_worker(storage_for_size).await });
 
-        // 3. TTL cleanup worker for stream-enabled user tables. TiDB native TTL
-        // handles internal retention tables and user tables without Streams.
-        let storage_for_ttl = self.engine.clone();
-        let metrics = ctx.metrics.clone();
-        tokio::spawn(async move { ttl_worker::ttl_cleanup_worker(storage_for_ttl, metrics).await });
-
-        // 4. Pool metrics worker - needs both catalog and data pools
+        // 3. Pool metrics worker - needs both catalog and data pools
         let catalog_pool = self.engine.pool.clone();
         let data_pool = self.engine.data_pool().clone();
         let metrics = ctx.metrics.clone();

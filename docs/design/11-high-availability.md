@@ -425,8 +425,8 @@ This avoids adding yet another trait that every storage backend must implement. 
 **Value:** Enables deployment Model 2 and 3 with multiple frontends behind a load balancer.
 
 **Scope:**
-- Verify all operations are safe under concurrent multi-frontend access (the No Caching Rule already ensures this, but explicit verification is needed for: control-plane transitions, TTL worker, GSI backfill worker, stream shard assignment).
-- Add distributed locking for background workers (only one frontend runs TTL cleanup, GSI backfill, etc. at a time) using backend-native advisory/session locks or an equivalent lease.
+- Verify all operations are safe under concurrent multi-frontend access (the No Caching Rule already ensures this, but explicit verification is needed for: control-plane transitions, backend-owned DDL, worker-backed TTL, GSI backfill, stream shard assignment).
+- Add distributed locking or durable ownership for background workers (only one frontend owns worker-backed TTL cleanup, GSI backfill, etc. at a time) using backend-native advisory/session locks or an equivalent lease.
 - Document load balancer configuration (sticky sessions not required since frontends are stateless).
 - Add instance-id to metrics and logs for multi-frontend debugging.
 
@@ -436,19 +436,19 @@ This avoids adding yet another trait that every storage backend must implement. 
 
 extenddb runs background workers for:
 - Control-plane transitions (CREATING → ACTIVE)
-- TTL item expiration
+- TTL item expiration for worker-backed backends
 - GSI backfill
 - Stream record cleanup
 - Table size refresh
 
-With multiple frontends, these workers must not run concurrently on multiple instances (double-processing, race conditions).
+With multiple frontends, these workers must not run concurrently on multiple instances (double-processing, race conditions). Backends with native background work, such as TiDB native TTL, should delegate that work to the backend instead of adding an ExtendDB worker lock.
 
 ### Solution: Distributed Worker Locks (Global Granularity)
 
 Use backend-native advisory/session locks or an equivalent lease to ensure only one frontend runs each worker type at a time. **Lock granularity is global (one lock per worker type), not per-table.**
 
 **Rationale for global locks:**
-- The current TTL worker iterates all tables with TTL enabled. Per-table locking would require restructuring the worker loop.
+- A worker-backed TTL implementation can iterate all tables with TTL enabled. Per-table locking would require restructuring the worker loop.
 - Per-table locking adds N advisory locks (one per table), which is operationally complex and creates a thundering-herd problem (N frontends × M tables = N×M lock attempts per tick).
 - Global locking is simpler and sufficient until profiling shows TTL processing is a bottleneck.
 - Per-table locking can be added as a future optimization if needed.
@@ -602,7 +602,7 @@ New metrics for HA monitoring:
 |---------|--------|-------|
 | DynamoDB API operations | None (Stage 1) / Consistency-aware routing (Stage 2+) | All operations continue to work. |
 | Streams | None | Stream records are written to primary in the same transaction as data. |
-| TTL | Worker lock needed (Stage 3) | Only one frontend runs TTL worker. |
+| TTL | Backend-specific | Worker-backed TTL needs one owner. TiDB item TTL uses native TiDB TTL jobs, so ExtendDB does not run a TiDB item TTL worker. |
 | Auth/IAM | None | Auth data is in the catalog, read on every request (No Caching Rule). |
 | Management console | None | Console reads from catalog like any other request. |
 | Metrics | Instance-scoped (Stage 3) | Each frontend reports its own metrics. The `extenddb_metrics` table uses `INSERT` (append-only), so concurrent writes from multiple frontends do not contend. Aggregation queries sum across instance IDs. |

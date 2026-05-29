@@ -3,22 +3,29 @@
 
 //! `MetadataEngine` trait implementation for `TidbEngine`.
 
-use extenddb_core::types::{
-    Item, StreamSpecification, Tag, TimeToLiveDescription, TimeToLiveStatus,
-};
+use extenddb_core::types::{Item, Tag, TimeToLiveDescription, TimeToLiveStatus};
 use extenddb_storage::MetadataEngine;
 use extenddb_storage::error::StorageError;
 use futures::future::BoxFuture;
 
 use crate::TidbEngine;
 use crate::data;
+use crate::worker_store::CONTROL_PLANE_LEASE_SECONDS;
 
 const TTL_EXPIRES_AT_COLUMN: &str = "_edb_ttl_expires_at";
 const TTL_EXPIRES_AT_INDEX: &str = "_edb_ttl_expires_at_idx";
 const LEGACY_TTL_EPOCH_COLUMN: &str = "_edb_ttl_epoch";
 const LEGACY_TTL_EPOCH_INDEX: &str = "_edb_ttl_epoch_idx";
 
-type TtlArtifactRow = (String, Option<String>, Option<serde_json::Value>, bool);
+#[derive(sqlx::FromRow)]
+struct TtlArtifactRow {
+    table_id: String,
+    table_status: String,
+    ttl_attribute: Option<String>,
+    ttl_pending_action: Option<String>,
+    ttl_index_ready: bool,
+    control_plane_token: Option<String>,
+}
 
 fn ttl_json_path(ttl_attribute: &str) -> String {
     format!(
@@ -46,14 +53,6 @@ fn ttl_expires_at_expr(ttl_attribute: &str) -> String {
              ELSE NULL \
          END"
     )
-}
-
-fn stream_enabled(stream_spec_json: Option<serde_json::Value>) -> Result<bool, StorageError> {
-    stream_spec_json
-        .map(serde_json::from_value::<StreamSpecification>)
-        .transpose()
-        .map_err(|e| StorageError::Internal(e.to_string()))
-        .map(|spec| spec.is_some_and(|s| s.stream_enabled))
 }
 
 async fn data_table_has_native_ttl(
@@ -143,81 +142,92 @@ async fn configure_native_ttl(
     Ok(())
 }
 
-async fn configure_stream_ttl_index(
-    pool: &sqlx::MySqlPool,
-    table_id: &str,
-    ttl_attribute: &str,
-) -> Result<(), StorageError> {
-    drop_ttl_artifacts(pool, table_id).await?;
-    add_ttl_generated_column(pool, table_id, ttl_attribute).await?;
-
-    let data_table = data::data_table_name(table_id);
-    let add_index = format!(
-        "CREATE INDEX IF NOT EXISTS `{TTL_EXPIRES_AT_INDEX}` ON {data_table} (`{TTL_EXPIRES_AT_COLUMN}`)"
-    );
-    sqlx::query(&add_index)
-        .execute(pool)
-        .await
-        .map_err(|e| StorageError::Internal(e.to_string()))?;
-
-    Ok(())
-}
-
 async fn configure_ttl_artifacts(
     pool: &sqlx::MySqlPool,
     table_id: &str,
     ttl_attribute: &str,
-    stream_spec_json: Option<serde_json::Value>,
-) -> Result<bool, StorageError> {
-    let use_native_ttl = !stream_enabled(stream_spec_json)?;
+) -> Result<(), StorageError> {
+    configure_native_ttl(pool, table_id, ttl_attribute).await
+}
 
-    if use_native_ttl {
-        configure_native_ttl(pool, table_id, ttl_attribute).await?;
-    } else {
-        configure_stream_ttl_index(pool, table_id, ttl_attribute).await?;
-    }
-
-    Ok(use_native_ttl)
+fn lost_ttl_ownership() -> StorageError {
+    StorageError::Internal("lost TiDB TTL control-plane lease".to_owned())
 }
 
 impl TidbEngine {
-    pub(crate) async fn disable_native_ttl_for_table_id(
+    pub(crate) async fn create_ttl_artifacts_owned(
         &self,
         table_id: &str,
+        token: &str,
+        ttl_attribute: &str,
     ) -> Result<(), StorageError> {
-        let data_table = data::data_table_name(table_id);
-        if data_table_has_native_ttl(&self.data_pool, &data_table).await? {
-            let sql = format!("ALTER TABLE {data_table} REMOVE TTL");
-            sqlx::query(&sql)
-                .execute(&self.data_pool)
-                .await
-                .map_err(|e| StorageError::Internal(e.to_string()))?;
+        configure_ttl_artifacts(&self.data_pool, table_id, ttl_attribute).await?;
+
+        let result = sqlx::query(
+            "UPDATE tables SET ttl_attribute = ?, ttl_index_ready = TRUE, \
+                 ttl_native_enabled = TRUE, ttl_pending_action = NULL \
+             WHERE table_id = ? AND table_status = 'UPDATING' \
+               AND control_plane_token = ?",
+        )
+        .bind(ttl_attribute)
+        .bind(table_id)
+        .bind(token)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(lost_ttl_ownership());
         }
         Ok(())
     }
 
-    pub(crate) async fn streaming_ttl_tables_ready(
+    pub(crate) async fn drop_ttl_artifacts_owned(
         &self,
-    ) -> Result<Vec<(String, String, String)>, StorageError> {
-        let rows: Vec<(String, String, String, Option<serde_json::Value>)> = sqlx::query_as(
-            "SELECT account_id, table_name, ttl_attribute, stream_specification FROM tables \
-             WHERE ttl_attribute IS NOT NULL AND ttl_index_ready = TRUE AND table_status = 'ACTIVE'",
+        table_id: &str,
+        token: &str,
+    ) -> Result<(), StorageError> {
+        drop_ttl_artifacts(&self.data_pool, table_id).await?;
+
+        let result = sqlx::query(
+            "UPDATE tables SET ttl_attribute = NULL, ttl_index_ready = FALSE, \
+                 ttl_native_enabled = FALSE, ttl_pending_action = NULL \
+             WHERE table_id = ? AND table_status = 'UPDATING' \
+               AND control_plane_token = ?",
         )
-        .fetch_all(&self.pool)
+        .bind(table_id)
+        .bind(token)
+        .execute(&self.pool)
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        rows.into_iter()
-            .filter_map(
-                |(account_id, table_name, ttl_attribute, stream_spec_json)| match stream_enabled(
-                    stream_spec_json,
-                ) {
-                    Ok(true) => Some(Ok((account_id, table_name, ttl_attribute))),
-                    Ok(false) => None,
-                    Err(e) => Some(Err(e)),
-                },
-            )
-            .collect()
+        if result.rows_affected() == 0 {
+            return Err(lost_ttl_ownership());
+        }
+        Ok(())
+    }
+
+    async fn finish_ttl_update_owned(
+        &self,
+        table_id: &str,
+        token: &str,
+    ) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            "UPDATE tables SET table_status = 'ACTIVE', status_transition_at = NULL, \
+                 control_plane_token = NULL, control_plane_lease_until = NULL \
+             WHERE table_id = ? AND table_status = 'UPDATING' \
+               AND control_plane_token = ?",
+        )
+        .bind(table_id)
+        .bind(token)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(lost_ttl_ownership());
+        }
+        Ok(())
     }
 }
 
@@ -266,58 +276,84 @@ impl MetadataEngine for TidbEngine {
         let attribute_name = attribute_name.to_string();
         Box::pin(async move {
             Self::validate_account_id(&account_id)?;
-            let row: Option<(String, Option<serde_json::Value>, String)> = sqlx::query_as(
-                "SELECT table_id, stream_specification, table_status \
-                 FROM tables WHERE account_id = ? AND table_name = ?",
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+            let row: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT table_id, table_status, ttl_attribute, ttl_pending_action \
+                 FROM tables WHERE account_id = ? AND table_name = ? FOR UPDATE",
             )
             .bind(&account_id)
             .bind(&table_name)
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-            let Some((table_id, stream_spec_json, status)) = row else {
+            let Some((table_id, status, current_ttl_attribute, pending_action)) = row else {
                 return Err(StorageError::TableNotFound(table_name));
             };
             if status != "ACTIVE" {
                 return Err(StorageError::TableNotActive(table_name));
             }
+            if !enabled && current_ttl_attribute.is_none() && pending_action.is_none() {
+                tx.commit()
+                    .await
+                    .map_err(|e| StorageError::Internal(e.to_string()))?;
+                return Ok(());
+            }
+            if self.has_active_data_ddl_job(&table_id).await? {
+                return Err(StorageError::TableNotActive(table_name));
+            }
+
+            let token = uuid::Uuid::new_v4().to_string();
 
             if enabled {
-                let use_native_ttl = configure_ttl_artifacts(
-                    &self.data_pool,
-                    &table_id,
-                    &attribute_name,
-                    stream_spec_json,
-                )
-                .await?;
-
                 sqlx::query(
-                    "UPDATE tables SET ttl_attribute = ?, ttl_index_ready = TRUE, \
-                         ttl_native_enabled = ? \
+                    "UPDATE tables SET ttl_attribute = ?, ttl_pending_action = 'ENABLE', \
+                         ttl_index_ready = FALSE, ttl_native_enabled = FALSE, \
+                         table_status = 'UPDATING', status_transition_at = CURRENT_TIMESTAMP(6), \
+                         control_plane_token = ?, \
+                         control_plane_lease_until = DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL ? SECOND) \
                      WHERE account_id = ? AND table_name = ? AND table_status = 'ACTIVE'",
                 )
                 .bind(&attribute_name)
-                .bind(use_native_ttl)
+                .bind(&token)
+                .bind(CONTROL_PLANE_LEASE_SECONDS)
                 .bind(&account_id)
                 .bind(&table_name)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
             } else {
-                drop_ttl_artifacts(&self.data_pool, &table_id).await?;
-
                 sqlx::query(
-                    "UPDATE tables SET ttl_attribute = NULL, ttl_index_ready = FALSE, \
-                         ttl_native_enabled = FALSE \
+                    "UPDATE tables SET ttl_pending_action = 'DISABLE', \
+                         table_status = 'UPDATING', status_transition_at = CURRENT_TIMESTAMP(6), \
+                         control_plane_token = ?, \
+                         control_plane_lease_until = DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL ? SECOND) \
                      WHERE account_id = ? AND table_name = ? AND table_status = 'ACTIVE'",
                 )
+                .bind(&token)
+                .bind(CONTROL_PLANE_LEASE_SECONDS)
                 .bind(&account_id)
                 .bind(&table_name)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
             }
+            tx.commit()
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+            let _lease_heartbeat = self.start_control_plane_lease_heartbeat(&table_id, &token);
+            if enabled {
+                self.create_ttl_artifacts_owned(&table_id, &token, &attribute_name)
+                    .await?;
+            } else {
+                self.drop_ttl_artifacts_owned(&table_id, &token).await?;
+            }
+            self.finish_ttl_update_owned(&table_id, &token).await?;
 
             Ok(())
         })
@@ -509,7 +545,8 @@ impl MetadataEngine for TidbEngine {
         Box::pin(async move {
             Self::validate_account_id(&account_id)?;
             let row: Option<TtlArtifactRow> = sqlx::query_as(
-                "SELECT table_id, ttl_attribute, stream_specification, ttl_index_ready \
+                "SELECT table_id, table_status, ttl_attribute, ttl_pending_action, \
+                    ttl_index_ready, control_plane_token \
                  FROM tables WHERE account_id = ? AND table_name = ?",
             )
             .bind(&account_id)
@@ -518,30 +555,46 @@ impl MetadataEngine for TidbEngine {
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-            let (table_id, catalog_ttl_attribute, stream_spec_json, index_ready) =
-                row.ok_or_else(|| StorageError::TableNotFound(table_name.clone()))?;
-            if index_ready && catalog_ttl_attribute.as_deref() == Some(ttl_attribute.as_str()) {
+            let row = row.ok_or_else(|| StorageError::TableNotFound(table_name.clone()))?;
+            if row.ttl_index_ready
+                && row.ttl_attribute.as_deref() == Some(ttl_attribute.as_str())
+                && row.ttl_pending_action.is_none()
+            {
                 return Ok(());
             }
+            if row.table_status != "ACTIVE" || row.control_plane_token.is_some() {
+                return Err(StorageError::TableNotActive(table_name));
+            }
+            if self.has_active_data_ddl_job(&row.table_id).await? {
+                return Err(StorageError::TableNotActive(table_name));
+            }
 
-            let use_native_ttl = configure_ttl_artifacts(
-                &self.data_pool,
-                &table_id,
-                &ttl_attribute,
-                stream_spec_json,
+            let token = uuid::Uuid::new_v4().to_string();
+            let result = sqlx::query(
+                "UPDATE tables SET ttl_attribute = ?, ttl_pending_action = 'ENABLE', \
+                     ttl_index_ready = FALSE, ttl_native_enabled = FALSE, \
+                     table_status = 'UPDATING', status_transition_at = CURRENT_TIMESTAMP(6), \
+                     control_plane_token = ?, \
+                     control_plane_lease_until = DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL ? SECOND) \
+                 WHERE table_id = ? AND table_status = 'ACTIVE' \
+                   AND control_plane_token IS NULL",
             )
-            .await?;
-
-            sqlx::query(
-                "UPDATE tables SET ttl_index_ready = TRUE, ttl_native_enabled = ? \
-                 WHERE account_id = ? AND table_name = ?",
-            )
-            .bind(use_native_ttl)
-            .bind(&account_id)
-            .bind(&table_name)
+            .bind(&ttl_attribute)
+            .bind(&token)
+            .bind(CONTROL_PLANE_LEASE_SECONDS)
+            .bind(&row.table_id)
             .execute(&self.pool)
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+            if result.rows_affected() == 0 {
+                return Err(StorageError::TableNotActive(table_name));
+            }
+
+            let _lease_heartbeat = self.start_control_plane_lease_heartbeat(&row.table_id, &token);
+            self.create_ttl_artifacts_owned(&row.table_id, &token, &ttl_attribute)
+                .await?;
+            self.finish_ttl_update_owned(&row.table_id, &token).await?;
 
             Ok(())
         })
@@ -556,26 +609,58 @@ impl MetadataEngine for TidbEngine {
         let table_name = table_name.to_string();
         Box::pin(async move {
             Self::validate_account_id(&account_id)?;
-            let (table_id,): (String,) = sqlx::query_as(
-                "SELECT table_id FROM tables WHERE account_id = ? AND table_name = ?",
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+            let row: Option<(String, String, Option<String>)> = sqlx::query_as(
+                "SELECT table_id, table_status, ttl_attribute \
+                 FROM tables WHERE account_id = ? AND table_name = ? FOR UPDATE",
             )
             .bind(&account_id)
             .bind(&table_name)
-            .fetch_one(&self.pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-            drop_ttl_artifacts(&self.data_pool, &table_id).await?;
+            let (table_id, status, ttl_attribute) =
+                row.ok_or_else(|| StorageError::TableNotFound(table_name.clone()))?;
+            if ttl_attribute.is_none() {
+                tx.commit()
+                    .await
+                    .map_err(|e| StorageError::Internal(e.to_string()))?;
+                return Ok(());
+            }
+            if status != "ACTIVE" {
+                return Err(StorageError::TableNotActive(table_name));
+            }
+            if self.has_active_data_ddl_job(&table_id).await? {
+                return Err(StorageError::TableNotActive(table_name));
+            }
 
+            let token = uuid::Uuid::new_v4().to_string();
             sqlx::query(
-                "UPDATE tables SET ttl_index_ready = FALSE, ttl_native_enabled = FALSE \
-                 WHERE account_id = ? AND table_name = ?",
+                "UPDATE tables SET ttl_pending_action = 'DISABLE', \
+                     table_status = 'UPDATING', status_transition_at = CURRENT_TIMESTAMP(6), \
+                     control_plane_token = ?, \
+                     control_plane_lease_until = DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL ? SECOND) \
+                 WHERE account_id = ? AND table_name = ? AND table_status = 'ACTIVE'",
             )
+            .bind(&token)
+            .bind(CONTROL_PLANE_LEASE_SECONDS)
             .bind(&account_id)
             .bind(&table_name)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+            let _lease_heartbeat = self.start_control_plane_lease_heartbeat(&table_id, &token);
+            self.drop_ttl_artifacts_owned(&table_id, &token).await?;
+            self.finish_ttl_update_owned(&table_id, &token).await?;
 
             Ok(())
         })

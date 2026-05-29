@@ -4,12 +4,14 @@
 //! `WorkerStore` trait implementation and control plane transition processing.
 
 use futures::future::BoxFuture;
+use tokio::sync::oneshot;
 
 use extenddb_core::types::{AttributeDefinition, KeySchemaElement, StreamSpecification};
+use extenddb_storage::WorkerStore;
 use extenddb_storage::error::StorageError;
-use extenddb_storage::{MetadataEngine, WorkerStore};
 
 use crate::TidbEngine;
+use crate::data::physical_data_table_name;
 
 type CreatingTableRow = (
     String,
@@ -28,11 +30,13 @@ type UpdatingTableRow = (
     Option<serde_json::Value>,
     Option<String>,
     Option<String>,
+    Option<String>,
     bool,
 );
 type PendingIndexRow = (String, String, String, serde_json::Value);
 
-const CONTROL_PLANE_LEASE_SECONDS: i64 = 60;
+pub(crate) const CONTROL_PLANE_LEASE_SECONDS: i64 = 60;
+const CONTROL_PLANE_HEARTBEAT_SECONDS: u64 = 15;
 
 struct CreateReconcilePlan {
     table_name: String,
@@ -44,12 +48,12 @@ struct CreateReconcilePlan {
 }
 
 struct UpdateReconcilePlan {
-    account_id: String,
     table_name: String,
     base_key_schema: Vec<KeySchemaElement>,
     base_attr_defs: Vec<AttributeDefinition>,
     stream_enabled: bool,
     ttl_attribute: Option<String>,
+    ttl_pending_action: Option<String>,
     ttl_index_ready: bool,
     pending_indexes: Vec<PendingIndexPlan>,
     token: String,
@@ -67,6 +71,11 @@ struct DeleteReconcilePlan {
     table_arn: String,
     table_id: String,
     token: String,
+}
+
+pub(crate) struct ControlPlaneLeaseHeartbeat {
+    _stop: oneshot::Sender<()>,
+    _handle: tokio::task::JoinHandle<()>,
 }
 
 fn parse_json<T: serde::de::DeserializeOwned>(
@@ -89,6 +98,76 @@ impl WorkerStore for TidbEngine {
 }
 
 impl TidbEngine {
+    pub(crate) fn start_control_plane_lease_heartbeat(
+        &self,
+        table_id: &str,
+        token: &str,
+    ) -> ControlPlaneLeaseHeartbeat {
+        let pool = self.pool.clone();
+        let table_id = table_id.to_owned();
+        let token = token.to_owned();
+        let (stop, mut stop_rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                CONTROL_PLANE_HEARTBEAT_SECONDS,
+            ));
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    _ = interval.tick() => {
+                        match sqlx::query(
+                            "UPDATE tables \
+                             SET control_plane_lease_until = DATE_ADD(CURRENT_TIMESTAMP(6), INTERVAL ? SECOND) \
+                             WHERE table_id = ? AND control_plane_token = ?",
+                        )
+                        .bind(CONTROL_PLANE_LEASE_SECONDS)
+                        .bind(&table_id)
+                        .bind(&token)
+                        .execute(&pool)
+                        .await
+                        {
+                            Ok(result) if result.rows_affected() == 1 => {}
+                            Ok(_) => break,
+                            Err(err) => {
+                                tracing::warn!(
+                                    "failed to refresh TiDB control-plane lease for table {table_id}: {err}"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        ControlPlaneLeaseHeartbeat {
+            _stop: stop,
+            _handle: handle,
+        }
+    }
+
+    pub(crate) async fn has_active_data_ddl_job(
+        &self,
+        table_id: &str,
+    ) -> Result<bool, StorageError> {
+        let physical_table = physical_data_table_name(table_id);
+        sqlx::query_scalar(
+            "SELECT EXISTS( \
+                 SELECT 1 FROM INFORMATION_SCHEMA.DDL_JOBS \
+                 WHERE DB_NAME = DATABASE() \
+                   AND TABLE_NAME = ? \
+                   AND LOWER(STATE) IN ( \
+                       'none', 'queueing', 'running', 'cancelling', 'rollingback', \
+                       'pausing', 'paused' \
+                   ) \
+             )",
+        )
+        .bind(&physical_table)
+        .fetch_one(&self.data_pool)
+        .await
+        .map_err(|e| StorageError::Internal(format!("Check TiDB DDL jobs: {e}")))
+    }
+
     async fn refresh_control_plane_lease(
         &self,
         table_id: &str,
@@ -133,6 +212,10 @@ impl TidbEngine {
         table_id: &str,
         include_deferred: bool,
     ) -> Result<Option<String>, StorageError> {
+        if self.has_active_data_ddl_job(table_id).await? {
+            return Ok(None);
+        }
+
         let token = uuid::Uuid::new_v4().to_string();
         let mut tx = self
             .pool
@@ -231,6 +314,8 @@ impl TidbEngine {
             token,
         };
 
+        let _lease_heartbeat = self.start_control_plane_lease_heartbeat(table_id, &plan.token);
+
         Self::create_data_table(&self.data_pool, table_id, &plan.key_schema, &plan.attr_defs)
             .await?;
         self.refresh_control_plane_lease(table_id, &plan.token)
@@ -292,6 +377,10 @@ impl TidbEngine {
     /// Reconcile an UPDATING table. Pending GSI creates/deletes and stream
     /// shard initialization are retried from catalog metadata until complete.
     async fn reconcile_table_update(&self, table_id: &str) -> Result<Option<String>, StorageError> {
+        if self.has_active_data_ddl_job(table_id).await? {
+            return Ok(None);
+        }
+
         let token = uuid::Uuid::new_v4().to_string();
         let mut tx = self
             .pool
@@ -301,7 +390,8 @@ impl TidbEngine {
 
         let row: Option<UpdatingTableRow> = sqlx::query_as(
             "SELECT account_id, table_name, key_schema, attribute_definitions, \
-                    stream_specification, stream_label, ttl_attribute, ttl_index_ready \
+                    stream_specification, stream_label, ttl_attribute, ttl_pending_action, \
+                    ttl_index_ready \
              FROM tables \
              WHERE table_id = ? AND table_status = 'UPDATING' \
                AND (control_plane_lease_until IS NULL \
@@ -321,6 +411,7 @@ impl TidbEngine {
             stream_json,
             stream_label,
             ttl_attribute,
+            ttl_pending_action,
             ttl_index_ready,
         )) = row
         else {
@@ -386,16 +477,18 @@ impl TidbEngine {
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
         let plan = UpdateReconcilePlan {
-            account_id,
             table_name,
             base_key_schema,
             base_attr_defs,
             stream_enabled,
             ttl_attribute,
+            ttl_pending_action,
             ttl_index_ready,
             pending_indexes,
             token,
         };
+
+        let _lease_heartbeat = self.start_control_plane_lease_heartbeat(table_id, &plan.token);
 
         if plan.stream_enabled {
             Self::ensure_stream_shard_rows(&self.data_pool, table_id).await?;
@@ -403,18 +496,34 @@ impl TidbEngine {
                 .await?;
         }
 
-        if let Some(ttl_attribute) = &plan.ttl_attribute
-            && !plan.ttl_index_ready
-        {
-            MetadataEngine::create_ttl_index(
-                self,
-                &plan.account_id,
-                &plan.table_name,
-                ttl_attribute,
-            )
-            .await?;
-            self.refresh_control_plane_lease(table_id, &plan.token)
-                .await?;
+        match plan.ttl_pending_action.as_deref() {
+            Some("ENABLE") => {
+                let ttl_attribute = plan.ttl_attribute.as_deref().ok_or_else(|| {
+                    StorageError::Internal("TiDB TTL enable missing ttl_attribute".to_owned())
+                })?;
+                self.create_ttl_artifacts_owned(table_id, &plan.token, ttl_attribute)
+                    .await?;
+                self.refresh_control_plane_lease(table_id, &plan.token)
+                    .await?;
+            }
+            Some("DISABLE") => {
+                self.drop_ttl_artifacts_owned(table_id, &plan.token).await?;
+                self.refresh_control_plane_lease(table_id, &plan.token)
+                    .await?;
+            }
+            Some(other) => {
+                return Err(StorageError::Internal(format!(
+                    "unknown TiDB TTL pending action: {other}"
+                )));
+            }
+            None if plan.ttl_attribute.is_some() && !plan.ttl_index_ready => {
+                let ttl_attribute = plan.ttl_attribute.as_deref().unwrap_or_default();
+                self.create_ttl_artifacts_owned(table_id, &plan.token, ttl_attribute)
+                    .await?;
+                self.refresh_control_plane_lease(table_id, &plan.token)
+                    .await?;
+            }
+            None => {}
         }
 
         for pending in &plan.pending_indexes {
@@ -605,6 +714,11 @@ impl TidbEngine {
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
         for plan in &drop_info {
+            if self.has_active_data_ddl_job(&plan.table_id).await? {
+                continue;
+            }
+            let _lease_heartbeat =
+                self.start_control_plane_lease_heartbeat(&plan.table_id, &plan.token);
             self.drop_table_data_artifacts(&plan.table_id).await?;
             self.refresh_control_plane_lease(&plan.table_id, &plan.token)
                 .await?;

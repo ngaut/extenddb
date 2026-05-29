@@ -189,7 +189,7 @@ These are the core CRUD operations. All must be fully implemented.
 - REQ-CTRL-003: UpdateTable must support adding/removing GSIs, changing billing mode, and modifying provisioned throughput
 - REQ-CTRL-004: DescribeTable must return accurate `TableSizeBytes` and `ItemCount` (may be approximate)
 - REQ-CTRL-005: ListTables must support `Limit` and `ExclusiveStartTableName` for pagination
-- REQ-CTRL-006: TTL worker must run as a background task, using an indexed sweep (expression index on TTL attribute) to efficiently find and delete expired items. Staleness metrics are recorded per deletion.
+- REQ-CTRL-006: TTL deletion is backend-specific. Worker-backed backends must use an indexed sweep to efficiently find and delete expired items. Backends with native row TTL may delegate deletion to the database and document any stream-record differences.
 
 ### 3.3 Import/Export Operations (In Scope)
 
@@ -450,6 +450,18 @@ The catalog database stores extenddb metadata: table definitions, indexes, tags,
 - REQ-PG-006: Schema migrations managed via embedded migration files
 - REQ-PG-007: Support PostgreSQL 14+
 - REQ-PG-008: Support optional read replica connection for eventually consistent reads. When `read_replica_url` is configured, `ConsistentRead=false` reads (GetItem, Query, Scan, BatchGetItem) route to the replica pool. All writes and `ConsistentRead=true` reads always use the primary pool.
+
+### 8.3 TiDB Backend
+
+- REQ-TIDB-001: Use TiDB's MySQL-compatible SQL endpoint through the sqlx MySQL driver
+- REQ-TIDB-002: Use TiDB transactions for global consistency across base rows, secondary indexes, streams, and catalog updates
+- REQ-TIDB-003: Represent DynamoDB secondary indexes with generated columns and native TiDB secondary indexes; GSI versus LSI is API metadata, not separate physical index classes
+- REQ-TIDB-004: Use TiDB native TTL for all item TTL deletion. Do not run a custom item TTL worker in the TiDB backend.
+- REQ-TIDB-005: Use TiDB BR for native physical backup/restore instead of catalog row-copy backup data
+- REQ-TIDB-006: Use TiDB online DDL for physical table, generated-column, secondary-index, and TTL schema changes. Control-plane reconciliation must persist desired state in the catalog, keep a lease while executing DDL, and use `INFORMATION_SCHEMA.DDL_JOBS` to avoid competing with an active TiDB schema job after crash or failover.
+- REQ-TIDB-007: Every TiDB connection pool must configure sessions for pessimistic transactions and in-place pessimistic unique-constraint checks. The backend must not depend on cluster defaults for multi-frontend correctness.
+- REQ-TIDB-008: When TiDB returns a documented whole-transaction retry error such as schema change during commit, write conflict, deadlock, lock wait timeout, or resolve lock timeout, the TiDB backend retries the entire storage or management operation. It must not retry validation failures, conditional failures, uniqueness conflicts, connection-loss-at-commit outcomes, or unknown errors.
+- REQ-TIDB-009: TransactWriteItems idempotency tokens live in the TiDB data database, not the catalog database, so token writes commit atomically with item writes and stream records.
 
 ## 9. Expression Engine Requirements
 

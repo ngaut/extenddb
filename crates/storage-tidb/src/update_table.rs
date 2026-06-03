@@ -8,8 +8,8 @@ use extenddb_core::provisioning::{
     provisioned_throughput_description, provisioned_throughput_description_from_value,
 };
 use extenddb_core::types::{
-    AttributeDefinition, BillingMode, KeySchemaElement, Projection, StreamSpecification,
-    TableDescription, UpdateTableInput,
+    AttributeDefinition, BillingMode, KeySchemaElement, Projection, ProvisionedThroughput,
+    StreamSpecification, TableDescription, UpdateTableInput,
 };
 use extenddb_core::validation::{projected_attribute_count, validate_projected_attribute_count};
 use extenddb_storage::error::StorageError;
@@ -94,6 +94,32 @@ fn validate_projected_attribute_count_for_gsi_create(
     .map_err(|err| StorageError::Validation(err.to_string()))
 }
 
+fn apply_gsi_provisioned_throughput_update_from_catalog(
+    index_name: &str,
+    current: Option<serde_json::Value>,
+    requested: &ProvisionedThroughput,
+    now_epoch_seconds: f64,
+) -> Result<serde_json::Value, StorageError> {
+    let current = current
+        .map(provisioned_throughput_description_from_value)
+        .transpose()
+        .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+    if current.as_ref().is_some_and(|current| {
+        current.read_capacity_units == requested.read_capacity_units
+            && current.write_capacity_units == requested.write_capacity_units
+    }) {
+        return Err(StorageError::NoOpUpdate(format!(
+            "The provisioned throughput for global secondary index {index_name} will not change. \
+             The requested value equals the current value."
+        )));
+    }
+
+    let next = apply_provisioned_throughput_update(current.as_ref(), requested, now_epoch_seconds)
+        .map_err(|err| StorageError::Validation(err.to_string()))?;
+    serde_json::to_value(&next).map_err(|e| StorageError::Internal(e.to_string()))
+}
+
 fn stream_enabled_from_catalog(
     stream_specification: Option<&serde_json::Value>,
 ) -> Result<bool, StorageError> {
@@ -167,10 +193,19 @@ impl TidbEngine {
         if !table_accepts_update_table(&status) {
             return Err(StorageError::TableNotActive(input.table_name.clone()));
         }
-        let has_gsi_updates = input
+        let has_gsi_ddl_updates =
+            input
+                .global_secondary_index_updates
+                .as_deref()
+                .is_some_and(|updates| {
+                    updates
+                        .iter()
+                        .any(|update| update.create.is_some() || update.delete.is_some())
+                });
+        let has_gsi_throughput_update = input
             .global_secondary_index_updates
-            .as_ref()
-            .is_some_and(|updates| !updates.is_empty());
+            .as_deref()
+            .is_some_and(|updates| updates.iter().any(|update| update.update.is_some()));
         let has_gsi_create = input
             .global_secondary_index_updates
             .as_deref()
@@ -192,6 +227,16 @@ impl TidbEngine {
         } else {
             current_attr_defs
         };
+        let effective_billing_mode = match input.billing_mode.as_ref() {
+            Some(BillingMode::Provisioned) => "PROVISIONED",
+            Some(BillingMode::PayPerRequest) => "PAY_PER_REQUEST",
+            None => current_billing_mode.as_str(),
+        };
+        if has_gsi_throughput_update && effective_billing_mode == "PAY_PER_REQUEST" {
+            return Err(StorageError::Validation(
+                "One or more parameter values were invalid: ProvisionedThroughput cannot be specified for a global secondary index when BillingMode is PAY_PER_REQUEST".to_owned(),
+            ));
+        }
 
         // No-op rejection: setting same billing mode to PROVISIONED with same
         // throughput values is rejected by DynamoDB. This check runs under the
@@ -221,7 +266,7 @@ impl TidbEngine {
             }
         }
 
-        if has_gsi_updates {
+        if has_gsi_ddl_updates {
             sqlx::query(
                 "UPDATE tables SET table_status = 'UPDATING', \
                     status_transition_at = CURRENT_TIMESTAMP(6) \
@@ -388,6 +433,45 @@ impl TidbEngine {
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
                 }
+
+                if let Some(update) = &update.update {
+                    let existing: Option<(Option<serde_json::Value>,)> = sqlx::query_as(
+                        "SELECT provisioned_throughput FROM indexes \
+                         WHERE table_id = ? AND index_name = ? AND index_type = 'GSI' \
+                           AND index_status = 'ACTIVE' \
+                         FOR UPDATE",
+                    )
+                    .bind(&table_id)
+                    .bind(&update.index_name)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+                    let (current_throughput,) = existing
+                        .ok_or_else(|| StorageError::IndexNotFound(update.index_name.clone()))?;
+                    let requested = update.provisioned_throughput.as_ref().ok_or_else(|| {
+                        StorageError::Validation(
+                            "One or more parameter values were invalid: ProvisionedThroughput must be specified for GlobalSecondaryIndexUpdate Update".to_owned(),
+                        )
+                    })?;
+                    let next_throughput = apply_gsi_provisioned_throughput_update_from_catalog(
+                        &update.index_name,
+                        current_throughput,
+                        requested,
+                        current_unix_epoch_seconds(),
+                    )?;
+
+                    sqlx::query(
+                        "UPDATE indexes SET provisioned_throughput = ? \
+                         WHERE table_id = ? AND index_name = ? AND index_type = 'GSI'",
+                    )
+                    .bind(&next_throughput)
+                    .bind(&table_id)
+                    .bind(&update.index_name)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| StorageError::Internal(e.to_string()))?;
+                }
             }
 
             // AttributeDefinitions are a table-level catalog of key attributes.
@@ -497,7 +581,7 @@ impl TidbEngine {
         let desc = self
             .build_table_description(account_id, &input.table_name)
             .await?;
-        if has_gsi_updates {
+        if has_gsi_ddl_updates {
             self.control_plane_notify.notify_one();
         }
 
@@ -507,14 +591,16 @@ impl TidbEngine {
 
 #[cfg(test)]
 mod tests {
+    use extenddb_core::provisioning::provisioned_throughput_description_from_value;
     use extenddb_core::types::{
         AttributeDefinition, KeySchemaElement, KeyType, Projection, ProjectionType,
-        ScalarAttributeType,
+        ProvisionedThroughput, ScalarAttributeType,
     };
 
     use super::{
-        merge_attribute_definitions, next_stream_label_for_update, table_accepts_update_table,
-        validate_index_key_definitions, validate_projected_attribute_count_for_gsi_create,
+        apply_gsi_provisioned_throughput_update_from_catalog, merge_attribute_definitions,
+        next_stream_label_for_update, table_accepts_update_table, validate_index_key_definitions,
+        validate_projected_attribute_count_for_gsi_create,
     };
 
     fn attr(name: &str, attribute_type: ScalarAttributeType) -> AttributeDefinition {
@@ -542,6 +628,13 @@ mod tests {
         Projection {
             projection_type: ProjectionType::All,
             non_key_attributes: None,
+        }
+    }
+
+    fn provisioned(read: i64, write: i64) -> ProvisionedThroughput {
+        ProvisionedThroughput {
+            read_capacity_units: read,
+            write_capacity_units: write,
         }
     }
 
@@ -625,6 +718,37 @@ mod tests {
             0,
         )
         .expect("ALL projections are not user-specified INCLUDE attributes");
+    }
+
+    #[test]
+    fn update_table_gsi_update_rewrites_provisioned_throughput_metadata() {
+        let current = serde_json::to_value(provisioned(5, 5)).expect("json");
+        let next = apply_gsi_provisioned_throughput_update_from_catalog(
+            "by_customer",
+            Some(current),
+            &provisioned(8, 7),
+            42.0,
+        )
+        .expect("throughput update");
+        let next = provisioned_throughput_description_from_value(next).expect("description");
+
+        assert_eq!(next.read_capacity_units, 8);
+        assert_eq!(next.write_capacity_units, 7);
+        assert_eq!(next.last_increase_date_time, Some(42.0));
+    }
+
+    #[test]
+    fn update_table_gsi_update_rejects_noop_throughput() {
+        let current = serde_json::to_value(provisioned(5, 5)).expect("json");
+        let err = apply_gsi_provisioned_throughput_update_from_catalog(
+            "by_customer",
+            Some(current),
+            &provisioned(5, 5),
+            42.0,
+        )
+        .expect_err("same throughput should be rejected");
+
+        assert!(err.to_string().contains("will not change"));
     }
 
     #[test]

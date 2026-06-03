@@ -4,11 +4,93 @@
 //! `UpdateTable` operation handler.
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::types::{BillingMode, UpdateTableInput};
+use extenddb_core::types::{BillingMode, GlobalSecondaryIndexUpdate, UpdateTableInput};
 use serde_json::Value;
 
 use crate::OperationContext;
 use crate::serialize_output;
+
+fn gsi_update_action_count(update: &GlobalSecondaryIndexUpdate) -> usize {
+    usize::from(update.create.is_some())
+        + usize::from(update.update.is_some())
+        + usize::from(update.delete.is_some())
+}
+
+fn validate_gsi_updates(input: &UpdateTableInput) -> Result<(), DynamoDbError> {
+    let Some(updates) = &input.global_secondary_index_updates else {
+        return Ok(());
+    };
+
+    if updates.len() > 1 {
+        return Err(DynamoDbError::ValidationException(
+            "One or more parameter values were invalid: Only one GlobalSecondaryIndexUpdate can be specified per UpdateTable operation".to_owned(),
+        ));
+    }
+
+    for update in updates {
+        match gsi_update_action_count(update) {
+            0 => {
+                return Err(DynamoDbError::ValidationException(
+                    "One or more parameter values were invalid: GlobalSecondaryIndexUpdate must contain Create, Update, or Delete".to_owned(),
+                ));
+            }
+            1 => {}
+            _ => {
+                return Err(DynamoDbError::ValidationException(
+                    "One or more parameter values were invalid: Only one of Create, Update, or Delete can be specified per GlobalSecondaryIndexUpdate".to_owned(),
+                ));
+            }
+        }
+
+        if let Some(upd) = &update.update {
+            extenddb_core::validation::validate_index_name(&upd.index_name)?;
+            let Some(throughput) = &upd.provisioned_throughput else {
+                return Err(DynamoDbError::ValidationException(
+                    "One or more parameter values were invalid: ProvisionedThroughput must be specified for GlobalSecondaryIndexUpdate Update".to_owned(),
+                ));
+            };
+            if throughput.read_capacity_units < 1 || throughput.write_capacity_units < 1 {
+                return Err(DynamoDbError::ValidationException(
+                    "One or more parameter values were invalid: ReadCapacityUnits and WriteCapacityUnits must each be at least 1".to_owned(),
+                ));
+            }
+        }
+
+        // M3: Validate index names the same way CreateTable does.
+        if let Some(create) = &update.create {
+            extenddb_core::validation::validate_index_name(&create.index_name)?;
+            if create.key_schema.is_empty() {
+                return Err(DynamoDbError::ValidationException(
+                    "One or more parameter values were invalid: KeySchema must not be empty for GSI creation".to_owned(),
+                ));
+            }
+            // Validate that all key attributes are defined in AttributeDefinitions
+            let attr_defs = input.attribute_definitions.as_deref().unwrap_or(&[]);
+            for ks in &create.key_schema {
+                if !attr_defs
+                    .iter()
+                    .any(|ad| ad.attribute_name == ks.attribute_name)
+                {
+                    return Err(DynamoDbError::ValidationException(format!(
+                        "One or more parameter values were invalid: Some index key attributes are not defined in AttributeDefinitions. \
+                         Keys: [{}], AttributeDefinitions: [{}]",
+                        ks.attribute_name,
+                        attr_defs
+                            .iter()
+                            .map(|ad| ad.attribute_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+        }
+        if let Some(delete) = &update.delete {
+            extenddb_core::validation::validate_index_name(&delete.index_name)?;
+        }
+    }
+
+    Ok(())
+}
 
 /// Handle `UpdateTable` — modify billing mode, throughput, deletion protection,
 /// or GSI configuration.
@@ -90,64 +172,7 @@ pub async fn handle_update_table(
     }
 
     // Validate GSI updates: each entry must have exactly one of Create, Update, or Delete.
-    if let Some(updates) = &input.global_secondary_index_updates {
-        if updates.len() > 1 {
-            return Err(DynamoDbError::ValidationException(
-                "One or more parameter values were invalid: Only one GlobalSecondaryIndexUpdate can be specified per UpdateTable operation".to_owned(),
-            ));
-        }
-
-        for update in updates {
-            if update.create.is_some() && update.delete.is_some() {
-                return Err(DynamoDbError::ValidationException(
-                    "One or more parameter values were invalid: Only one of Create or Delete can be specified per GlobalSecondaryIndexUpdate".to_owned(),
-                ));
-            }
-            if let Some(ref upd) = update.update {
-                // S3: Acknowledge the Update action but reject it as unsupported.
-                let _ = upd;
-                return Err(DynamoDbError::ValidationException(
-                    "UpdateGlobalSecondaryIndex is not yet supported".to_owned(),
-                ));
-            }
-            if update.create.is_none() && update.delete.is_none() {
-                return Err(DynamoDbError::ValidationException(
-                    "One or more parameter values were invalid: GlobalSecondaryIndexUpdate must contain Create, Update, or Delete".to_owned(),
-                ));
-            }
-            // M3: Validate index names the same way CreateTable does.
-            if let Some(create) = &update.create {
-                extenddb_core::validation::validate_index_name(&create.index_name)?;
-                if create.key_schema.is_empty() {
-                    return Err(DynamoDbError::ValidationException(
-                        "One or more parameter values were invalid: KeySchema must not be empty for GSI creation".to_owned(),
-                    ));
-                }
-                // Validate that all key attributes are defined in AttributeDefinitions
-                let attr_defs = input.attribute_definitions.as_deref().unwrap_or(&[]);
-                for ks in &create.key_schema {
-                    if !attr_defs
-                        .iter()
-                        .any(|ad| ad.attribute_name == ks.attribute_name)
-                    {
-                        return Err(DynamoDbError::ValidationException(format!(
-                            "One or more parameter values were invalid: Some index key attributes are not defined in AttributeDefinitions. \
-                             Keys: [{}], AttributeDefinitions: [{}]",
-                            ks.attribute_name,
-                            attr_defs
-                                .iter()
-                                .map(|ad| ad.attribute_name.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )));
-                    }
-                }
-            }
-            if let Some(delete) = &update.delete {
-                extenddb_core::validation::validate_index_name(&delete.index_name)?;
-            }
-        }
-    }
+    validate_gsi_updates(&input)?;
 
     let table_name = input.table_name.clone();
     let desc = ctx
@@ -199,4 +224,100 @@ pub async fn handle_update_table(
         table_description: desc,
     };
     serialize_output(&output)
+}
+
+#[cfg(test)]
+mod tests {
+    use extenddb_core::error::DynamoDbError;
+    use extenddb_core::types::{
+        DeleteGsiAction, GlobalSecondaryIndexUpdate, ProvisionedThroughput, UpdateGsiAction,
+        UpdateTableInput,
+    };
+
+    use super::validate_gsi_updates;
+
+    fn provisioned(read: i64, write: i64) -> ProvisionedThroughput {
+        ProvisionedThroughput {
+            read_capacity_units: read,
+            write_capacity_units: write,
+        }
+    }
+
+    fn input(update: GlobalSecondaryIndexUpdate) -> UpdateTableInput {
+        UpdateTableInput {
+            table_name: "table".to_owned(),
+            billing_mode: None,
+            provisioned_throughput: None,
+            deletion_protection_enabled: None,
+            global_secondary_index_updates: Some(vec![update]),
+            attribute_definitions: None,
+            stream_specification: None,
+        }
+    }
+
+    #[test]
+    fn update_global_secondary_index_throughput_is_supported() {
+        validate_gsi_updates(&input(GlobalSecondaryIndexUpdate {
+            create: None,
+            update: Some(UpdateGsiAction {
+                index_name: "by_customer".to_owned(),
+                provisioned_throughput: Some(provisioned(7, 9)),
+            }),
+            delete: None,
+        }))
+        .expect("throughput update should validate");
+    }
+
+    #[test]
+    fn update_global_secondary_index_requires_throughput() {
+        let err = validate_gsi_updates(&input(GlobalSecondaryIndexUpdate {
+            create: None,
+            update: Some(UpdateGsiAction {
+                index_name: "by_customer".to_owned(),
+                provisioned_throughput: None,
+            }),
+            delete: None,
+        }))
+        .unwrap_err();
+
+        assert!(matches!(err, DynamoDbError::ValidationException(_)));
+        assert!(err.to_string().contains("ProvisionedThroughput"));
+    }
+
+    #[test]
+    fn update_global_secondary_index_rejects_zero_throughput() {
+        let err = validate_gsi_updates(&input(GlobalSecondaryIndexUpdate {
+            create: None,
+            update: Some(UpdateGsiAction {
+                index_name: "by_customer".to_owned(),
+                provisioned_throughput: Some(provisioned(0, 1)),
+            }),
+            delete: None,
+        }))
+        .unwrap_err();
+
+        assert!(matches!(err, DynamoDbError::ValidationException(_)));
+        assert!(err.to_string().contains("at least 1"));
+    }
+
+    #[test]
+    fn global_secondary_index_update_rejects_multiple_actions() {
+        let err = validate_gsi_updates(&input(GlobalSecondaryIndexUpdate {
+            create: None,
+            update: Some(UpdateGsiAction {
+                index_name: "by_customer".to_owned(),
+                provisioned_throughput: Some(provisioned(7, 9)),
+            }),
+            delete: Some(DeleteGsiAction {
+                index_name: "by_customer".to_owned(),
+            }),
+        }))
+        .unwrap_err();
+
+        assert!(matches!(err, DynamoDbError::ValidationException(_)));
+        assert!(
+            err.to_string()
+                .contains("Only one of Create, Update, or Delete")
+        );
+    }
 }

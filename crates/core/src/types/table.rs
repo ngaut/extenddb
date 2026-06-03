@@ -388,13 +388,15 @@ pub struct DeleteGsiAction {
 }
 
 /// Update provisioned throughput on an existing GSI.
-///
-/// Recognized by the deserializer but not yet implemented — the engine
-/// returns a clear "not yet supported" error.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct UpdateGsiAction {
     #[serde(rename = "IndexName")]
     pub index_name: String,
+    #[serde(
+        rename = "ProvisionedThroughput",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub provisioned_throughput: Option<ProvisionedThroughput>,
 }
 
 /// `UpdateTable` request body.
@@ -547,4 +549,37 @@ pub struct DescribeLimitsOutput {
     pub table_max_read_capacity_units: i64,
     #[serde(rename = "TableMaxWriteCapacityUnits")]
     pub table_max_write_capacity_units: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UpdateTableInput;
+
+    #[test]
+    fn update_table_deserializes_gsi_throughput_update() {
+        let input: UpdateTableInput = serde_json::from_value(serde_json::json!({
+            "TableName": "orders",
+            "GlobalSecondaryIndexUpdates": [
+                {
+                    "Update": {
+                        "IndexName": "by_customer",
+                        "ProvisionedThroughput": {
+                            "ReadCapacityUnits": 7,
+                            "WriteCapacityUnits": 9
+                        }
+                    }
+                }
+            ]
+        }))
+        .expect("UpdateTableInput");
+
+        let update = input.global_secondary_index_updates.unwrap();
+        let throughput = update[0]
+            .update
+            .as_ref()
+            .and_then(|update| update.provisioned_throughput.as_ref())
+            .expect("throughput");
+        assert_eq!(throughput.read_capacity_units, 7);
+        assert_eq!(throughput.write_capacity_units, 9);
+    }
 }

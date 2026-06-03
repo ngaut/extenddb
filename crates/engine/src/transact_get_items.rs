@@ -9,7 +9,7 @@ use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{apply_projection, parse_projection, tokenize_for};
+use extenddb_core::expression::{apply_projection, parse_projection};
 use extenddb_core::types::{
     ItemResponse, TableKeyInfo, TransactGetItem, TransactGetItemsInput, TransactGetItemsOutput,
     item_size_bytes,
@@ -19,7 +19,7 @@ use extenddb_storage::TransactGetOp;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::build_expression_maps;
+use crate::expression_helpers::{build_expression_maps, tokenize_typed_expression};
 use crate::serialize_output;
 use crate::{DispatchMetrics, DispatchResult};
 
@@ -140,11 +140,8 @@ pub async fn handle_transact_get_items(
         .map(|(opt, tgi)| {
             let maps = build_expression_maps(tgi.get.expression_attribute_names.as_ref(), None);
             if let Some(ref proj_str) = tgi.get.projection_expression {
-                let proj_tokens = tokenize_for(
-                    proj_str,
-                    ctx.limits.max_expression_tokens,
-                    "ProjectionExpression",
-                )?;
+                let proj_tokens =
+                    tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
                 let projection = parse_projection(&proj_tokens)?;
                 let mut extra_names = std::collections::HashSet::new();
                 for path in &projection {

@@ -155,6 +155,7 @@ key_path = "{tls_key}"
 # min_table_name_length = 3
 # max_attribute_name_bytes = 65535
 # max_expression_tokens = 4096
+# max_expression_bytes = 4096
 # max_expression_depth = 150
 # per_table_max_rcu = 40000
 # per_table_max_wcu = 40000

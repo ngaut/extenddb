@@ -84,7 +84,7 @@ Policy sources collected for evaluation:
 - **Concurrent policy fetching**: Identity policies, group policies, and permissions boundaries are fetched concurrently from the catalog store. All must succeed for evaluation to proceed.
 - **Constant-time rejection for inactive keys**: Inactive or expired access keys are rejected without timing differences that could reveal key existence.
 - **Policy document validation on write**: Policy documents are validated for JSON structure and size-capped (6,144 bytes) when attached via the management API. Invalid documents are rejected before storage.
-- **Expression depth and token limits**: Expression parsing enforces configurable depth (default 150) and token limits (default 4,096) to prevent resource exhaustion.
+- **Expression byte, depth, and token limits**: Expression parsing enforces configurable byte (default 4,096), depth (default 150), and token limits (default 4,096) to prevent resource exhaustion.
 
 ### Supported Condition Operators
 
@@ -194,6 +194,7 @@ Input validation is layered:
 
 | Limit | Default | Description |
 |-------|---------|-------------|
+| Max expression bytes | 4,096 | Maximum UTF-8 bytes in an expression string before tokenization |
 | Max expression tokens | 4,096 | Maximum tokens in a parsed expression |
 | Max expression depth | 150 | Maximum nesting depth in expressions |
 | Max policy document size | 6,144 bytes | Maximum size of an IAM policy document |

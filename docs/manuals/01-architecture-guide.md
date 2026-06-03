@@ -52,7 +52,7 @@ Pure sync Rust library. No async runtime, no database drivers, no HTTP framework
 - **expression**: Parser and evaluator for `ConditionExpression`, `FilterExpression`, `UpdateExpression`, `ProjectionExpression`, and `KeyConditionExpression`
 - **validation**: Input validation (table names, item sizes, attribute types, key schema rules)
 - **error**: `DynamoDbError` enum mapping every DynamoDB error code to its HTTP status and message
-- **limits**: Configurable limits matching real DynamoDB defaults (item size, batch sizes, expression depth/tokens)
+- **limits**: Configurable limits matching real DynamoDB defaults (item size, batch sizes, expression bytes/tokens/depth)
 - **capacity**: RCU/WCU calculation logic
 
 ### engine
@@ -60,7 +60,7 @@ Pure sync Rust library. No async runtime, no database drivers, no HTTP framework
 Async operation handlers. Each DynamoDB operation (PutItem, GetItem, Query, Scan, etc.) has a dedicated handler module. The engine:
 
 - Validates input using `core`
-- Parses expressions using `core` (with configurable depth and token limits)
+- Parses expressions using `core` (with configurable byte, token, and depth limits)
 - Calls storage traits to read/write data
 - Applies filter and projection expressions after reads
 - Calculates consumed capacity
@@ -220,7 +220,7 @@ TLS is supported via rustls. `extenddb init` generates a self-signed certificate
 
 ### Input Validation
 
-All user-supplied strings are validated at the engine layer before reaching storage. Expression parsing enforces configurable depth and token limits. Policy documents are size-capped before JSON parsing. The storage layer uses parameterized queries exclusively.
+All user-supplied strings are validated at the engine layer before reaching storage. Expression parsing enforces configurable byte, token, and depth limits. Policy documents are size-capped before JSON parsing. The storage layer uses parameterized queries exclusively.
 
 ## Web Console
 

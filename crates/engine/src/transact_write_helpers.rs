@@ -271,7 +271,11 @@ pub(crate) fn parse_optional_condition(
 ) -> Result<Option<extenddb_core::expression::Expr>, DynamoDbError> {
     match expr {
         Some(s) if !s.is_empty() => {
-            let tokens = crate::expression_helpers::tokenize_expression(s, limits)?;
+            let tokens = crate::expression_helpers::tokenize_typed_expression(
+                s,
+                limits,
+                "ConditionExpression",
+            )?;
             let ast = extenddb_core::expression::parse_condition_with_depth_limit(
                 &tokens,
                 limits.max_expression_depth,

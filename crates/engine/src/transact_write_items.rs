@@ -330,8 +330,11 @@ fn prepare_write_op(
             upd.expression_attribute_names.as_ref(),
             upd.expression_attribute_values.as_ref(),
         );
-        let update_tokens =
-            crate::expression_helpers::tokenize_expression(&upd.update_expression, &ctx.limits)?;
+        let update_tokens = crate::expression_helpers::tokenize_typed_expression(
+            &upd.update_expression,
+            &ctx.limits,
+            "UpdateExpression",
+        )?;
         let actions = parse_update(&update_tokens)?;
         validate_no_key_updates(&actions, &key_info, &maps)?;
 
@@ -384,8 +387,11 @@ fn prepare_write_op(
             cc.expression_attribute_names.as_ref(),
             cc.expression_attribute_values.as_ref(),
         );
-        let tokens =
-            crate::expression_helpers::tokenize_expression(&cc.condition_expression, &ctx.limits)?;
+        let tokens = crate::expression_helpers::tokenize_typed_expression(
+            &cc.condition_expression,
+            &ctx.limits,
+            "ConditionExpression",
+        )?;
         let condition = extenddb_core::expression::parse_condition_with_depth_limit(
             &tokens,
             ctx.limits.max_expression_depth,

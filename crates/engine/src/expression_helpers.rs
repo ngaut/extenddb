@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use extenddb_core::error::DynamoDbError;
 use extenddb_core::expression::{
-    Expr, ExpressionMaps, Token, parse_condition_with_depth_limit, tokenize_with_limit,
+    Expr, ExpressionMaps, Token, parse_condition_with_depth_limit, tokenize_for_with_limits,
     validate_no_reserved_words,
 };
 use extenddb_core::limits::LimitsConfig;
@@ -15,12 +15,18 @@ use extenddb_core::types::{AttributeValue, ConditionalOperator, ExpectedAttribut
 
 use crate::expected::desugar_expected;
 
-/// Tokenize an expression and optionally validate reserved keywords.
-pub fn tokenize_expression(
+/// Tokenize a typed expression with size limits and DynamoDB-compatible labels.
+pub fn tokenize_typed_expression(
     input: &str,
     limits: &LimitsConfig,
+    expr_type: &str,
 ) -> Result<Vec<Token>, DynamoDbError> {
-    let tokens = tokenize_with_limit(input, limits.max_expression_tokens)?;
+    let tokens = tokenize_for_with_limits(
+        input,
+        limits.max_expression_tokens,
+        limits.max_expression_bytes,
+        expr_type,
+    )?;
     if limits.enforce_reserved_keywords {
         validate_no_reserved_words(&tokens)?;
     }
@@ -67,7 +73,7 @@ pub fn parse_optional_condition(
 ) -> Result<Option<Expr>, DynamoDbError> {
     match expr {
         Some(s) if !s.is_empty() => {
-            let tokens = tokenize_expression(s, limits)?;
+            let tokens = tokenize_typed_expression(s, limits, "ConditionExpression")?;
             let ast = parse_condition_with_depth_limit(&tokens, limits.max_expression_depth)?;
             Ok(Some(ast))
         }
@@ -227,6 +233,57 @@ mod tests {
         assert!(
             matches!(&err, DynamoDbError::ValidationException(msg)
                 if msg.starts_with("Invalid FilterExpression:")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn condition_expression_size_limit_is_enforced_before_parsing() {
+        let limits = LimitsConfig {
+            max_expression_bytes: 8,
+            ..Default::default()
+        };
+        let err = parse_optional_condition(Some("very_long_attribute_name = :v"), &limits)
+            .expect_err("oversized condition expression must fail");
+
+        assert!(
+            matches!(&err, DynamoDbError::ValidationException(msg)
+                if msg.contains("Expression size has exceeded")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn filter_expression_size_limit_carries_filter_label() {
+        let limits = LimitsConfig {
+            max_expression_bytes: 8,
+            ..Default::default()
+        };
+        let err = parse_optional_filter(Some("very_long_attribute_name = :v"), &limits)
+            .expect_err("oversized filter expression must fail");
+
+        assert!(
+            matches!(&err, DynamoDbError::ValidationException(msg)
+                if msg.starts_with("Invalid FilterExpression:")
+                    && msg.contains("Expression size has exceeded")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn typed_expression_size_limit_carries_expression_label() {
+        let limits = LimitsConfig {
+            max_expression_bytes: 8,
+            ..Default::default()
+        };
+        let err =
+            tokenize_typed_expression("very_long_attribute_name", &limits, "ProjectionExpression")
+                .expect_err("oversized typed expression must fail");
+
+        assert!(
+            matches!(&err, DynamoDbError::ValidationException(msg)
+                if msg.starts_with("Invalid ProjectionExpression:")
+                    && msg.contains("Expression size has exceeded")),
             "got {err:?}"
         );
     }

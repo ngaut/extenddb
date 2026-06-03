@@ -11,10 +11,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{
-    ExpressionMaps, PathElement, UpdateAction, parse_update_from, tokenize_for,
-    validate_no_reserved_words,
-};
+use extenddb_core::expression::{ExpressionMaps, PathElement, UpdateAction, parse_update_from};
 use extenddb_core::types::{
     AttributeValue, Item, ReturnValues, TableKeyInfo, UpdateItemInput, UpdateItemOutput,
     item_size_bytes,
@@ -23,7 +20,7 @@ use extenddb_core::types::{
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::{storage_err_to_dynamo, storage_err_to_dynamo_with_ccf};
-use crate::expression_helpers::resolve_condition;
+use crate::expression_helpers::{resolve_condition, tokenize_typed_expression};
 use crate::serialize_output;
 use crate::stream_capture;
 use crate::{DispatchMetrics, DispatchResult};
@@ -122,16 +119,10 @@ pub async fn handle_update_item(
     )?;
 
     // No UpdateExpression and no AttributeUpdates: no-op upsert.
-    // Some("") still errors via tokenize_for.
+    // Some("") still errors via typed expression tokenization.
     let actions = if let Some(update_expr) = effective_update_expr.as_deref() {
-        let update_tokens = tokenize_for(
-            update_expr,
-            ctx.limits.max_expression_tokens,
-            "UpdateExpression",
-        )?;
-        if ctx.limits.enforce_reserved_keywords {
-            validate_no_reserved_words(&update_tokens)?;
-        }
+        let update_tokens =
+            tokenize_typed_expression(update_expr, &ctx.limits, "UpdateExpression")?;
         parse_update_from(&update_tokens, update_expr)?
     } else {
         Vec::new()

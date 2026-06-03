@@ -30,6 +30,9 @@ pub use resolver::{
     ExpressionMaps, collect_key_condition_refs, collect_value_placeholders, resolve_element_name,
     resolve_name_ref, resolve_path, validate_begins_with_operands, validate_unused_attributes,
 };
-pub use tokenizer::{Token, tokenize, tokenize_for, tokenize_with_limit};
+pub use tokenizer::{
+    Token, tokenize, tokenize_for, tokenize_for_with_limits, tokenize_with_limit,
+    tokenize_with_limits,
+};
 pub use update_evaluator::apply_update;
 pub use update_parser::{parse_update, parse_update_from};

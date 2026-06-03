@@ -62,9 +62,9 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 |-------|---------------|--------|-------|
 | Response size per page | 1 MB (1,048,576 bytes) | Enforced | `read_helpers.rs` enforces 1 MB page limit |
 | `Limit` parameter (max items evaluated) | No maximum | Enforced | Honored in query/scan |
-| Filter expression size | 4 KB | Not enforced | No expression size validation |
-| Projection expression size | 4 KB | Not enforced | No expression size validation |
-| Condition expression size | 4 KB | Not enforced | No expression size validation |
+| Filter expression size | 4 KB | Enforced | `LimitsConfig::max_expression_bytes` rejects oversized expression strings before tokenization |
+| Projection expression size | 4 KB | Enforced | `LimitsConfig::max_expression_bytes` rejects oversized expression strings before tokenization |
+| Condition expression size | 4 KB | Enforced | `LimitsConfig::max_expression_bytes` rejects oversized expression strings before tokenization |
 | Expression attribute names | 2 MB total | Not enforced | No aggregate size validation |
 | Expression attribute values | 2 MB total | Not enforced | No aggregate size validation |
 
@@ -151,7 +151,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Tables | 4 | 0 | 0 | 0 |
 | Items | 6 | 0 | 0 | 0 |
 | Secondary Indexes | 4 | 0 | 2 | 0 |
-| Query/Scan | 2 | 0 | 5 | 0 |
+| Query/Scan | 5 | 0 | 2 | 0 |
 | Batch Operations | 3 | 0 | 2 | 0 |
 | Transactions | 3 | 0 | 1 | 0 |
 | Streams | 3 | 0 | 1 | 0 |
@@ -159,7 +159,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Import/Export/Backup | 0 | 0 | 0 | 8 |
 | Global Tables | 0 | 0 | 0 | 2 |
 | Contributor Insights | 0 | 0 | 0 | 1 |
-| **Total** | **31** | **0** | **15** | **14** |
+| **Total** | **34** | **0** | **12** | **14** |
 
 ### Unenforced Limits Requiring Tracking
 
@@ -168,7 +168,7 @@ The following unenforced limits are tracked in `docs/technical-debt.md`:
 1. **Provisioned capacity decrease limit** (27/day) — would require per-table decrease counter with hourly replenishment
 2. **Projected attributes across all indexes** (100) — requires cross-index attribute counting in CreateTable validation
 3. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
-4. **Expression size limits** (4 KB condition/filter/projection, 2 MB names/values) — requires byte-length checks on expression strings
+4. **Expression attribute names/values aggregate size** (2 MB each) — requires aggregate request-map size validation
 5. **BatchGetItem response size** (16 MB) — requires aggregate response size tracking
 6. **BatchWriteItem request size** (16 MB) — requires aggregate request size tracking
 7. **Transaction request size** (4 MB) — requires aggregate request size tracking

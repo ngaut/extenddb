@@ -9,9 +9,7 @@ use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
 use extenddb_core::expression::PathElement;
-use extenddb_core::expression::{
-    ExpressionMaps, parse_key_condition, parse_projection, tokenize_for,
-};
+use extenddb_core::expression::{ExpressionMaps, parse_key_condition, parse_projection};
 use extenddb_core::types::{
     IndexType, KeyType, QueryInput, QueryOutput, Select, TableKeyInfo, combined_lek_key_schema,
     item_size_bytes,
@@ -20,7 +18,9 @@ use extenddb_core::types::{
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::{build_expression_maps, parse_optional_filter};
+use crate::expression_helpers::{
+    build_expression_maps, parse_optional_filter, tokenize_typed_expression,
+};
 use crate::index_helpers::{
     index_projection_for_read, validate_gsi_projection_request, validate_query_exclusive_start_key,
 };
@@ -136,11 +136,7 @@ pub async fn handle_query(
     let (mut key_condition, legacy_kc_maps) = if let Some(kce_str) =
         input.key_condition_expression.as_deref()
     {
-        let tokens = tokenize_for(
-            kce_str,
-            ctx.limits.max_expression_tokens,
-            "KeyConditionExpression",
-        )?;
+        let tokens = tokenize_typed_expression(kce_str, &ctx.limits, "KeyConditionExpression")?;
         (parse_key_condition(&tokens)?, None)
     } else if let Some(ref kc) = input.key_conditions {
         let key_schema_pairs: Vec<(String, bool)> = query_key_info
@@ -257,11 +253,7 @@ pub async fn handle_query(
     };
 
     let projection = if let Some(ref proj_str) = effective_projection_str {
-        let proj_tokens = tokenize_for(
-            proj_str,
-            ctx.limits.max_expression_tokens,
-            "ProjectionExpression",
-        )?;
+        let proj_tokens = tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
         Some(parse_projection(&proj_tokens)?)
     } else {
         None

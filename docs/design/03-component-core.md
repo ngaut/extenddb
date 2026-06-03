@@ -184,6 +184,8 @@ The expression engine is split into distinct phases for clarity and testability.
 ### 4.2 Tokenizer
 
 Converts expression strings into a stream of typed tokens.
+The tokenizer rejects expressions over the configured byte limit before scanning
+tokens, then applies the token-count limit while scanning.
 
 ```rust
 pub enum Token {

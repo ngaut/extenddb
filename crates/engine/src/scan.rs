@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{ExpressionMaps, parse_projection, tokenize_with_limit};
+use extenddb_core::expression::{ExpressionMaps, parse_projection};
 use extenddb_core::types::{
     IndexType, ScanInput, ScanOutput, Select, combined_lek_key_schema, item_size_bytes,
 };
@@ -16,7 +16,9 @@ use extenddb_core::types::{
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::{build_expression_maps, parse_optional_filter};
+use crate::expression_helpers::{
+    build_expression_maps, parse_optional_filter, tokenize_typed_expression,
+};
 use crate::index_helpers::{
     index_projection_for_read, validate_gsi_projection_request, validate_scan_exclusive_start_key,
 };
@@ -172,7 +174,7 @@ pub async fn handle_scan(
     };
 
     let projection = if let Some(ref proj_str) = effective_projection_str {
-        let proj_tokens = tokenize_with_limit(proj_str, ctx.limits.max_expression_tokens)?;
+        let proj_tokens = tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
         Some(parse_projection(&proj_tokens)?)
     } else {
         None

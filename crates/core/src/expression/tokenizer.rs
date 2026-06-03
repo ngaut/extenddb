@@ -51,7 +51,7 @@ pub enum Token {
 /// Returns `DynamoDbError::ValidationException` for invalid characters or
 /// unterminated tokens.
 pub fn tokenize(input: &str) -> Result<Vec<Token>, DynamoDbError> {
-    tokenize_with_limit(input, 4096)
+    tokenize_with_limits(input, 4096, 4096)
 }
 
 /// Tokenize with an explicit token count limit.
@@ -60,6 +60,20 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, DynamoDbError> {
 ///
 /// Returns `ValidationException` if the token count exceeds `max_tokens`.
 pub fn tokenize_with_limit(input: &str, max_tokens: usize) -> Result<Vec<Token>, DynamoDbError> {
+    tokenize_with_limits(input, max_tokens, usize::MAX)
+}
+
+/// Tokenize with explicit token count and byte-size limits.
+///
+/// # Errors
+///
+/// Returns `ValidationException` if the expression exceeds either limit.
+pub fn tokenize_with_limits(
+    input: &str,
+    max_tokens: usize,
+    max_bytes: usize,
+) -> Result<Vec<Token>, DynamoDbError> {
+    validate_expression_size(input, max_bytes, None)?;
     let mut tokens = Vec::new();
     let bytes = input.as_bytes();
     let mut i = 0;
@@ -202,11 +216,25 @@ pub fn tokenize_for(
     max_tokens: usize,
     expr_type: &str,
 ) -> Result<Vec<Token>, DynamoDbError> {
+    tokenize_for_with_limits(input, max_tokens, usize::MAX, expr_type)
+}
+
+/// Tokenize with expression-specific error messages plus token and byte limits.
+///
+/// On invalid characters, produces: `"Invalid {expr_type}: Syntax error; token: "{tok}", near: "{near}"`
+/// On empty input, produces: `"Invalid {expr_type}: The expression can not be empty;"`
+pub fn tokenize_for_with_limits(
+    input: &str,
+    max_tokens: usize,
+    max_bytes: usize,
+    expr_type: &str,
+) -> Result<Vec<Token>, DynamoDbError> {
     if input.is_empty() {
         return Err(DynamoDbError::ValidationException(format!(
             "Invalid {expr_type}: The expression can not be empty;"
         )));
     }
+    validate_expression_size(input, max_bytes, Some(expr_type))?;
     let mut tokens = Vec::new();
     let bytes = input.as_bytes();
     let mut i = 0;
@@ -362,6 +390,25 @@ fn push_token(
     }
     tokens.push(token);
     Ok(())
+}
+
+fn validate_expression_size(
+    input: &str,
+    max_bytes: usize,
+    expr_type: Option<&str>,
+) -> Result<(), DynamoDbError> {
+    if input.len() <= max_bytes {
+        return Ok(());
+    }
+
+    let message = if let Some(expr_type) = expr_type {
+        format!(
+            "Invalid {expr_type}: Expression size has exceeded the maximum allowed size; maximum: {max_bytes} bytes"
+        )
+    } else {
+        format!("Expression size has exceeded the maximum allowed size ({max_bytes} bytes)")
+    };
+    Err(DynamoDbError::ValidationException(message))
 }
 
 fn is_ident_start(c: u8) -> bool {
@@ -520,6 +567,13 @@ mod tests {
     }
 
     #[test]
+    fn tokenize_exceeds_byte_limit() {
+        let err = tokenize_with_limits("short_name = :value", 4096, 8).unwrap_err();
+        assert!(matches!(err, DynamoDbError::ValidationException(msg)
+                if msg.contains("Expression size has exceeded")));
+    }
+
+    #[test]
     fn tokenize_whitespace_variants() {
         let tokens = tokenize("a\t=\n:v\r").unwrap();
         assert_eq!(
@@ -584,5 +638,19 @@ mod tests {
         assert!(
             matches!(err, DynamoDbError::ValidationException(ref msg) if msg.contains("Syntax error"))
         );
+    }
+
+    #[test]
+    fn tokenize_for_exceeds_byte_limit_with_expression_label() {
+        let err = tokenize_for_with_limits(
+            "very_long_attribute_name = :value",
+            4096,
+            8,
+            "ConditionExpression",
+        )
+        .unwrap_err();
+        assert!(matches!(err, DynamoDbError::ValidationException(msg)
+                if msg.starts_with("Invalid ConditionExpression:")
+                    && msg.contains("Expression size has exceeded")));
     }
 }

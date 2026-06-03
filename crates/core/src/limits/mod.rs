@@ -43,6 +43,9 @@ pub struct LimitsConfig {
     /// Maximum number of tokens in a single expression (condition, update, projection, key-condition).
     #[serde(default = "default_max_expression_tokens")]
     pub max_expression_tokens: usize,
+    /// Maximum UTF-8 byte length of a single expression string.
+    #[serde(default = "default_max_expression_bytes")]
+    pub max_expression_bytes: usize,
     /// Maximum nesting depth in condition expressions (parentheses, NOT, AND/OR).
     #[serde(default = "default_max_expression_depth")]
     pub max_expression_depth: usize,
@@ -82,6 +85,7 @@ impl Default for LimitsConfig {
             allow_multipart_table_keys: false,
             max_attribute_name_bytes: default_max_attribute_name_bytes(),
             max_expression_tokens: default_max_expression_tokens(),
+            max_expression_bytes: default_max_expression_bytes(),
             max_expression_depth: default_max_expression_depth(),
             max_policy_document_bytes: default_max_policy_document_bytes(),
             max_import_file_bytes: default_max_import_file_bytes(),
@@ -135,6 +139,9 @@ fn default_max_attribute_name_bytes() -> usize {
     65_535
 }
 fn default_max_expression_tokens() -> usize {
+    4096
+}
+fn default_max_expression_bytes() -> usize {
     4096
 }
 fn default_max_expression_depth() -> usize {

@@ -199,7 +199,11 @@ fn build_batch_get_projection(
         return Ok(None);
     };
 
-    let proj_tokens = crate::expression_helpers::tokenize_expression(&proj_str, limits)?;
+    let proj_tokens = crate::expression_helpers::tokenize_typed_expression(
+        &proj_str,
+        limits,
+        "ProjectionExpression",
+    )?;
     let paths = parse_projection(&proj_tokens)?;
     let maps = if extra_proj_names.is_empty() {
         build_expression_maps(ka.expression_attribute_names.as_ref(), None)

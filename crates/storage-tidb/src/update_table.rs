@@ -3,9 +3,13 @@
 
 //! `update_table` implementation for `TidbEngine`.
 
+use extenddb_core::provisioning::{
+    apply_provisioned_throughput_update, current_unix_epoch_seconds,
+    provisioned_throughput_description, provisioned_throughput_description_from_value,
+};
 use extenddb_core::types::{
-    AttributeDefinition, BillingMode, KeySchemaElement, Projection, ProvisionedThroughput,
-    StreamSpecification, TableDescription, UpdateTableInput,
+    AttributeDefinition, BillingMode, KeySchemaElement, Projection, StreamSpecification,
+    TableDescription, UpdateTableInput,
 };
 use extenddb_core::validation::{projected_attribute_count, validate_projected_attribute_count};
 use extenddb_storage::error::StorageError;
@@ -13,7 +17,6 @@ use extenddb_storage::error::StorageError;
 use crate::TidbEngine;
 use crate::data::validate_native_key_schema_shape;
 use crate::stream_engine::StreamGenerationCatalog;
-use crate::throughput::provisioned_throughput_description;
 
 type UpdateTableCatalogRow = (
     String,
@@ -175,6 +178,15 @@ impl TidbEngine {
         let current_attr_defs: Vec<AttributeDefinition> =
             serde_json::from_value(current_attr_defs_json)
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
+        let current_pt_description = if current_billing_mode == "PROVISIONED" {
+            current_pt_json
+                .as_ref()
+                .map(|value| provisioned_throughput_description_from_value(value.clone()))
+                .transpose()
+                .map_err(|e| StorageError::Internal(e.to_string()))?
+        } else {
+            None
+        };
         let merged_attr_defs = if has_gsi_create {
             merge_attribute_definitions(&current_attr_defs, input.attribute_definitions.as_deref())?
         } else {
@@ -188,13 +200,10 @@ impl TidbEngine {
         if matches!(input.billing_mode, Some(BillingMode::Provisioned))
             && let Some(ref pt) = input.provisioned_throughput
         {
-            let current_pt: Option<ProvisionedThroughput> = current_pt_json
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|e| StorageError::Internal(e.to_string()))?;
-            let (current_rcu, current_wcu) = current_pt.as_ref().map_or((0, 0), |pt| {
-                (pt.read_capacity_units, pt.write_capacity_units)
-            });
+            let (current_rcu, current_wcu) =
+                current_pt_description.as_ref().map_or((0, 0), |current| {
+                    (current.read_capacity_units, current.write_capacity_units)
+                });
 
             if current_billing_mode == "PROVISIONED"
                 && current_rcu == pt.read_capacity_units
@@ -244,8 +253,14 @@ impl TidbEngine {
 
         // Apply provisioned throughput change.
         if let Some(pt) = &input.provisioned_throughput {
-            let pt_json =
-                serde_json::to_value(pt).map_err(|e| StorageError::Internal(e.to_string()))?;
+            let pt_description = apply_provisioned_throughput_update(
+                current_pt_description.as_ref(),
+                pt,
+                current_unix_epoch_seconds(),
+            )
+            .map_err(|err| StorageError::Validation(err.to_string()))?;
+            let pt_json = serde_json::to_value(&pt_description)
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
             sqlx::query("UPDATE tables SET provisioned_throughput = ? WHERE account_id = ? AND table_name = ?")
                 .bind(&pt_json)
                 .bind(account_id)

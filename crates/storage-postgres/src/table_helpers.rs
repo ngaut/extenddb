@@ -3,9 +3,12 @@
 
 //! Helper types and methods for `TableEngine` operations.
 
+use extenddb_core::provisioning::{
+    provisioned_throughput_description_from_value, zero_provisioned_throughput_description,
+};
 use extenddb_core::types::{
     AttributeDefinition, BillingMode, BillingModeSummary, GsiDescription, KeySchemaElement,
-    LsiDescription, Projection, ProvisionedThroughputDescription, TableDescription, TableStatus,
+    LsiDescription, Projection, TableDescription, TableStatus,
 };
 use extenddb_storage::error::StorageError;
 use extenddb_storage::util::{index_arn, stream_arn};
@@ -189,40 +192,19 @@ impl PostgresEngine {
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
 
             if idx.index_type == "GSI" {
-                // F-1 fallback: old data may be stored as ProvisionedThroughput
-                // (missing NumberOfDecreasesToday). Try the canonical type first,
-                // then fall back to upgrading the old format.
-                let pt: Option<ProvisionedThroughputDescription> = idx
+                let provisioned_throughput = idx
                     .provisioned_throughput
-                    .map(|v| {
-                        serde_json::from_value::<ProvisionedThroughputDescription>(v.clone())
-                            .or_else(|_| {
-                                let old: extenddb_core::types::ProvisionedThroughput =
-                                    serde_json::from_value(v)?;
-                                Ok(ProvisionedThroughputDescription {
-                                    read_capacity_units: old.read_capacity_units,
-                                    write_capacity_units: old.write_capacity_units,
-                                    number_of_decreases_today: 0,
-                                    last_increase_date_time: None,
-                                    last_decrease_date_time: None,
-                                })
-                            })
-                    })
+                    .map(provisioned_throughput_description_from_value)
                     .transpose()
-                    .map_err(|e: serde_json::Error| StorageError::Internal(e.to_string()))?;
+                    .map_err(|e| StorageError::Internal(e.to_string()))?
+                    .unwrap_or_else(zero_provisioned_throughput_description);
 
                 gsis.push(GsiDescription {
                     index_name: idx.index_name.clone(),
                     key_schema: ks,
                     projection: proj,
                     index_status: idx.index_status,
-                    provisioned_throughput: pt.or(Some(ProvisionedThroughputDescription {
-                        read_capacity_units: 0,
-                        write_capacity_units: 0,
-                        number_of_decreases_today: 0,
-                        last_increase_date_time: None,
-                        last_decrease_date_time: None,
-                    })),
+                    provisioned_throughput: Some(provisioned_throughput),
                     index_size_bytes: 0,
                     item_count: 0,
                     index_arn: index_arn(
@@ -259,15 +241,12 @@ impl PostgresEngine {
             .transpose()
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        let (rcu, wcu) = match &row.provisioned_throughput {
-            Some(v) => {
-                let pt: extenddb_core::types::ProvisionedThroughput =
-                    serde_json::from_value(v.clone())
-                        .map_err(|e| StorageError::Internal(e.to_string()))?;
-                (pt.read_capacity_units, pt.write_capacity_units)
-            }
-            None => (0, 0),
-        };
+        let provisioned_throughput = row
+            .provisioned_throughput
+            .map(provisioned_throughput_description_from_value)
+            .transpose()
+            .map_err(|e| StorageError::Internal(e.to_string()))?
+            .unwrap_or_else(zero_provisioned_throughput_description);
 
         let table_status = match row.table_status.as_str() {
             "ACTIVE" => TableStatus::Active,
@@ -307,13 +286,7 @@ impl PostgresEngine {
             item_count: row.item_count,
             table_arn: row.table_arn,
             table_id: row.table_id,
-            provisioned_throughput: ProvisionedThroughputDescription {
-                read_capacity_units: rcu,
-                write_capacity_units: wcu,
-                number_of_decreases_today: 0,
-                last_increase_date_time: None,
-                last_decrease_date_time: None,
-            },
+            provisioned_throughput,
             billing_mode_summary,
             global_secondary_indexes: if gsis.is_empty() { None } else { Some(gsis) },
             local_secondary_indexes: if lsis.is_empty() { None } else { Some(lsis) },

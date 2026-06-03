@@ -3,12 +3,25 @@
 
 //! `update_table` implementation for `PostgresEngine`.
 
+use extenddb_core::provisioning::{
+    apply_provisioned_throughput_update, current_unix_epoch_seconds,
+    provisioned_throughput_description, provisioned_throughput_description_from_value,
+};
 use extenddb_core::types::{
     AttributeDefinition, BillingMode, KeySchemaElement, TableDescription, UpdateTableInput,
 };
 use extenddb_storage::error::StorageError;
 
 use crate::PostgresEngine;
+
+type UpdateTableCatalogRow = (
+    String,
+    String,
+    serde_json::Value,
+    serde_json::Value,
+    Option<String>,
+    Option<serde_json::Value>,
+);
 
 impl PostgresEngine {
     /// Core implementation of `update_table` (REQ-CTRL-003).
@@ -24,9 +37,11 @@ impl PostgresEngine {
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        // Lock the row and fetch table_id, key_schema, attribute_definitions.
-        let row: Option<(String, String, serde_json::Value, serde_json::Value)> = sqlx::query_as(
-            "SELECT table_status, table_id, key_schema, attribute_definitions FROM tables WHERE account_id = $1 AND table_name = $2 FOR UPDATE",
+        // Lock the row and fetch table metadata plus throughput state.
+        let row: Option<UpdateTableCatalogRow> = sqlx::query_as(
+            "SELECT table_status, table_id, key_schema, attribute_definitions, \
+                    billing_mode, provisioned_throughput \
+             FROM tables WHERE account_id = $1 AND table_name = $2 FOR UPDATE",
         )
         .bind(account_id)
         .bind(&input.table_name)
@@ -34,11 +49,22 @@ impl PostgresEngine {
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        let (status, table_id, ks_json, ad_json) =
+        let (status, table_id, ks_json, ad_json, current_billing_mode, current_pt_json) =
             row.ok_or_else(|| StorageError::TableNotFound(input.table_name.clone()))?;
         if status != "ACTIVE" {
             return Err(StorageError::TableNotActive(input.table_name.clone()));
         }
+        let current_is_provisioned =
+            current_billing_mode.as_deref().unwrap_or("PROVISIONED") == "PROVISIONED";
+        let current_pt_description = if current_is_provisioned {
+            current_pt_json
+                .as_ref()
+                .map(|value| provisioned_throughput_description_from_value(value.clone()))
+                .transpose()
+                .map_err(|e| StorageError::Internal(e.to_string()))?
+        } else {
+            None
+        };
 
         // No-op rejection: setting same billing mode to PROVISIONED with same
         // throughput values is rejected by DynamoDB. This check runs under the
@@ -47,46 +73,24 @@ impl PostgresEngine {
         if matches!(input.billing_mode, Some(BillingMode::Provisioned))
             && let Some(ref pt) = input.provisioned_throughput
         {
-            let current_row: Option<(Option<String>, Option<serde_json::Value>)> = sqlx::query_as(
-                "SELECT billing_mode, provisioned_throughput FROM tables \
-                     WHERE account_id = $1 AND table_name = $2",
-            )
-            .bind(account_id)
-            .bind(&input.table_name)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| StorageError::Internal(e.to_string()))?;
+            let (current_rcu, current_wcu) =
+                current_pt_description.as_ref().map_or((0, 0), |current| {
+                    (current.read_capacity_units, current.write_capacity_units)
+                });
 
-            if let Some((current_bm, current_pt_opt)) = current_row {
-                let current_pt =
-                    current_pt_opt.unwrap_or(serde_json::Value::Object(Default::default()));
-                let is_provisioned =
-                    current_bm.as_deref() == Some("PROVISIONED") || current_bm.is_none();
-                let current_rcu = current_pt
-                    .get("ReadCapacityUnits")
-                    .or_else(|| current_pt.get("read_capacity_units"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                let current_wcu = current_pt
-                    .get("WriteCapacityUnits")
-                    .or_else(|| current_pt.get("write_capacity_units"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-
-                if is_provisioned
-                    && current_rcu == pt.read_capacity_units
-                    && current_wcu == pt.write_capacity_units
-                {
-                    return Err(StorageError::NoOpUpdate(format!(
-                        "The provisioned throughput for the table will not change. \
-                             The requested value equals the current value. \
-                             Current ReadCapacityUnits provisioned for the table: {}. \
-                             Requested ReadCapacityUnits: {}. \
-                             Current WriteCapacityUnits provisioned for the table: {}. \
-                             Requested WriteCapacityUnits: {}.",
-                        current_rcu, pt.read_capacity_units, current_wcu, pt.write_capacity_units
-                    )));
-                }
+            if current_is_provisioned
+                && current_rcu == pt.read_capacity_units
+                && current_wcu == pt.write_capacity_units
+            {
+                return Err(StorageError::NoOpUpdate(format!(
+                    "The provisioned throughput for the table will not change. \
+                         The requested value equals the current value. \
+                         Current ReadCapacityUnits provisioned for the table: {}. \
+                         Requested ReadCapacityUnits: {}. \
+                         Current WriteCapacityUnits provisioned for the table: {}. \
+                         Requested WriteCapacityUnits: {}.",
+                    current_rcu, pt.read_capacity_units, current_wcu, pt.write_capacity_units
+                )));
             }
         }
 
@@ -109,8 +113,14 @@ impl PostgresEngine {
 
         // Apply provisioned throughput change.
         if let Some(pt) = &input.provisioned_throughput {
-            let pt_json =
-                serde_json::to_value(pt).map_err(|e| StorageError::Internal(e.to_string()))?;
+            let pt_description = apply_provisioned_throughput_update(
+                current_pt_description.as_ref(),
+                pt,
+                current_unix_epoch_seconds(),
+            )
+            .map_err(|err| StorageError::Validation(err.to_string()))?;
+            let pt_json = serde_json::to_value(&pt_description)
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
             sqlx::query("UPDATE tables SET provisioned_throughput = $1 WHERE account_id = $2 AND table_name = $3")
                 .bind(&pt_json)
                 .bind(account_id)
@@ -228,7 +238,9 @@ impl PostgresEngine {
                     let gsi_pt = create
                         .provisioned_throughput
                         .as_ref()
-                        .map(serde_json::to_value)
+                        .map(|throughput| {
+                            serde_json::to_value(provisioned_throughput_description(throughput))
+                        })
                         .transpose()
                         .map_err(|e| StorageError::Internal(e.to_string()))?;
 

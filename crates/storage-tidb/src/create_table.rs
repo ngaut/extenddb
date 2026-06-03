@@ -3,6 +3,7 @@
 
 //! `create_table` implementation for `TidbEngine`.
 
+use extenddb_core::provisioning::provisioned_throughput_description;
 use extenddb_core::types::{
     BillingMode, BillingModeSummary, CreateTableInput, GsiDescription, GsiInput, KeySchemaElement,
     LsiDescription, LsiInput, Projection, ProvisionedThroughputDescription, TableDescription,
@@ -16,7 +17,6 @@ use sqlx::{MySql, QueryBuilder};
 use crate::TidbEngine;
 use crate::data::validate_native_key_schema_shape;
 use crate::stream_engine::StreamGenerationCatalog;
-use crate::throughput::provisioned_throughput_description;
 use crate::tidb_util::is_unique_violation;
 
 enum SecondaryIndexCreateRef<'a> {
@@ -211,7 +211,7 @@ impl TidbEngine {
         let pt_json = input
             .provisioned_throughput
             .as_ref()
-            .map(serde_json::to_value)
+            .map(|throughput| serde_json::to_value(provisioned_throughput_description(throughput)))
             .transpose()
             .map_err(|e| StorageError::Internal(e.to_string()))?;
         let stream_json = input

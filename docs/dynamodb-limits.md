@@ -22,7 +22,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Per-account RCU (provisioned) | 80,000 | Backend-specific | PostgreSQL frontend token buckets can enforce this per process. TiDB should use native Resource Control/resource groups for distributed enforcement. |
 | Per-account WCU (provisioned) | 80,000 | Backend-specific | PostgreSQL frontend token buckets can enforce this per process. TiDB should use native Resource Control/resource groups for distributed enforcement. |
 | Minimum throughput per table/GSI | 1 RCU / 1 WCU | Enforced | `validate_provisioned_throughput` rejects < 1 |
-| Provisioned capacity decrease limit | 27 per day (4 + 1/hour) | Not enforced | No decrease tracking implemented |
+| Provisioned capacity decrease limit | 27 per day (4 + 1/hour) | Enforced | `apply_provisioned_throughput_update` tracks table decreases under catalog row locks and returns `NumberOfDecreasesToday` |
 | Reserved capacity per account | 1,000,000 units | N/A | ExtendDB has no reserved capacity concept |
 
 ## Tables
@@ -147,7 +147,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 
 | Category | Enforced | Partial | Not Enforced | N/A |
 |----------|----------|---------|--------------|-----|
-| Throughput | 5 | 0 | 1 | 2 |
+| Throughput | 6 | 0 | 0 | 2 |
 | Tables | 4 | 0 | 0 | 0 |
 | Items | 6 | 0 | 0 | 0 |
 | Secondary Indexes | 5 | 0 | 1 | 0 |
@@ -159,15 +159,14 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Import/Export/Backup | 0 | 0 | 0 | 8 |
 | Global Tables | 0 | 0 | 0 | 2 |
 | Contributor Insights | 0 | 0 | 0 | 1 |
-| **Total** | **43** | **0** | **3** | **14** |
+| **Total** | **44** | **0** | **2** | **14** |
 
 ### Unenforced Limits Requiring Tracking
 
 The following unenforced limits are tracked in `docs/technical-debt.md`:
 
-1. **Provisioned capacity decrease limit** (27/day) — would require per-table decrease counter with hourly replenishment
-2. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
-3. **Simultaneous shard readers** (2 per shard) — requires active-reader coordination
+1. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
+2. **Simultaneous shard readers** (2 per shard) — requires active-reader coordination
 
 ---
 

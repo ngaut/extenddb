@@ -28,7 +28,6 @@ mod stream_engine;
 mod table_attributes;
 mod table_engine;
 mod table_helpers;
-mod throughput;
 mod tidb_util;
 mod update_table;
 mod worker_store;

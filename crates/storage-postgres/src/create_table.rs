@@ -3,6 +3,7 @@
 
 //! `create_table` implementation for `PostgresEngine`.
 
+use extenddb_core::provisioning::provisioned_throughput_description;
 use extenddb_core::types::{
     BillingMode, BillingModeSummary, CreateTableInput, GsiDescription, LsiDescription,
     ProvisionedThroughputDescription, TableDescription, TableStatus,
@@ -35,7 +36,7 @@ impl PostgresEngine {
         let pt_json = input
             .provisioned_throughput
             .as_ref()
-            .map(serde_json::to_value)
+            .map(|throughput| serde_json::to_value(provisioned_throughput_description(throughput)))
             .transpose()
             .map_err(|e| StorageError::Internal(e.to_string()))?;
         let stream_json = input
@@ -112,14 +113,8 @@ impl PostgresEngine {
                 let gsi_pt = gsi
                     .provisioned_throughput
                     .as_ref()
-                    .map(|pt| {
-                        serde_json::to_value(ProvisionedThroughputDescription {
-                            read_capacity_units: pt.read_capacity_units,
-                            write_capacity_units: pt.write_capacity_units,
-                            number_of_decreases_today: 0,
-                            last_increase_date_time: None,
-                            last_decrease_date_time: None,
-                        })
+                    .map(|throughput| {
+                        serde_json::to_value(provisioned_throughput_description(throughput))
                     })
                     .transpose()
                     .map_err(|e| StorageError::Internal(e.to_string()))?;

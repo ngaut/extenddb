@@ -95,7 +95,7 @@ See `docs/dynamodb-limits.md` for the full catalog. The following are the highes
 | L-6 | ~~Tag count per resource~~ | ~~50~~ | ~~Low~~ | P42 |
 | L-7 | ~~Tag key/value length limits~~ | ~~128/256 chars~~ | ~~Low~~ | P42 |
 | L-8 | LSI item collection size | 10 GB | Low | P42 |
-| L-9 | Provisioned capacity decrease limit | 27/day | Low | P42 |
+| L-9 | ~~Provisioned capacity decrease limit~~ | ~~27/day~~ | ~~Low~~ | P42 |
 | L-10 | ~~ExpressionAttributeNames/ExpressionAttributeValues aggregate size~~ | ~~2 MB each~~ | ~~Low~~ | P42 |
 
 ## File Size Overages (>500 lines)
@@ -141,6 +141,7 @@ Resolved (split in P94–P96):
 - ~~L-1: Projected INCLUDE attributes across all indexes were not counted~~ (fixed: CreateTable and TiDB UpdateTable GSI creation now reject tables whose user-specified INCLUDE projections exceed the configured 100-attribute table-wide limit, counting repeated attributes once per index)
 - ~~L-6/L-7: DynamoDB tag count and tag key/value length limits were not enforced~~ (fixed: CreateTable, TagResource, and UntagResource validate tag key/value lengths; storage tag writes validate the merged per-resource tag count before catalog upsert)
 - ~~L-3: Batch and transaction aggregate sizes were not enforced~~ (fixed: BatchGetItem tracks aggregate response bytes and returns overflow keys in `UnprocessedKeys`; BatchWriteItem and transaction handlers validate request bytes, and transactions validate aggregate item/response bytes before returning or writing)
+- ~~L-9: Provisioned capacity decrease limit was not enforced~~ (fixed: shared throughput accounting now enforces DynamoDB's 4-plus-1-per-hour daily table decrease quota under catalog row locks, persists the decrease counter/timestamps, and preserves the metadata in `DescribeTable`)
 
 ## Resolved in P30
 

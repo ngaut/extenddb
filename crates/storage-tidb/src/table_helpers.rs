@@ -3,9 +3,12 @@
 
 //! Helper types and methods for `TableEngine` operations.
 
+use extenddb_core::provisioning::{
+    provisioned_throughput_description_from_value, zero_provisioned_throughput_description,
+};
 use extenddb_core::types::{
-    BillingMode, BillingModeSummary, GsiDescription, LsiDescription,
-    ProvisionedThroughputDescription, StreamSpecification, TableDescription, TableStatus,
+    BillingMode, BillingModeSummary, GsiDescription, LsiDescription, StreamSpecification,
+    TableDescription, TableStatus,
 };
 use extenddb_storage::error::StorageError;
 use extenddb_storage::util::{index_arn, stream_arn};
@@ -13,7 +16,6 @@ use sqlx::Row;
 
 use crate::TidbEngine;
 use crate::data::physical_data_table_name;
-use crate::throughput::zero_provisioned_throughput_description;
 
 const STATS_META_PARTITION_NAME_COLUMN: &str = "Partition_name";
 const STATS_META_ROW_COUNT_COLUMN: &str = "Row_count";
@@ -175,7 +177,7 @@ impl TidbEngine {
                 "GSI" => {
                     let provisioned_throughput = idx
                         .provisioned_throughput
-                        .map(serde_json::from_value)
+                        .map(provisioned_throughput_description_from_value)
                         .transpose()
                         .map_err(|e| StorageError::Internal(e.to_string()))?
                         .unwrap_or_else(zero_provisioned_throughput_description);
@@ -234,15 +236,12 @@ impl TidbEngine {
             None
         };
 
-        let (rcu, wcu) = match &row.provisioned_throughput {
-            Some(v) => {
-                let pt: extenddb_core::types::ProvisionedThroughput =
-                    serde_json::from_value(v.clone())
-                        .map_err(|e| StorageError::Internal(e.to_string()))?;
-                (pt.read_capacity_units, pt.write_capacity_units)
-            }
-            None => (0, 0),
-        };
+        let provisioned_throughput = row
+            .provisioned_throughput
+            .map(provisioned_throughput_description_from_value)
+            .transpose()
+            .map_err(|e| StorageError::Internal(e.to_string()))?
+            .unwrap_or_else(zero_provisioned_throughput_description);
 
         let table_status = match row.table_status.as_str() {
             "ACTIVE" => TableStatus::Active,
@@ -281,13 +280,7 @@ impl TidbEngine {
             item_count: stats.item_count,
             table_arn: row.table_arn,
             table_id: row.table_id,
-            provisioned_throughput: ProvisionedThroughputDescription {
-                read_capacity_units: rcu,
-                write_capacity_units: wcu,
-                number_of_decreases_today: 0,
-                last_increase_date_time: None,
-                last_decrease_date_time: None,
-            },
+            provisioned_throughput,
             billing_mode_summary,
             global_secondary_indexes: if gsis.is_empty() { None } else { Some(gsis) },
             local_secondary_indexes: if lsis.is_empty() { None } else { Some(lsis) },

@@ -42,7 +42,8 @@ pub async fn handle_transact_get_items(
     ctx: &OperationContext,
 ) -> Result<DispatchResult, DynamoDbError> {
     let input: TransactGetItemsInput =
-        serde_json::from_value(body).map_err(crate::deserialize_error)?;
+        serde_json::from_value(body.clone()).map_err(crate::deserialize_error)?;
+    crate::aggregate_limits::validate_transaction_request_size(&body, &ctx.limits)?;
 
     if input.transact_items.is_empty() {
         return Err(DynamoDbError::ValidationException(
@@ -140,6 +141,7 @@ pub async fn handle_transact_get_items(
         .filter_map(|opt| opt.as_ref())
         .map(item_size_bytes)
         .sum();
+    crate::aggregate_limits::validate_transaction_payload_size(total_pre_proj_bytes, &ctx.limits)?;
     let returned_count = items.iter().filter(|opt| opt.is_some()).count() as u64;
 
     // Apply per-item projection

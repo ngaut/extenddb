@@ -89,7 +89,7 @@ See `docs/dynamodb-limits.md` for the full catalog. The following are the highes
 |---|-------|---------------|----------|--------|
 | L-1 | ~~Projected attributes across all indexes~~ | ~~100~~ | ~~Medium~~ | P42 |
 | L-2 | ~~Expression size limits (condition/filter/projection)~~ | ~~4 KB each~~ | ~~Low~~ | P42 |
-| L-3 | Batch/transaction aggregate request size | 4–16 MB | Low | P42 |
+| L-3 | ~~Batch/transaction aggregate request size~~ | ~~4–16 MB~~ | ~~Low~~ | P42 |
 | L-4 | ~~GetRecords max per call~~ | ~~1,000 records~~ | ~~Low~~ | P42 |
 | L-5 | ~~Shard iterator lifetime~~ | ~~15 minutes~~ | ~~Medium~~ | P42 |
 | L-6 | ~~Tag count per resource~~ | ~~50~~ | ~~Low~~ | P42 |
@@ -140,6 +140,7 @@ Resolved (split in P94–P96):
 - ~~L-10: ExpressionAttributeNames/ExpressionAttributeValues aggregate size was not enforced~~ (fixed: engine expression-map construction now rejects oversized 2 MiB name/value substitution maps before expression parsing, evaluation, or storage access)
 - ~~L-1: Projected INCLUDE attributes across all indexes were not counted~~ (fixed: CreateTable and TiDB UpdateTable GSI creation now reject tables whose user-specified INCLUDE projections exceed the configured 100-attribute table-wide limit, counting repeated attributes once per index)
 - ~~L-6/L-7: DynamoDB tag count and tag key/value length limits were not enforced~~ (fixed: CreateTable, TagResource, and UntagResource validate tag key/value lengths; storage tag writes validate the merged per-resource tag count before catalog upsert)
+- ~~L-3: Batch and transaction aggregate sizes were not enforced~~ (fixed: BatchGetItem tracks aggregate response bytes and returns overflow keys in `UnprocessedKeys`; BatchWriteItem and transaction handlers validate request bytes, and transactions validate aggregate item/response bytes before returning or writing)
 
 ## Resolved in P30
 

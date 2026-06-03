@@ -20,6 +20,15 @@ pub struct LimitsConfig {
     pub max_lsis_per_table: usize,
     #[serde(default = "default_max_projected_attributes_per_table")]
     pub max_projected_attributes_per_table: usize,
+    /// Maximum returned item bytes in one BatchGetItem response before keys are deferred.
+    #[serde(default = "default_max_batch_get_response_bytes")]
+    pub max_batch_get_response_bytes: usize,
+    /// Maximum BatchWriteItem request body size in bytes.
+    #[serde(default = "default_max_batch_write_request_bytes")]
+    pub max_batch_write_request_bytes: usize,
+    /// Maximum transaction request / aggregate item payload size in bytes.
+    #[serde(default = "default_max_transaction_request_bytes")]
+    pub max_transaction_request_bytes: usize,
     /// Maximum number of tags on one DynamoDB resource.
     #[serde(default = "default_max_tags_per_resource")]
     pub max_tags_per_resource: usize,
@@ -93,6 +102,9 @@ impl Default for LimitsConfig {
             max_gsis_per_table: default_max_gsis(),
             max_lsis_per_table: default_max_lsis(),
             max_projected_attributes_per_table: default_max_projected_attributes_per_table(),
+            max_batch_get_response_bytes: default_max_batch_get_response_bytes(),
+            max_batch_write_request_bytes: default_max_batch_write_request_bytes(),
+            max_transaction_request_bytes: default_max_transaction_request_bytes(),
             max_tags_per_resource: default_max_tags_per_resource(),
             max_tag_key_length: default_max_tag_key_length(),
             max_tag_value_length: default_max_tag_value_length(),
@@ -139,6 +151,15 @@ fn default_max_lsis() -> usize {
 }
 fn default_max_projected_attributes_per_table() -> usize {
     100
+}
+fn default_max_batch_get_response_bytes() -> usize {
+    16 * 1024 * 1024
+}
+fn default_max_batch_write_request_bytes() -> usize {
+    16 * 1024 * 1024
+}
+fn default_max_transaction_request_bytes() -> usize {
+    4 * 1024 * 1024
 }
 fn default_max_tags_per_resource() -> usize {
     50

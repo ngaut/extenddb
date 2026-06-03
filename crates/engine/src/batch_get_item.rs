@@ -12,7 +12,8 @@ use extenddb_core::error::DynamoDbError;
 use extenddb_core::expression::{ExpressionMaps, PathElement, apply_projection, parse_projection};
 use extenddb_core::limits::LimitsConfig;
 use extenddb_core::types::{
-    BatchGetItemInput, BatchGetItemOutput, Item, KeysAndAttributes, TableKeyInfo, item_size_bytes,
+    BatchGetItemInput, BatchGetItemOutput, Item, KeySchemaElement, KeysAndAttributes, TableKeyInfo,
+    extract_key, item_size_bytes,
 };
 use extenddb_core::validation::validate_batch_key_only;
 
@@ -83,13 +84,22 @@ pub async fn handle_batch_get_item(
     }
 
     let mut responses: HashMap<String, Vec<Item>> = HashMap::new();
+    let mut unprocessed_keys: HashMap<String, KeysAndAttributes> = HashMap::new();
     let mut total_rcu: f64 = 0.0;
     let mut total_pre_proj_bytes: usize = 0;
     let mut returned_count: u64 = 0;
     let mut per_table_rcu: HashMap<String, f64> = HashMap::new();
+    let mut response_bytes: usize = 0;
     let table_infos = batch_get_table_infos(ctx, &input.request_items).await?;
 
-    for (table_name, ka) in &input.request_items {
+    let mut table_names = input.request_items.keys().collect::<Vec<_>>();
+    table_names.sort();
+    for table_name in table_names {
+        let ka = input.request_items.get(table_name).ok_or_else(|| {
+            DynamoDbError::InternalServerError(format!(
+                "missing batch request for table {table_name}"
+            ))
+        })?;
         let key_info = table_infos.get(table_name).ok_or_else(|| {
             DynamoDbError::InternalServerError(format!(
                 "missing batch metadata for table {table_name}"
@@ -117,11 +127,25 @@ pub async fn handle_batch_get_item(
             .await
             .map_err(storage_err_to_dynamo)?;
 
-        for item in items {
+        let limited = apply_batch_get_response_limit(
+            ka,
+            &key_info.key_schema,
+            items,
+            &mut response_bytes,
+            ctx.limits.max_batch_get_response_bytes,
+        );
+        if !limited.unprocessed_keys.is_empty() {
+            unprocessed_keys.insert(
+                (*table_name).clone(),
+                keys_and_attributes_with_keys(ka, limited.unprocessed_keys),
+            );
+        }
+
+        for item in limited.returned_items {
             let size = item_size_bytes(&item);
             let item_rcu = capacity_helpers::read_capacity_units(size, strongly_consistent);
             total_rcu += item_rcu;
-            *per_table_rcu.entry(table_name.clone()).or_default() += item_rcu;
+            *per_table_rcu.entry((*table_name).clone()).or_default() += item_rcu;
             total_pre_proj_bytes += size;
             returned_count += 1;
             let item = if let Some(ref projection) = batch_projection {
@@ -131,7 +155,7 @@ pub async fn handle_batch_get_item(
             };
             table_items.push(item);
         }
-        responses.insert(table_name.clone(), table_items);
+        responses.insert((*table_name).clone(), table_items);
     }
 
     let consumed_capacity = capacity_helpers::batch_read_capacity(
@@ -144,7 +168,7 @@ pub async fn handle_batch_get_item(
 
     let output = BatchGetItemOutput {
         responses,
-        unprocessed_keys: HashMap::new(),
+        unprocessed_keys,
         consumed_capacity,
     };
     let body = serialize_output(&output)?;
@@ -161,6 +185,67 @@ pub async fn handle_batch_get_item(
 
 fn serialize_key_for_dedup(key: &Item) -> Vec<u8> {
     serde_json::to_vec(key).unwrap_or_default()
+}
+
+struct BatchGetResponseLimit {
+    returned_items: Vec<Item>,
+    unprocessed_keys: Vec<Item>,
+}
+
+fn apply_batch_get_response_limit(
+    ka: &KeysAndAttributes,
+    key_schema: &[KeySchemaElement],
+    items: Vec<Item>,
+    response_bytes: &mut usize,
+    max_response_bytes: usize,
+) -> BatchGetResponseLimit {
+    let mut item_by_key: HashMap<Vec<u8>, Item> = items
+        .into_iter()
+        .map(|item| {
+            (
+                serialize_key_for_dedup(&extract_key(&item, key_schema)),
+                item,
+            )
+        })
+        .collect();
+    let mut returned_items = Vec::new();
+    let mut unprocessed_keys = Vec::new();
+    let mut limit_reached = false;
+
+    for key in &ka.keys {
+        if limit_reached {
+            unprocessed_keys.push(key.clone());
+            continue;
+        }
+
+        let Some(item) = item_by_key.remove(&serialize_key_for_dedup(key)) else {
+            continue;
+        };
+        let item_bytes = item_size_bytes(&item);
+        if *response_bytes + item_bytes > max_response_bytes && *response_bytes > 0 {
+            limit_reached = true;
+            unprocessed_keys.push(key.clone());
+            continue;
+        }
+
+        *response_bytes += item_bytes;
+        returned_items.push(item);
+    }
+
+    BatchGetResponseLimit {
+        returned_items,
+        unprocessed_keys,
+    }
+}
+
+fn keys_and_attributes_with_keys(ka: &KeysAndAttributes, keys: Vec<Item>) -> KeysAndAttributes {
+    KeysAndAttributes {
+        keys,
+        consistent_read: ka.consistent_read,
+        projection_expression: ka.projection_expression.clone(),
+        expression_attribute_names: ka.expression_attribute_names.clone(),
+        attributes_to_get: ka.attributes_to_get.clone(),
+    }
 }
 
 fn build_batch_get_projection(
@@ -242,7 +327,7 @@ async fn batch_get_table_infos(
 
 #[cfg(test)]
 mod tests {
-    use extenddb_core::types::AttributeValue;
+    use extenddb_core::types::{AttributeValue, KeySchemaElement, KeyType};
 
     use super::*;
 
@@ -254,6 +339,24 @@ mod tests {
             expression_attribute_names: None,
             attributes_to_get: None,
         }
+    }
+
+    fn key(value: &str) -> Item {
+        Item::from([("pk".to_owned(), AttributeValue::S(value.to_owned()))])
+    }
+
+    fn item(value: &str, payload: &str) -> Item {
+        Item::from([
+            ("pk".to_owned(), AttributeValue::S(value.to_owned())),
+            ("payload".to_owned(), AttributeValue::S(payload.to_owned())),
+        ])
+    }
+
+    fn key_schema() -> Vec<KeySchemaElement> {
+        vec![KeySchemaElement {
+            attribute_name: "pk".to_owned(),
+            key_type: KeyType::Hash,
+        }]
     }
 
     #[test]
@@ -313,5 +416,38 @@ mod tests {
                 .expect("missing projection should be valid");
 
         assert!(projection.is_none());
+    }
+
+    #[test]
+    fn response_limit_defers_remaining_batch_get_keys() {
+        let first = item("a", "fits");
+        let second = item("b", "too-much-for-this-response");
+        let ka = KeysAndAttributes {
+            keys: vec![key("a"), key("b")],
+            consistent_read: Some(true),
+            projection_expression: Some("payload".to_owned()),
+            ..keys_and_attributes()
+        };
+        let mut response_bytes = 0;
+        let max_response_bytes = item_size_bytes(&first) + 1;
+
+        let limited = apply_batch_get_response_limit(
+            &ka,
+            &key_schema(),
+            vec![second.clone(), first.clone()],
+            &mut response_bytes,
+            max_response_bytes,
+        );
+
+        assert_eq!(limited.returned_items, vec![first]);
+        assert_eq!(limited.unprocessed_keys, vec![key("b")]);
+        assert_eq!(response_bytes, item_size_bytes(&item("a", "fits")));
+
+        let unprocessed = keys_and_attributes_with_keys(&ka, limited.unprocessed_keys);
+        assert_eq!(unprocessed.consistent_read, Some(true));
+        assert_eq!(
+            unprocessed.projection_expression,
+            Some("payload".to_owned())
+        );
     }
 }

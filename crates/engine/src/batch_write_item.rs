@@ -43,7 +43,8 @@ pub async fn handle_batch_write_item(
     ctx: &OperationContext,
 ) -> Result<DispatchResult, DynamoDbError> {
     let input: BatchWriteItemInput =
-        serde_json::from_value(body).map_err(crate::deserialize_error)?;
+        serde_json::from_value(body.clone()).map_err(crate::deserialize_error)?;
+    crate::aggregate_limits::validate_batch_write_request_size(&body, &ctx.limits)?;
 
     // Validate: RequestItems must not be empty
     if input.request_items.is_empty() {

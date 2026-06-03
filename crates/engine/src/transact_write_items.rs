@@ -51,6 +51,7 @@ pub async fn handle_transact_write_items(
 ) -> Result<DispatchResult, DynamoDbError> {
     let input: TransactWriteItemsInput =
         serde_json::from_value(body.clone()).map_err(crate::deserialize_error)?;
+    crate::aggregate_limits::validate_transaction_request_size(&body, &ctx.limits)?;
 
     // Compute fingerprint keyed by the client request token for collision
     // resistance. Must happen after parsing so the token is available.
@@ -125,11 +126,7 @@ pub async fn handle_transact_write_items(
 
     // Validate total transaction size <= 4MB
     let total_size: usize = prepared.iter().map(|op| op.item_size()).sum();
-    if total_size > 4 * 1024 * 1024 {
-        return Err(DynamoDbError::ValidationException(
-            "Transaction item size has exceeded the 4 MB limit".to_owned(),
-        ));
-    }
+    crate::aggregate_limits::validate_transaction_payload_size(total_size, &ctx.limits)?;
 
     // Build storage operations
     let ops: Vec<extenddb_storage::TransactWriteOp<'_>> =

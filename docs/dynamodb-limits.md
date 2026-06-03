@@ -73,10 +73,10 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Limit | DynamoDB Value | Status | Notes |
 |-------|---------------|--------|-------|
 | BatchGetItem: max keys | 100 | Enforced | `MAX_BATCH_GET_KEYS` in `batch_get_item.rs` |
-| BatchGetItem: response size | 16 MB | Not enforced | No aggregate response size limit |
+| BatchGetItem: response size | 16 MB | Enforced | `max_batch_get_response_bytes` defers overflow keys into `UnprocessedKeys` |
 | BatchWriteItem: max operations | 25 | Enforced | `MAX_BATCH_WRITE_ITEMS` in `batch_write_item.rs` |
 | BatchWriteItem: max item size | 400 KB | Enforced | Item size validated per item |
-| BatchWriteItem: max request size | 16 MB | Not enforced | No aggregate request size limit |
+| BatchWriteItem: max request size | 16 MB | Enforced | `max_batch_write_request_bytes` validates canonical request bytes before storage |
 
 ## Transactions
 
@@ -84,7 +84,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 |-------|---------------|--------|-------|
 | TransactWriteItems: max items | 100 | Enforced | `MAX_TRANSACT_WRITE_ITEMS` in `transact_write_items.rs` |
 | TransactGetItems: max items | 100 | Enforced | `MAX_TRANSACT_GET_ITEMS` in `transact_get_items.rs` |
-| Transaction request size | 4 MB | Not enforced | No aggregate request size validation |
+| Transaction request size | 4 MB | Enforced | `max_transaction_request_bytes` validates request bytes plus aggregate transaction item/response bytes |
 | Items per transaction across tables | No limit on table count | Enforced | ExtendDB supports cross-table transactions |
 
 ## DynamoDB Streams
@@ -152,14 +152,14 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Items | 6 | 0 | 0 | 0 |
 | Secondary Indexes | 5 | 0 | 1 | 0 |
 | Query/Scan | 7 | 0 | 0 | 0 |
-| Batch Operations | 3 | 0 | 2 | 0 |
-| Transactions | 3 | 0 | 1 | 0 |
+| Batch Operations | 5 | 0 | 0 | 0 |
+| Transactions | 4 | 0 | 0 | 0 |
 | Streams | 3 | 0 | 1 | 0 |
-| API-Level | 1 | 0 | 3 | 1 |
+| API-Level | 4 | 0 | 0 | 1 |
 | Import/Export/Backup | 0 | 0 | 0 | 8 |
 | Global Tables | 0 | 0 | 0 | 2 |
 | Contributor Insights | 0 | 0 | 0 | 1 |
-| **Total** | **37** | **0** | **9** | **14** |
+| **Total** | **43** | **0** | **3** | **14** |
 
 ### Unenforced Limits Requiring Tracking
 
@@ -167,11 +167,7 @@ The following unenforced limits are tracked in `docs/technical-debt.md`:
 
 1. **Provisioned capacity decrease limit** (27/day) — would require per-table decrease counter with hourly replenishment
 2. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
-3. **BatchGetItem response size** (16 MB) — requires aggregate response size tracking
-4. **BatchWriteItem request size** (16 MB) — requires aggregate request size tracking
-5. **Transaction request size** (4 MB) — requires aggregate request size tracking
-6. **Tag count per resource** (50) — requires count validation in TagResource
-7. **Tag key/value length** (128/256 chars) — requires length validation in TagResource
+3. **Simultaneous shard readers** (2 per shard) — requires active-reader coordination
 
 ---
 

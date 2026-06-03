@@ -416,6 +416,7 @@ fn dynamodb_number_size(n: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{KeySchemaElement, KeyType};
 
     #[test]
     fn put_item_output_without_return_values_omits_attributes() {
@@ -445,5 +446,36 @@ mod tests {
 
         assert_eq!(json["Attributes"]["pk"]["S"], "old");
         assert!(json.get("Item").is_none());
+    }
+
+    #[test]
+    fn extract_key_uses_declared_schema_not_attribute_order() {
+        let mut item = Item::new();
+        item.insert("aaa".to_owned(), AttributeValue::S("not-a-key".to_owned()));
+        item.insert("pk".to_owned(), AttributeValue::S("tenant-1".to_owned()));
+        item.insert("payload".to_owned(), AttributeValue::S("body".to_owned()));
+        item.insert("sk".to_owned(), AttributeValue::N("42".to_owned()));
+
+        let key_schema = vec![
+            KeySchemaElement {
+                attribute_name: "pk".to_owned(),
+                key_type: KeyType::Hash,
+            },
+            KeySchemaElement {
+                attribute_name: "sk".to_owned(),
+                key_type: KeyType::Range,
+            },
+        ];
+
+        let key = extract_key(&item, &key_schema);
+
+        assert_eq!(key.len(), 2);
+        assert_eq!(
+            key.get("pk"),
+            Some(&AttributeValue::S("tenant-1".to_owned()))
+        );
+        assert_eq!(key.get("sk"), Some(&AttributeValue::N("42".to_owned())));
+        assert!(!key.contains_key("aaa"));
+        assert!(!key.contains_key("payload"));
     }
 }

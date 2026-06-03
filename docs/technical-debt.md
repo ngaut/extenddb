@@ -18,7 +18,7 @@ Last updated: 2026-06-03 (P160)
 | F-3 | Import/export: full Ion parser not implemented (JSON subset only) | `engine/import_export.rs:339` | Medium | P24 |
 | F-4 | Import/export: full Ion writer not implemented (JSON subset only) | `engine/import_export.rs:433` | Medium | P24 |
 | F-5 | ~~`PutItem` returns `None` for `Item` field instead of omitting it~~ | ~~`core/types/item.rs`~~ | ~~Low~~ | P2 |
-| F-6 | `extract_key_from_item` returns alphabetically first key, not necessarily the correct one for multi-key tables | `server/lib.rs:256` | Low | P7 |
+| F-6 | ~~`extract_key_from_item` returns alphabetically first key, not necessarily the correct one for multi-key tables~~ | ~~`core/types/item.rs`~~ | ~~Low~~ | P7 |
 | F-7 | `MissingAuthenticationToken` returned regardless of auth provider state | `server/lib.rs:190` | Low | P12 |
 | F-8 | ~~IAM policies have no FK on `principal_name` — can reference nonexistent principals~~ | ~~`server/management/iam_policy.rs`~~ | ~~Medium~~ | P12c |
 | F-9 | ~~Permissions boundary has no FK enforcement on principal existence~~ | ~~`server/management/permissions_boundary.rs`~~ | ~~Medium~~ | P12c |
@@ -130,6 +130,7 @@ Resolved (split in P94–P96):
 - ~~F-13: HTTP 500 returned for pool exhaustion instead of 503~~ (fixed: shared storage-error fallback now maps typed backend unavailability plus sqlx pool timeout/closed-pool messages to DynamoDB `ServiceUnavailable` / HTTP 503 while preserving sanitized 500s for real internals)
 - ~~F-8/F-9: IAM policy and permissions-boundary writes could target nonexistent principals~~ (fixed: management API now verifies user/group/role existence through the catalog store before persisting policies or user/role permissions boundaries)
 - ~~F-5: PutItem returned `None`/`Item` shape instead of omitting the absent result field~~ (fixed: `PutItemOutput` serializes old values only as `Attributes`, omits absent `Attributes`, and has regression coverage for both `NONE` and `ALL_OLD` response shapes)
+- ~~F-6: Key extraction could choose the alphabetically first item attribute instead of the declared table key~~ (fixed: shared key extraction walks the declared `KeySchemaElement` list and has regression coverage for unordered composite-key items)
 
 ## Resolved in P30
 

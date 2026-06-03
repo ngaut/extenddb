@@ -90,8 +90,8 @@ See `docs/dynamodb-limits.md` for the full catalog. The following are the highes
 | L-1 | Projected attributes across all indexes | 100 | Medium | P42 |
 | L-2 | Expression size limits (condition/filter/projection) | 4 KB each | Low | P42 |
 | L-3 | Batch/transaction aggregate request size | 4–16 MB | Low | P42 |
-| L-4 | GetRecords max per call | 1,000 records | Low | P42 |
-| L-5 | Shard iterator lifetime | 15 minutes | Medium | P42 |
+| L-4 | ~~GetRecords max per call~~ | ~~1,000 records~~ | ~~Low~~ | P42 |
+| L-5 | ~~Shard iterator lifetime~~ | ~~15 minutes~~ | ~~Medium~~ | P42 |
 | L-6 | Tag count per resource | 50 | Low | P42 |
 | L-7 | Tag key/value length limits | 128/256 chars | Low | P42 |
 | L-8 | LSI item collection size | 10 GB | Low | P42 |
@@ -134,6 +134,7 @@ Resolved (split in P94–P96):
 - ~~F-7: `MissingAuthenticationToken` returned regardless of auth-provider state~~ (fixed: unauthenticated DynamoDB requests are only valid under mandatory `builtin` auth; `auth.provider = "none"` and unknown providers are rejected at startup, with regression coverage)
 - ~~F-1: BatchGetItem legacy `AttributesToGet` was listed as unsupported~~ (fixed: BatchGetItem desugars `AttributesToGet` into a projection with synthetic expression names, rejects mixing it with `ProjectionExpression`, and now has direct regression coverage)
 - ~~C-4: Numeric comparison parsing repeated `BigDecimal` work in the expression evaluator~~ (fixed: request placeholder numerics remain pre-parsed in `ExpressionMaps`, and item path numerics are now cached once per condition evaluation with regression coverage for repeated numeric path operands)
+- ~~L-4/L-5: Streams limit tracker still listed `GetRecords` max-per-call and shard iterator lifetime as unenforced~~ (fixed: `GetRecords` defaults and caps `Limit` at 1,000, shard iterators expire after the 15-minute DynamoDB window, and both behaviors now have direct regression coverage)
 
 ## Resolved in P30
 

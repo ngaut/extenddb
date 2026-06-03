@@ -169,6 +169,10 @@ pub async fn handle_get_shard_iterator(
 /// Shard iterator expiration: 15 minutes (900 seconds), matching real DynamoDB.
 const SHARD_ITERATOR_EXPIRY_SECS: u64 = 900;
 
+fn shard_iterator_is_expired(created_at: u64, now: u64) -> bool {
+    now.saturating_sub(created_at) > SHARD_ITERATOR_EXPIRY_SECS
+}
+
 /// Handle `GetRecords`.
 ///
 /// Decodes the shard iterator, checks expiration, reads records, and returns
@@ -193,7 +197,7 @@ pub async fn handle_get_records(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    if now.saturating_sub(token.created_at) > SHARD_ITERATOR_EXPIRY_SECS {
+    if shard_iterator_is_expired(token.created_at, now) {
         return Err(DynamoDbError::ExpiredIteratorException(
             "The shard iterator has expired and can no longer be \
              used to retrieve stream records. A new shard iterator \
@@ -324,7 +328,7 @@ fn storage_to_dynamo(e: StorageError) -> DynamoDbError {
 mod tests {
     use super::{
         decode_shard_iterator, encode_shard_iterator, previous_decimal_sequence,
-        stream_limit_or_default,
+        shard_iterator_is_expired, stream_limit_or_default,
     };
 
     #[test]
@@ -340,6 +344,22 @@ mod tests {
         assert_eq!(
             stream_limit_or_default(Some(1_000), 100, 100).expect("capped"),
             100
+        );
+    }
+
+    #[test]
+    fn get_records_limit_defaults_and_caps_at_dynamodb_max() {
+        assert_eq!(
+            stream_limit_or_default(None, 1_000, 1_000).expect("default"),
+            1_000
+        );
+        assert_eq!(
+            stream_limit_or_default(Some(7), 1_000, 1_000).expect("limit"),
+            7
+        );
+        assert_eq!(
+            stream_limit_or_default(Some(2_000), 1_000, 1_000).expect("capped"),
+            1_000
         );
     }
 
@@ -397,5 +417,13 @@ mod tests {
         );
 
         assert!(decode_shard_iterator(&legacy).is_err());
+    }
+
+    #[test]
+    fn shard_iterator_expiration_matches_fifteen_minute_window() {
+        assert!(!shard_iterator_is_expired(1_000, 1_000));
+        assert!(!shard_iterator_is_expired(1_000, 1_900));
+        assert!(shard_iterator_is_expired(1_000, 1_901));
+        assert!(!shard_iterator_is_expired(1_000, 999));
     }
 }

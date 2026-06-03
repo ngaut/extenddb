@@ -38,7 +38,7 @@ Last updated: 2026-06-03 (P160)
 | C-1 | `--catalog-db` should be `Optional<String>` for `init` without full config | `bin/cmd_init.rs:113` | Low | P1 |
 | C-2 | ~~Storage backend config field unused (always "postgres")~~ | ~~`bin/config.rs:55`~~ | ~~Low~~ | P1 |
 | C-3 | ~~GSI error matching via English substring `"does not exist"`~~ — now uses SQLSTATE `42P01` | `storage-postgres/gsi_queue.rs` | ~~Medium~~ | P25 |
-| C-4 | BigDecimal parsed on every comparison in expression evaluator | `core/expression/evaluator.rs:112` | Low | P4 |
+| C-4 | ~~BigDecimal parsed on every comparison in expression evaluator~~ | ~~`core/expression/evaluator.rs`~~ | ~~Low~~ | P4 |
 | C-5 | Stream shard list not cached per table (extra SQL round-trip per write) | `storage-postgres/lib.rs:1844` | Low | P10 |
 | C-6 | Inactive auth keys return `Err(DynamoDbError)` instead of a typed error | `auth/lib.rs:83` | Low | P12 |
 | C-7 | Console account pages: concurrent `CreateTable` race at READ COMMITTED | `server/console/pages/account_pages.rs:370` | Low | P12j |
@@ -133,6 +133,7 @@ Resolved (split in P94–P96):
 - ~~F-6: Key extraction could choose the alphabetically first item attribute instead of the declared table key~~ (fixed: shared key extraction walks the declared `KeySchemaElement` list and has regression coverage for unordered composite-key items)
 - ~~F-7: `MissingAuthenticationToken` returned regardless of auth-provider state~~ (fixed: unauthenticated DynamoDB requests are only valid under mandatory `builtin` auth; `auth.provider = "none"` and unknown providers are rejected at startup, with regression coverage)
 - ~~F-1: BatchGetItem legacy `AttributesToGet` was listed as unsupported~~ (fixed: BatchGetItem desugars `AttributesToGet` into a projection with synthetic expression names, rejects mixing it with `ProjectionExpression`, and now has direct regression coverage)
+- ~~C-4: Numeric comparison parsing repeated `BigDecimal` work in the expression evaluator~~ (fixed: request placeholder numerics remain pre-parsed in `ExpressionMaps`, and item path numerics are now cached once per condition evaluation with regression coverage for repeated numeric path operands)
 
 ## Resolved in P30
 

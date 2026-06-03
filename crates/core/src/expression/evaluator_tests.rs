@@ -60,6 +60,27 @@ fn numeric_less_than_false() {
 }
 
 #[test]
+fn numeric_path_operands_are_cached_per_evaluation() {
+    let item = simple_item();
+    let mut values = HashMap::new();
+    values.insert("lo".into(), AttributeValue::N("25".into()));
+    values.insert("hi".into(), AttributeValue::N("35".into()));
+    let tokens = tokenize("age > :lo AND age < :hi").unwrap();
+    let expr = parse_condition(&tokens).unwrap();
+    let maps = ExpressionMaps::new(HashMap::new(), values);
+    let mut ctx = EvalContext::new(&item, &maps);
+
+    assert!(evaluate_condition_inner(&expr, &mut ctx).unwrap());
+
+    let age_path = vec![PathElement::Attribute("age".into())];
+    assert_eq!(ctx.parsed_path_numerics.len(), 1);
+    assert!(matches!(
+        ctx.parsed_path_numerics.get(&age_path),
+        Some(Some(decimal)) if decimal.to_string() == "30"
+    ));
+}
+
+#[test]
 fn and_both_true() {
     let item = simple_item();
     let mut values = HashMap::new();

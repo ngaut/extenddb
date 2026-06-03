@@ -4,7 +4,7 @@
 //! Expression AST types for condition and update expressions.
 
 /// A single element in a document path.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PathElement {
     /// Attribute name or resolved `#name` reference.
     Attribute(String),

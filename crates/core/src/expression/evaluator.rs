@@ -8,13 +8,51 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+
+use bigdecimal::BigDecimal;
 
 use crate::error::DynamoDbError;
 use crate::types::AttributeValue;
 
 use super::ast::{CompareOp, Expr, PathElement};
 use super::resolver::{ExpressionMaps, resolve_path};
+
+struct EvalContext<'a> {
+    item: &'a BTreeMap<String, AttributeValue>,
+    maps: &'a ExpressionMaps,
+    parsed_path_numerics: HashMap<Vec<PathElement>, Option<BigDecimal>>,
+}
+
+impl<'a> EvalContext<'a> {
+    fn new(item: &'a BTreeMap<String, AttributeValue>, maps: &'a ExpressionMaps) -> Self {
+        Self {
+            item,
+            maps,
+            parsed_path_numerics: HashMap::new(),
+        }
+    }
+
+    fn parsed_path_numeric(&mut self, path: &[PathElement], value: &AttributeValue) -> NumericHint {
+        let AttributeValue::N(raw) = value else {
+            return NumericHint::Uncached;
+        };
+        let parsed = self
+            .parsed_path_numerics
+            .entry(path.to_vec())
+            .or_insert_with(|| raw.parse::<BigDecimal>().ok());
+        match parsed {
+            Some(decimal) => NumericHint::Parsed(decimal.clone()),
+            None => NumericHint::Invalid,
+        }
+    }
+}
+
+enum NumericHint {
+    Parsed(BigDecimal),
+    Invalid,
+    Uncached,
+}
 
 /// Evaluate a condition expression against an item.
 ///
@@ -28,31 +66,36 @@ pub fn evaluate_condition(
     item: &BTreeMap<String, AttributeValue>,
     maps: &ExpressionMaps,
 ) -> Result<bool, DynamoDbError> {
+    let mut ctx = EvalContext::new(item, maps);
+    evaluate_condition_inner(expr, &mut ctx)
+}
+
+fn evaluate_condition_inner(expr: &Expr, ctx: &mut EvalContext<'_>) -> Result<bool, DynamoDbError> {
     match expr {
         Expr::Compare { left, op, right } => {
-            let lv = resolve_to_value(left, item, maps)?;
-            let rv = resolve_to_value(right, item, maps)?;
+            let lv = resolve_to_value(left, ctx)?;
+            let rv = resolve_to_value(right, ctx)?;
             match (&lv, &rv) {
                 (Some(l), Some(r)) => {
-                    let lpn = placeholder_numeric(left, maps);
-                    let rpn = placeholder_numeric(right, maps);
+                    let lpn = numeric_hint(left, l, ctx);
+                    let rpn = numeric_hint(right, r, ctx);
                     Ok(compare_values(l, r, *op, lpn, rpn))
                 }
                 _ => Ok(*op == CompareOp::Ne),
             }
         }
         Expr::And(left, right) => {
-            Ok(evaluate_condition(left, item, maps)? && evaluate_condition(right, item, maps)?)
+            Ok(evaluate_condition_inner(left, ctx)? && evaluate_condition_inner(right, ctx)?)
         }
         Expr::Or(left, right) => {
-            Ok(evaluate_condition(left, item, maps)? || evaluate_condition(right, item, maps)?)
+            Ok(evaluate_condition_inner(left, ctx)? || evaluate_condition_inner(right, ctx)?)
         }
-        Expr::Not(inner) => Ok(!evaluate_condition(inner, item, maps)?),
-        Expr::Function { name, args } => evaluate_function(name, args, item, maps),
+        Expr::Not(inner) => Ok(!evaluate_condition_inner(inner, ctx)?),
+        Expr::Function { name, args } => evaluate_function(name, args, ctx),
         Expr::Between { operand, low, high } => {
-            let val = resolve_to_value(operand, item, maps)?;
-            let lo = resolve_to_value(low, item, maps)?;
-            let hi = resolve_to_value(high, item, maps)?;
+            let val = resolve_to_value(operand, ctx)?;
+            let lo = resolve_to_value(low, ctx)?;
+            let hi = resolve_to_value(high, ctx)?;
             // DynamoDB validates bounds when both are literal placeholders
             if matches!(low.as_ref(), Expr::Placeholder(_))
                 && matches!(high.as_ref(), Expr::Placeholder(_))
@@ -67,8 +110,8 @@ pub fn evaluate_condition(
                         format_attribute_value(h)
                     )));
                 }
-                let lpn = placeholder_numeric(low, maps);
-                let hpn = placeholder_numeric(high, maps);
+                let lpn = numeric_hint(low, l, ctx);
+                let hpn = numeric_hint(high, h, ctx);
                 if compare_values(l, h, CompareOp::Gt, lpn, hpn) {
                     return Err(DynamoDbError::ValidationException(format!(
                         "Invalid ConditionExpression: The BETWEEN operator requires upper bound to be greater than or equal to lower bound; lower bound operand: AttributeValue: {{{}}}, upper bound operand: AttributeValue: {{{}}}",
@@ -79,23 +122,23 @@ pub fn evaluate_condition(
             }
             match (&val, &lo, &hi) {
                 (Some(v), Some(l), Some(h)) => {
-                    let vpn = placeholder_numeric(operand, maps);
-                    let lpn = placeholder_numeric(low, maps);
-                    let hpn = placeholder_numeric(high, maps);
+                    let vpn = numeric_hint(operand, v, ctx);
+                    let lpn = numeric_hint(low, l, ctx);
+                    let hpn = numeric_hint(high, h, ctx);
                     Ok(compare_values(v, l, CompareOp::Ge, vpn, lpn)
-                        && compare_values(v, h, CompareOp::Le, vpn, hpn))
+                        && compare_values(v, h, CompareOp::Le, numeric_hint(operand, v, ctx), hpn))
                 }
                 _ => Ok(false),
             }
         }
         Expr::In { operand, list } => {
-            let val = resolve_to_value(operand, item, maps)?;
+            let val = resolve_to_value(operand, ctx)?;
             let Some(ref v) = val else { return Ok(false) };
-            let vpn = placeholder_numeric(operand, maps);
             for candidate in list {
-                let cv = resolve_to_value(candidate, item, maps)?;
+                let cv = resolve_to_value(candidate, ctx)?;
                 if let Some(ref c) = cv {
-                    let cpn = placeholder_numeric(candidate, maps);
+                    let vpn = numeric_hint(operand, v, ctx);
+                    let cpn = numeric_hint(candidate, c, ctx);
                     if compare_values(v, c, CompareOp::Eq, vpn, cpn) {
                         return Ok(true);
                     }
@@ -113,31 +156,39 @@ pub fn evaluate_condition(
 ///
 /// Returns `None` if the path points to a missing attribute (not an error).
 fn resolve_to_value<'a>(
-    expr: &'a Expr,
-    item: &'a BTreeMap<String, AttributeValue>,
-    maps: &'a ExpressionMaps,
+    expr: &Expr,
+    ctx: &EvalContext<'a>,
 ) -> Result<Option<Cow<'a, AttributeValue>>, DynamoDbError> {
     match expr {
-        Expr::Path(elements) => Ok(resolve_path(elements, item, maps)?.map(Cow::Borrowed)),
-        Expr::Placeholder(name) => Ok(Some(Cow::Borrowed(maps.resolve_value(name)?))),
-        Expr::Function { name, args } if name == "size" => evaluate_size(args, item, maps),
+        Expr::Path(elements) => Ok(resolve_path(elements, ctx.item, ctx.maps)?.map(Cow::Borrowed)),
+        Expr::Placeholder(name) => Ok(Some(Cow::Borrowed(ctx.maps.resolve_value(name)?))),
+        Expr::Function { name, args } if name == "size" => evaluate_size(args, ctx),
         _ => Err(DynamoDbError::ValidationException(
             "Invalid ConditionExpression: expected path or value".to_owned(),
         )),
     }
 }
 
-/// Look up a pre-parsed `BigDecimal` for a placeholder expression.
+/// Look up a pre-parsed `BigDecimal` for a numeric expression operand.
 ///
-/// Returns `None` if the expression is not a placeholder or has no pre-parsed value.
-fn placeholder_numeric<'a>(
-    expr: &Expr,
-    maps: &'a ExpressionMaps,
-) -> Option<&'a bigdecimal::BigDecimal> {
-    if let Expr::Placeholder(name) = expr {
-        maps.get_parsed_numeric(name)
-    } else {
-        None
+/// Placeholder numerics are stored per request in `ExpressionMaps`; path numerics
+/// are cached for this item evaluation.
+fn numeric_hint(expr: &Expr, value: &AttributeValue, ctx: &mut EvalContext<'_>) -> NumericHint {
+    let AttributeValue::N(raw) = value else {
+        return NumericHint::Uncached;
+    };
+    match expr {
+        Expr::Placeholder(name) => ctx.maps.get_parsed_numeric(name).cloned().map_or_else(
+            || {
+                raw.parse::<BigDecimal>()
+                    .map_or(NumericHint::Invalid, NumericHint::Parsed)
+            },
+            NumericHint::Parsed,
+        ),
+        Expr::Path(path) => ctx.parsed_path_numeric(path, value),
+        _ => raw
+            .parse::<BigDecimal>()
+            .map_or(NumericHint::Invalid, NumericHint::Parsed),
     }
 }
 
@@ -149,48 +200,36 @@ fn placeholder_numeric<'a>(
 /// - N: numeric comparison via `BigDecimal` (pre-parsed values used when available)
 /// - B: lexicographic byte comparison
 /// - BOOL, NULL, L, M, SS, NS, BS: only equality
-// Allow single_match_else: the match arms bind an owned fallback value
-// and return a reference, which doesn't simplify to if-let.
-#[allow(clippy::single_match_else)]
 fn compare_values(
     left: &AttributeValue,
     right: &AttributeValue,
     op: CompareOp,
-    left_parsed: Option<&bigdecimal::BigDecimal>,
-    right_parsed: Option<&bigdecimal::BigDecimal>,
+    left_parsed: NumericHint,
+    right_parsed: NumericHint,
 ) -> bool {
     match (left, right) {
         (AttributeValue::S(l), AttributeValue::S(r)) => apply_op(l.cmp(r), op),
         (AttributeValue::N(l), AttributeValue::N(r)) => {
-            // Use pre-parsed values when available; fall back to parsing.
-            let l_owned;
-            let ld = match left_parsed {
-                Some(d) => d,
-                None => {
-                    let Ok(d) = l.parse::<bigdecimal::BigDecimal>() else {
-                        return false;
-                    };
-                    l_owned = d;
-                    &l_owned
-                }
+            let Some(ld) = numeric_decimal(left_parsed, l) else {
+                return false;
             };
-            let r_owned;
-            let rd = match right_parsed {
-                Some(d) => d,
-                None => {
-                    let Ok(d) = r.parse::<bigdecimal::BigDecimal>() else {
-                        return false;
-                    };
-                    r_owned = d;
-                    &r_owned
-                }
+            let Some(rd) = numeric_decimal(right_parsed, r) else {
+                return false;
             };
-            apply_op(ld.cmp(rd), op)
+            apply_op(ld.cmp(&rd), op)
         }
         (AttributeValue::B(l), AttributeValue::B(r)) => apply_op(l.cmp(r), op),
         // For non-orderable types, only equality is meaningful
         (l, r) if l == r => matches!(op, CompareOp::Eq | CompareOp::Le | CompareOp::Ge),
         _ => matches!(op, CompareOp::Ne),
+    }
+}
+
+fn numeric_decimal(hint: NumericHint, raw: &str) -> Option<BigDecimal> {
+    match hint {
+        NumericHint::Parsed(decimal) => Some(decimal),
+        NumericHint::Invalid => None,
+        NumericHint::Uncached => raw.parse::<BigDecimal>().ok(),
     }
 }
 
@@ -209,8 +248,7 @@ fn apply_op(ordering: Ordering, op: CompareOp) -> bool {
 fn evaluate_function(
     name: &str,
     args: &[Expr],
-    item: &BTreeMap<String, AttributeValue>,
-    maps: &ExpressionMaps,
+    ctx: &mut EvalContext<'_>,
 ) -> Result<bool, DynamoDbError> {
     match name {
         "attribute_exists" => {
@@ -220,7 +258,7 @@ fn evaluate_function(
                         .to_owned(),
                 ));
             }
-            let val = resolve_to_value(&args[0], item, maps)?;
+            let val = resolve_to_value(&args[0], ctx)?;
             Ok(val.is_some())
         }
         "attribute_not_exists" => {
@@ -230,7 +268,7 @@ fn evaluate_function(
                         .to_owned(),
                 ));
             }
-            let val = resolve_to_value(&args[0], item, maps)?;
+            let val = resolve_to_value(&args[0], ctx)?;
             Ok(val.is_none())
         }
         "attribute_type" => {
@@ -240,8 +278,8 @@ fn evaluate_function(
                         .to_owned(),
                 ));
             }
-            let val = resolve_to_value(&args[0], item, maps)?;
-            let type_val = resolve_to_value(&args[1], item, maps)?;
+            let val = resolve_to_value(&args[0], ctx)?;
+            let type_val = resolve_to_value(&args[1], ctx)?;
             let Some(ref v) = val else { return Ok(false) };
             let Some(ref tv) = type_val else {
                 return Err(DynamoDbError::ValidationException(
@@ -264,8 +302,8 @@ fn evaluate_function(
                         .to_owned(),
                 ));
             }
-            let val = resolve_to_value(&args[0], item, maps)?;
-            let prefix = resolve_to_value(&args[1], item, maps)?;
+            let val = resolve_to_value(&args[0], ctx)?;
+            let prefix = resolve_to_value(&args[1], ctx)?;
             // Reject invalid operand types — only S and B are allowed
             if let Some(ref p) = prefix.as_deref()
                 && !matches!(p, AttributeValue::S(_) | AttributeValue::B(_))
@@ -300,7 +338,8 @@ fn evaluate_function(
                             .map(|e| match e {
                                 PathElement::Attribute(a) => {
                                     if let Some(ref_name) = a.strip_prefix('#') {
-                                        maps.names
+                                        ctx.maps
+                                            .names
                                             .get(ref_name)
                                             .cloned()
                                             .unwrap_or_else(|| a.clone())
@@ -319,8 +358,8 @@ fn evaluate_function(
                     "Invalid ConditionExpression: The first operand must be distinct from the remaining operands for this operator or function; operator: contains, first operand: {operand_str}"
                 )));
             }
-            let val = resolve_to_value(&args[0], item, maps)?;
-            let operand = resolve_to_value(&args[1], item, maps)?;
+            let val = resolve_to_value(&args[0], ctx)?;
+            let operand = resolve_to_value(&args[1], ctx)?;
             match (val.as_deref(), operand.as_deref()) {
                 (Some(v), Some(o)) => Ok(contains_check(v, o)),
                 _ => Ok(false),
@@ -346,16 +385,15 @@ fn evaluate_function(
 /// DynamoDB's behavior where `size(nonexistent)` causes the enclosing
 /// comparison to evaluate to false (the item is skipped).
 fn evaluate_size<'a>(
-    args: &'a [Expr],
-    item: &'a BTreeMap<String, AttributeValue>,
-    maps: &'a ExpressionMaps,
+    args: &[Expr],
+    ctx: &EvalContext<'a>,
 ) -> Result<Option<Cow<'a, AttributeValue>>, DynamoDbError> {
     if args.len() != 1 {
         return Err(DynamoDbError::ValidationException(
             "Invalid ConditionExpression: size requires exactly one argument".to_owned(),
         ));
     }
-    let val = resolve_to_value(&args[0], item, maps)?;
+    let val = resolve_to_value(&args[0], ctx)?;
     let Some(ref v) = val else {
         // Attribute does not exist — propagate None so the comparison short-circuits.
         return Ok(None);

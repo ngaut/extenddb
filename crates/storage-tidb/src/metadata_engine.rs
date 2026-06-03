@@ -4,6 +4,7 @@
 //! `MetadataEngine` trait implementation for `TidbEngine`.
 
 use extenddb_core::types::{Tag, TimeToLiveDescription, TimeToLiveStatus};
+use extenddb_core::validation::{canonicalize_tags, merged_tag_count, validate_tag_count};
 use extenddb_storage::MetadataEngine;
 use extenddb_storage::error::StorageError;
 use futures::future::BoxFuture;
@@ -24,6 +25,47 @@ const TTL_STATUS_DISABLED: &str = "DISABLED";
 const TTL_STATUS_ENABLING: &str = "ENABLING";
 const TTL_STATUS_ENABLED: &str = "ENABLED";
 const TTL_STATUS_DISABLING: &str = "DISABLING";
+
+fn storage_validation_error(err: extenddb_core::error::DynamoDbError) -> StorageError {
+    match err {
+        extenddb_core::error::DynamoDbError::ValidationException(message) => {
+            StorageError::Validation(message)
+        }
+        other => StorageError::Validation(other.to_string()),
+    }
+}
+
+fn table_identity_from_arn(arn: &str) -> Option<(&str, &str)> {
+    let mut parts = arn.strip_prefix("arn:aws:dynamodb:")?.splitn(3, ':');
+    let _region = parts.next()?;
+    let account_id = parts.next()?;
+    let resource = parts.next()?;
+    let table_name = resource.strip_prefix("table/")?.split('/').next()?;
+    Some((account_id, table_name))
+}
+
+async fn lock_table_for_tag_update(
+    tx: &mut sqlx::Transaction<'_, MySql>,
+    arn: &str,
+) -> Result<(), StorageError> {
+    let Some((account_id, table_name)) = table_identity_from_arn(arn) else {
+        return Ok(());
+    };
+
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT table_id FROM tables WHERE account_id = ? AND table_name = ? FOR UPDATE",
+    )
+    .bind(account_id)
+    .bind(table_name)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+    if row.is_none() {
+        return Err(StorageError::TableNotFound(table_name.to_owned()));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy)]
 struct FixedNativeTtlSpec {
@@ -721,11 +763,30 @@ impl MetadataEngine for TidbEngine {
 
     fn tag_resource(&self, arn: &str, tags: &[Tag]) -> BoxFuture<'_, Result<(), StorageError>> {
         let arn = arn.to_string();
-        let tags = tags.to_vec();
+        let tags = canonicalize_tags(tags);
         Box::pin(async move {
             if tags.is_empty() {
                 return Ok(());
             }
+
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+            lock_table_for_tag_update(&mut tx, &arn).await?;
+
+            let existing_keys: Vec<(String,)> =
+                sqlx::query_as("SELECT tag_key FROM tags WHERE resource_arn = ?")
+                    .bind(&arn)
+                    .fetch_all(&mut *tx)
+                    .await
+                    .map_err(|e| StorageError::Internal(e.to_string()))?;
+            validate_tag_count(
+                merged_tag_count(existing_keys.into_iter().map(|(key,)| key), &tags),
+                &self.limits,
+            )
+            .map_err(storage_validation_error)?;
 
             let mut query =
                 QueryBuilder::<MySql>::new("INSERT INTO tags (resource_arn, tag_key, tag_value) ");
@@ -739,7 +800,10 @@ impl MetadataEngine for TidbEngine {
 
             query
                 .build()
-                .execute(&self.pool)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+            tx.commit()
                 .await
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
             Ok(())
@@ -796,7 +860,8 @@ mod tests {
         CATALOG_FIXED_NATIVE_TTL, DATA_FIXED_NATIVE_TTL, create_table_has_disabled_ttl,
         create_table_has_native_ttl, drop_columns_sql, drop_indexes_sql,
         fixed_native_ttl_attribute_sql, native_ttl_attribute_sql, native_ttl_enable_sql,
-        table_accepts_native_schema_change, tag_delete_sql, ttl_json_path, ttl_status_from_catalog,
+        table_accepts_native_schema_change, table_identity_from_arn, tag_delete_sql, ttl_json_path,
+        ttl_status_from_catalog,
     };
     use extenddb_core::types::TimeToLiveStatus;
 
@@ -917,5 +982,16 @@ mod tests {
             tag_delete_sql(3),
             "DELETE FROM tags WHERE resource_arn = ? AND tag_key IN (?, ?, ?)"
         );
+    }
+
+    #[test]
+    fn tag_arn_parser_extracts_table_identity() {
+        assert_eq!(
+            table_identity_from_arn(
+                "arn:aws:dynamodb:us-east-1:123456789012:table/orders/index/by_status"
+            ),
+            Some(("123456789012", "orders"))
+        );
+        assert_eq!(table_identity_from_arn("bad-arn"), None);
     }
 }

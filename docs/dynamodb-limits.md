@@ -1,6 +1,6 @@
 # DynamoDB Limits Enforcement Status
 
-Last updated: 2026-04-23 (P42)
+Last updated: 2026-06-03 (closed PR #160 follow-up)
 
 Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html)
 
@@ -102,9 +102,9 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 |-------|---------------|--------|------------------------------------------|
 | ListTables: max per page | 100 | Enforced | `LimitsConfig::list_tables_max_per_page` |
 | DescribeTable: request rate | No specific limit | N/A | ExtendDB does not rate-limit             |
-| TagResource: max tags per resource | 50 | Not enforced | No tag count validation                  |
-| Tag key length | 1–128 characters | Not enforced | No tag key length validation             |
-| Tag value length | 0–256 characters | Not enforced | No tag value length validation           |
+| TagResource: max tags per resource | 50 | Enforced | `validate_tags` and storage-side merged-count validation use `LimitsConfig::max_tags_per_resource` |
+| Tag key length | 1–128 characters | Enforced | `validate_tag_key`, configurable via `LimitsConfig::max_tag_key_length` |
+| Tag value length | 0–256 characters | Enforced | `validate_tag_value`, configurable via `LimitsConfig::max_tag_value_length` |
 
 ## Import from Amazon S3
 

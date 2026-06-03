@@ -7,6 +7,7 @@ use extenddb_core::types::{
     BillingMode, BillingModeSummary, CreateTableInput, GsiDescription, LsiDescription,
     ProvisionedThroughputDescription, TableDescription, TableStatus,
 };
+use extenddb_core::validation::canonicalize_tags;
 use extenddb_storage::error::StorageError;
 use extenddb_storage::util::{index_arn, stream_arn, table_arn};
 
@@ -173,7 +174,7 @@ impl PostgresEngine {
 
         // Insert tags
         if let Some(tags) = &input.tags {
-            for tag in tags {
+            for tag in canonicalize_tags(tags) {
                 sqlx::query(
                     "INSERT INTO tags (resource_arn, tag_key, tag_value) VALUES ($1, $2, $3)",
                 )

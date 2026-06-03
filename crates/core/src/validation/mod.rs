@@ -7,7 +7,7 @@ use crate::limits::LimitsConfig;
 use crate::types::{
     AttributeDefinition, AttributeValue, BillingMode, CreateTableInput, DeleteItemInput,
     GetItemInput, Item, KeySchemaElement, KeyType, Projection, ProjectionType, PutItemInput,
-    ReturnValues, ScalarAttributeType, UpdateItemInput, item_size_bytes,
+    ReturnValues, ScalarAttributeType, Tag, UpdateItemInput, item_size_bytes,
 };
 
 /// Validate a table name per Virtual `DynamoDB` rules.
@@ -100,6 +100,9 @@ pub fn validate_create_table(
     validate_gsi_count(input, limits)?;
     validate_lsi_count(input, limits)?;
     validate_projected_attributes_across_indexes(input, limits.max_projected_attributes_per_table)?;
+    if let Some(tags) = &input.tags {
+        validate_tags(tags, limits)?;
+    }
     validate_lsi_requires_range_key(input)?;
     validate_unique_index_names(input)?;
     Ok(())
@@ -488,6 +491,110 @@ pub fn validate_projected_attribute_count(
         )));
     }
     Ok(())
+}
+
+/// Validate tag key/value limits and the resulting tag count for a new resource.
+///
+/// # Errors
+///
+/// Returns `ValidationException` if any tag key/value length is invalid or the
+/// unique key count exceeds `LimitsConfig::max_tags_per_resource`.
+pub fn validate_tags(tags: &[Tag], limits: &LimitsConfig) -> Result<(), DynamoDbError> {
+    for tag in tags {
+        validate_tag_key(&tag.key, limits)?;
+        validate_tag_value(&tag.value, limits)?;
+    }
+    validate_tag_count(merged_tag_count(std::iter::empty::<String>(), tags), limits)
+}
+
+/// Validate tag keys used by `UntagResource`.
+///
+/// # Errors
+///
+/// Returns `ValidationException` if any key is empty or too long.
+pub fn validate_tag_keys(tag_keys: &[String], limits: &LimitsConfig) -> Result<(), DynamoDbError> {
+    for key in tag_keys {
+        validate_tag_key(key, limits)?;
+    }
+    Ok(())
+}
+
+/// Validate one tag key.
+///
+/// # Errors
+///
+/// Returns `ValidationException` if the key is empty or exceeds the configured
+/// character limit.
+pub fn validate_tag_key(key: &str, limits: &LimitsConfig) -> Result<(), DynamoDbError> {
+    let len = key.chars().count();
+    if len == 0 || len > limits.max_tag_key_length {
+        return Err(DynamoDbError::ValidationException(format!(
+            "One or more parameter values were invalid: Tag key length must be between 1 and {} characters",
+            limits.max_tag_key_length
+        )));
+    }
+    Ok(())
+}
+
+/// Validate one tag value.
+///
+/// # Errors
+///
+/// Returns `ValidationException` if the value exceeds the configured character
+/// limit. Empty tag values are allowed.
+pub fn validate_tag_value(value: &str, limits: &LimitsConfig) -> Result<(), DynamoDbError> {
+    if value.chars().count() > limits.max_tag_value_length {
+        return Err(DynamoDbError::ValidationException(format!(
+            "One or more parameter values were invalid: Tag value length must be less than or equal to {} characters",
+            limits.max_tag_value_length
+        )));
+    }
+    Ok(())
+}
+
+/// Validate a final resource tag count.
+///
+/// # Errors
+///
+/// Returns `ValidationException` when the count exceeds the configured limit.
+pub fn validate_tag_count(count: usize, limits: &LimitsConfig) -> Result<(), DynamoDbError> {
+    if count > limits.max_tags_per_resource {
+        return Err(DynamoDbError::ValidationException(format!(
+            "One or more parameter values were invalid: Number of tags exceeds the limit of {}",
+            limits.max_tags_per_resource
+        )));
+    }
+    Ok(())
+}
+
+/// Count tags after overwriting incoming keys onto existing keys.
+#[must_use]
+pub fn merged_tag_count<I>(existing_keys: I, incoming_tags: &[Tag]) -> usize
+where
+    I: IntoIterator,
+    I::Item: AsRef<str>,
+{
+    let mut keys = std::collections::HashSet::new();
+    for key in existing_keys {
+        keys.insert(key.as_ref().to_owned());
+    }
+    for tag in incoming_tags {
+        keys.insert(tag.key.clone());
+    }
+    keys.len()
+}
+
+/// Collapse duplicate tag keys using last-write-wins semantics.
+#[must_use]
+pub fn canonicalize_tags(tags: &[Tag]) -> Vec<Tag> {
+    let mut by_key = std::collections::BTreeMap::new();
+    for tag in tags {
+        by_key.insert(tag.key.clone(), tag.value.clone());
+    }
+    by_key
+        .into_iter()
+        .map(|(key, value)| Tag { key, value })
+        .collect()
 }
 
 /// Validate a `PutItem` request.
@@ -1433,6 +1540,113 @@ mod tests {
         }]);
 
         assert!(validate_create_table(&input, &limits).is_ok());
+    }
+
+    #[test]
+    fn create_table_rejects_tag_count_over_limit() {
+        let limits = LimitsConfig {
+            max_tags_per_resource: 1,
+            ..Default::default()
+        };
+        let mut input = base_input(
+            vec![make_ks("pk", KeyType::Hash)],
+            vec![make_ad("pk", ScalarAttributeType::S)],
+        );
+        input.tags = Some(vec![
+            Tag {
+                key: "first".to_owned(),
+                value: "1".to_owned(),
+            },
+            Tag {
+                key: "second".to_owned(),
+                value: "2".to_owned(),
+            },
+        ]);
+
+        let err = validate_create_table(&input, &limits).unwrap_err();
+        assert!(
+            err.to_string().contains("Number of tags exceeds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_tags_rejects_key_and_value_lengths() {
+        let limits = LimitsConfig {
+            max_tag_key_length: 4,
+            max_tag_value_length: 5,
+            ..Default::default()
+        };
+        let long_key = Tag {
+            key: "abcde".to_owned(),
+            value: "ok".to_owned(),
+        };
+        let err = validate_tags(&[long_key], &limits).unwrap_err();
+        assert!(
+            err.to_string().contains("Tag key length"),
+            "unexpected error: {err}"
+        );
+
+        let long_value = Tag {
+            key: "abcd".to_owned(),
+            value: "abcdef".to_owned(),
+        };
+        let err = validate_tags(&[long_value], &limits).unwrap_err();
+        assert!(
+            err.to_string().contains("Tag value length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_tag_keys_rejects_empty_untag_key() {
+        let limits = LimitsConfig::default();
+        let err = validate_tag_keys(&[String::new()], &limits).unwrap_err();
+        assert!(
+            err.to_string().contains("Tag key length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn merged_tag_count_counts_overwrites_once() {
+        let incoming = vec![
+            Tag {
+                key: "existing".to_owned(),
+                value: "new".to_owned(),
+            },
+            Tag {
+                key: "fresh".to_owned(),
+                value: "value".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            merged_tag_count(["existing".to_owned(), "other".to_owned()], &incoming),
+            3
+        );
+    }
+
+    #[test]
+    fn canonicalize_tags_uses_last_value_per_key() {
+        let canonical = canonicalize_tags(&[
+            Tag {
+                key: "team".to_owned(),
+                value: "core".to_owned(),
+            },
+            Tag {
+                key: "team".to_owned(),
+                value: "storage".to_owned(),
+            },
+        ]);
+
+        assert_eq!(
+            canonical,
+            vec![Tag {
+                key: "team".to_owned(),
+                value: "storage".to_owned(),
+            }]
+        );
     }
 
     #[test]

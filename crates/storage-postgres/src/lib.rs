@@ -110,6 +110,7 @@ inventory::submit! {
 use std::sync::Arc;
 use std::time::Duration;
 
+use extenddb_core::limits::LimitsConfig;
 use extenddb_core::version::CatalogVersion;
 use extenddb_storage::error::StorageError;
 use sqlx::PgPool;
@@ -132,8 +133,8 @@ const MIN_POOL_SIZE: u32 = 10;
 pub struct PostgresConfig {
     pub connection_string: String,
     pub pool_size: u32,
-    /// Maximum item size in bytes for post-update validation.
-    pub max_item_size_bytes: usize,
+    /// Runtime limits that PostgreSQL must enforce after storage-side mutations.
+    pub limits: LimitsConfig,
 }
 
 /// `PostgreSQL` storage backend.
@@ -151,6 +152,7 @@ pub struct PostgresEngine {
     /// Connection pool for the data database where `_ddb_*` tables live.
     pub(crate) data_pool: PgPool,
     pub(crate) region: String,
+    pub(crate) limits: LimitsConfig,
     pub(crate) max_item_size_bytes: usize,
     /// Wakes the control plane poller when a table enters CREATING or
     /// DELETING state, so transitions are processed without polling delay.
@@ -226,7 +228,8 @@ impl PostgresEngine {
             pool,
             data_pool,
             region: region.to_owned(),
-            max_item_size_bytes: config.max_item_size_bytes,
+            limits: config.limits.clone(),
+            max_item_size_bytes: config.limits.max_item_size_bytes,
             control_plane_notify: Arc::new(tokio::sync::Notify::new()),
             gsi_queue: None,
             gsi_default_delay_ms: Arc::new(std::sync::atomic::AtomicU64::new(initial_gsi_delay)),
@@ -490,13 +493,14 @@ inventory::submit! {
             let connection_string = config.connection_config().to_string();
             let max_connections = config.max_connections();
             let max_catalog_connections = config.max_catalog_connections();
+            let limits = config.runtime_limits().cloned().unwrap_or_default();
             let region = region.to_string();
             Box::pin(async move {
                 // Build PostgresConfig from extracted values
                 let pg_config = PostgresConfig {
                     connection_string: connection_string.clone(),
                     pool_size: max_connections,
-                    max_item_size_bytes: 400_000,
+                    limits,
                 };
 
                 // Create PostgresEngine

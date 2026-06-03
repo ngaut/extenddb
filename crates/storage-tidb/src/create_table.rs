@@ -8,6 +8,7 @@ use extenddb_core::types::{
     LsiDescription, LsiInput, Projection, ProvisionedThroughputDescription, TableDescription,
     TableStatus, Tag,
 };
+use extenddb_core::validation::canonicalize_tags;
 use extenddb_storage::error::StorageError;
 use extenddb_storage::util::{index_arn, stream_arn, table_arn};
 use sqlx::{MySql, QueryBuilder};
@@ -291,7 +292,7 @@ impl TidbEngine {
         }
 
         if let Some(tags) = &input.tags {
-            insert_table_tags(&mut tx, &table_arn, tags).await?;
+            insert_table_tags(&mut tx, &table_arn, &canonicalize_tags(tags)).await?;
         }
 
         tx.commit()

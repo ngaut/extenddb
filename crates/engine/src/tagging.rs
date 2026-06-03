@@ -7,9 +7,11 @@ use extenddb_core::error::DynamoDbError;
 use extenddb_core::types::{
     ListTagsOfResourceInput, ListTagsOfResourceOutput, TagResourceInput, UntagResourceInput,
 };
+use extenddb_core::validation::{validate_tag_keys, validate_tags};
 use serde_json::Value;
 
 use crate::OperationContext;
+use crate::create_table::storage_err_to_dynamo;
 use crate::sanitize_storage_error;
 use crate::serialize_output;
 
@@ -77,13 +79,14 @@ pub async fn handle_tag_resource(
             "ResourceArn must not be empty".to_owned(),
         ));
     }
+    validate_tags(&input.tags, &ctx.limits)?;
 
     validate_resource_arn(&input.resource_arn, ctx).await?;
 
     ctx.storage
         .tag_resource(&input.resource_arn, &input.tags)
         .await
-        .map_err(sanitize_storage_error)?;
+        .map_err(storage_err_to_dynamo)?;
 
     // Drop any cached resource-tag entry so the new tags are visible to
     // ABAC policy evaluation immediately.
@@ -114,13 +117,14 @@ pub async fn handle_untag_resource(
             "ResourceArn must not be empty".to_owned(),
         ));
     }
+    validate_tag_keys(&input.tag_keys, &ctx.limits)?;
 
     validate_resource_arn(&input.resource_arn, ctx).await?;
 
     ctx.storage
         .untag_resource(&input.resource_arn, &input.tag_keys)
         .await
-        .map_err(sanitize_storage_error)?;
+        .map_err(storage_err_to_dynamo)?;
 
     ctx.auth_cache
         .invalidate_resource_tags(&input.resource_arn)
@@ -156,7 +160,7 @@ pub async fn handle_list_tags_of_resource(
         .storage
         .list_tags(&input.resource_arn)
         .await
-        .map_err(sanitize_storage_error)?;
+        .map_err(storage_err_to_dynamo)?;
 
     let output = ListTagsOfResourceOutput {
         tags,

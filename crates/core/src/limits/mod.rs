@@ -20,6 +20,15 @@ pub struct LimitsConfig {
     pub max_lsis_per_table: usize,
     #[serde(default = "default_max_projected_attributes_per_table")]
     pub max_projected_attributes_per_table: usize,
+    /// Maximum number of tags on one DynamoDB resource.
+    #[serde(default = "default_max_tags_per_resource")]
+    pub max_tags_per_resource: usize,
+    /// Maximum tag key length in Unicode scalar values.
+    #[serde(default = "default_max_tag_key_length")]
+    pub max_tag_key_length: usize,
+    /// Maximum tag value length in Unicode scalar values.
+    #[serde(default = "default_max_tag_value_length")]
+    pub max_tag_value_length: usize,
     #[serde(default = "default_list_tables_max")]
     pub list_tables_max_per_page: i32,
     #[serde(default = "default_max_table_name_len")]
@@ -84,6 +93,9 @@ impl Default for LimitsConfig {
             max_gsis_per_table: default_max_gsis(),
             max_lsis_per_table: default_max_lsis(),
             max_projected_attributes_per_table: default_max_projected_attributes_per_table(),
+            max_tags_per_resource: default_max_tags_per_resource(),
+            max_tag_key_length: default_max_tag_key_length(),
+            max_tag_value_length: default_max_tag_value_length(),
             list_tables_max_per_page: default_list_tables_max(),
             max_table_name_length: default_max_table_name_len(),
             min_table_name_length: default_min_table_name_len(),
@@ -127,6 +139,15 @@ fn default_max_lsis() -> usize {
 }
 fn default_max_projected_attributes_per_table() -> usize {
     100
+}
+fn default_max_tags_per_resource() -> usize {
+    50
+}
+fn default_max_tag_key_length() -> usize {
+    128
+}
+fn default_max_tag_value_length() -> usize {
+    256
 }
 fn default_list_tables_max() -> i32 {
     100

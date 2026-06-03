@@ -92,8 +92,8 @@ See `docs/dynamodb-limits.md` for the full catalog. The following are the highes
 | L-3 | Batch/transaction aggregate request size | 4–16 MB | Low | P42 |
 | L-4 | ~~GetRecords max per call~~ | ~~1,000 records~~ | ~~Low~~ | P42 |
 | L-5 | ~~Shard iterator lifetime~~ | ~~15 minutes~~ | ~~Medium~~ | P42 |
-| L-6 | Tag count per resource | 50 | Low | P42 |
-| L-7 | Tag key/value length limits | 128/256 chars | Low | P42 |
+| L-6 | ~~Tag count per resource~~ | ~~50~~ | ~~Low~~ | P42 |
+| L-7 | ~~Tag key/value length limits~~ | ~~128/256 chars~~ | ~~Low~~ | P42 |
 | L-8 | LSI item collection size | 10 GB | Low | P42 |
 | L-9 | Provisioned capacity decrease limit | 27/day | Low | P42 |
 | L-10 | ~~ExpressionAttributeNames/ExpressionAttributeValues aggregate size~~ | ~~2 MB each~~ | ~~Low~~ | P42 |
@@ -139,6 +139,7 @@ Resolved (split in P94–P96):
 - ~~L-2: Expression string byte limits were not enforced~~ (fixed: all engine expression tokenization now rejects strings above `limits.max_expression_bytes` before parsing, with typed regression coverage for condition, filter, projection, key-condition, and update-expression paths)
 - ~~L-10: ExpressionAttributeNames/ExpressionAttributeValues aggregate size was not enforced~~ (fixed: engine expression-map construction now rejects oversized 2 MiB name/value substitution maps before expression parsing, evaluation, or storage access)
 - ~~L-1: Projected INCLUDE attributes across all indexes were not counted~~ (fixed: CreateTable and TiDB UpdateTable GSI creation now reject tables whose user-specified INCLUDE projections exceed the configured 100-attribute table-wide limit, counting repeated attributes once per index)
+- ~~L-6/L-7: DynamoDB tag count and tag key/value length limits were not enforced~~ (fixed: CreateTable, TagResource, and UntagResource validate tag key/value lengths; storage tag writes validate the merged per-resource tag count before catalog upsert)
 
 ## Resolved in P30
 

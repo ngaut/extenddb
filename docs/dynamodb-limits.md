@@ -51,7 +51,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 |-------|---------------|--------|-------|
 | GSIs per table | 20 | Enforced | `validate_gsi_count`, `LimitsConfig::max_gsis_per_table`, configurable |
 | LSIs per table | 5 | Enforced | `validate_lsi_count`, `LimitsConfig::max_lsis_per_table`, configurable |
-| Projected attributes across all indexes | 100 | Not enforced | No cross-index projected attribute count validation |
+| Projected attributes across all indexes | 100 | Enforced | `validate_projected_attribute_count` counts INCLUDE `NonKeyAttributes` across GSIs/LSIs before CreateTable and TiDB GSI create |
 | Index name length | 3–255 characters | Enforced | `validate_index_name` |
 | Index name character set | `[a-zA-Z0-9_.-]` | Enforced | `validate_index_name` |
 | LSI item collection size | 10 GB | Not enforced | No item collection size tracking |
@@ -150,7 +150,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Throughput | 5 | 0 | 1 | 2 |
 | Tables | 4 | 0 | 0 | 0 |
 | Items | 6 | 0 | 0 | 0 |
-| Secondary Indexes | 4 | 0 | 2 | 0 |
+| Secondary Indexes | 5 | 0 | 1 | 0 |
 | Query/Scan | 7 | 0 | 0 | 0 |
 | Batch Operations | 3 | 0 | 2 | 0 |
 | Transactions | 3 | 0 | 1 | 0 |
@@ -159,20 +159,19 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Import/Export/Backup | 0 | 0 | 0 | 8 |
 | Global Tables | 0 | 0 | 0 | 2 |
 | Contributor Insights | 0 | 0 | 0 | 1 |
-| **Total** | **36** | **0** | **10** | **14** |
+| **Total** | **37** | **0** | **9** | **14** |
 
 ### Unenforced Limits Requiring Tracking
 
 The following unenforced limits are tracked in `docs/technical-debt.md`:
 
 1. **Provisioned capacity decrease limit** (27/day) — would require per-table decrease counter with hourly replenishment
-2. **Projected attributes across all indexes** (100) — requires cross-index attribute counting in CreateTable validation
-3. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
-4. **BatchGetItem response size** (16 MB) — requires aggregate response size tracking
-5. **BatchWriteItem request size** (16 MB) — requires aggregate request size tracking
-6. **Transaction request size** (4 MB) — requires aggregate request size tracking
-7. **Tag count per resource** (50) — requires count validation in TagResource
-8. **Tag key/value length** (128/256 chars) — requires length validation in TagResource
+2. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
+3. **BatchGetItem response size** (16 MB) — requires aggregate response size tracking
+4. **BatchWriteItem request size** (16 MB) — requires aggregate request size tracking
+5. **Transaction request size** (4 MB) — requires aggregate request size tracking
+6. **Tag count per resource** (50) — requires count validation in TagResource
+7. **Tag key/value length** (128/256 chars) — requires length validation in TagResource
 
 ---
 

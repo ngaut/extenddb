@@ -4,9 +4,10 @@
 //! `update_table` implementation for `TidbEngine`.
 
 use extenddb_core::types::{
-    AttributeDefinition, BillingMode, KeySchemaElement, ProvisionedThroughput, StreamSpecification,
-    TableDescription, UpdateTableInput,
+    AttributeDefinition, BillingMode, KeySchemaElement, Projection, ProvisionedThroughput,
+    StreamSpecification, TableDescription, UpdateTableInput,
 };
+use extenddb_core::validation::{projected_attribute_count, validate_projected_attribute_count};
 use extenddb_storage::error::StorageError;
 
 use crate::TidbEngine;
@@ -75,6 +76,19 @@ fn validate_index_key_definitions(
     }
 
     Ok(())
+}
+
+fn validate_projected_attribute_count_for_gsi_create(
+    mut existing_projections: Vec<Projection>,
+    create_projection: &Projection,
+    max_projected_attributes: usize,
+) -> Result<(), StorageError> {
+    existing_projections.push(create_projection.clone());
+    validate_projected_attribute_count(
+        projected_attribute_count(existing_projections),
+        max_projected_attributes,
+    )
+    .map_err(|err| StorageError::Validation(err.to_string()))
 }
 
 fn stream_enabled_from_catalog(
@@ -280,6 +294,25 @@ impl TidbEngine {
                         return Err(StorageError::IndexAlreadyExists(create.index_name.clone()));
                     }
 
+                    let projection_rows: Vec<(serde_json::Value,)> =
+                        sqlx::query_as("SELECT projection FROM indexes WHERE table_id = ?")
+                            .bind(&table_id)
+                            .fetch_all(&mut *tx)
+                            .await
+                            .map_err(|e| StorageError::Internal(e.to_string()))?;
+                    let projections = projection_rows
+                        .into_iter()
+                        .map(|(value,)| {
+                            serde_json::from_value::<Projection>(value)
+                                .map_err(|e| StorageError::Internal(e.to_string()))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    validate_projected_attribute_count_for_gsi_create(
+                        projections,
+                        &create.projection,
+                        self.limits.max_projected_attributes_per_table,
+                    )?;
+
                     let gsi_ks = serde_json::to_value(&create.key_schema)
                         .map_err(|e| StorageError::Internal(e.to_string()))?;
                     let gsi_proj = serde_json::to_value(&create.projection)
@@ -460,12 +493,13 @@ impl TidbEngine {
 #[cfg(test)]
 mod tests {
     use extenddb_core::types::{
-        AttributeDefinition, KeySchemaElement, KeyType, ScalarAttributeType,
+        AttributeDefinition, KeySchemaElement, KeyType, Projection, ProjectionType,
+        ScalarAttributeType,
     };
 
     use super::{
         merge_attribute_definitions, next_stream_label_for_update, table_accepts_update_table,
-        validate_index_key_definitions,
+        validate_index_key_definitions, validate_projected_attribute_count_for_gsi_create,
     };
 
     fn attr(name: &str, attribute_type: ScalarAttributeType) -> AttributeDefinition {
@@ -479,6 +513,20 @@ mod tests {
         KeySchemaElement {
             attribute_name: name.to_owned(),
             key_type: KeyType::Hash,
+        }
+    }
+
+    fn include_projection(attrs: &[&str]) -> Projection {
+        Projection {
+            projection_type: ProjectionType::Include,
+            non_key_attributes: Some(attrs.iter().map(|attr| (*attr).to_owned()).collect()),
+        }
+    }
+
+    fn all_projection() -> Projection {
+        Projection {
+            projection_type: ProjectionType::All,
+            non_key_attributes: None,
         }
     }
 
@@ -536,6 +584,32 @@ mod tests {
             ],
         )
         .expect("existing attribute definition is enough");
+    }
+
+    #[test]
+    fn update_table_gsi_create_rejects_projected_attribute_limit_overflow() {
+        let err = validate_projected_attribute_count_for_gsi_create(
+            vec![include_projection(&["a", "b"])],
+            &include_projection(&["c"]),
+            2,
+        )
+        .expect_err("new GSI projection should exceed table-wide count");
+
+        assert!(
+            err.to_string()
+                .contains("projected into all of the secondary indexes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn update_table_gsi_create_ignores_all_projection_for_count() {
+        validate_projected_attribute_count_for_gsi_create(
+            vec![all_projection()],
+            &all_projection(),
+            0,
+        )
+        .expect("ALL projections are not user-specified INCLUDE attributes");
     }
 
     #[test]

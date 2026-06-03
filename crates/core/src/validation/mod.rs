@@ -6,8 +6,8 @@ use crate::error::{DynamoDbError, ErrorMessageKey, error_message};
 use crate::limits::LimitsConfig;
 use crate::types::{
     AttributeDefinition, AttributeValue, BillingMode, CreateTableInput, DeleteItemInput,
-    GetItemInput, Item, KeySchemaElement, KeyType, PutItemInput, ReturnValues, ScalarAttributeType,
-    UpdateItemInput, item_size_bytes,
+    GetItemInput, Item, KeySchemaElement, KeyType, Projection, ProjectionType, PutItemInput,
+    ReturnValues, ScalarAttributeType, UpdateItemInput, item_size_bytes,
 };
 
 /// Validate a table name per Virtual `DynamoDB` rules.
@@ -99,6 +99,7 @@ pub fn validate_create_table(
     validate_gsi_provisioned_throughput(input)?;
     validate_gsi_count(input, limits)?;
     validate_lsi_count(input, limits)?;
+    validate_projected_attributes_across_indexes(input, limits.max_projected_attributes_per_table)?;
     validate_lsi_requires_range_key(input)?;
     validate_unique_index_names(input)?;
     Ok(())
@@ -426,6 +427,64 @@ fn validate_lsi_count(
         return Err(DynamoDbError::ValidationException(format!(
             "One or more parameter values were invalid: LocalSecondaryIndexes count exceeds limit of {}",
             limits.max_lsis_per_table
+        )));
+    }
+    Ok(())
+}
+
+/// Count user-specified INCLUDE projection attributes for DynamoDB's
+/// table-wide projected-attribute limit. Reusing the same attribute in two
+/// indexes counts twice.
+#[must_use]
+pub fn projected_attribute_count(projections: impl IntoIterator<Item = Projection>) -> usize {
+    projections
+        .into_iter()
+        .map(|projection| projection_include_attribute_count(&projection))
+        .sum()
+}
+
+fn projection_include_attribute_count(projection: &Projection) -> usize {
+    if projection.projection_type == ProjectionType::Include {
+        projection.non_key_attributes.as_ref().map_or(0, Vec::len)
+    } else {
+        0
+    }
+}
+
+fn validate_projected_attributes_across_indexes(
+    input: &CreateTableInput,
+    max_projected_attributes: usize,
+) -> Result<(), DynamoDbError> {
+    let projections = input
+        .global_secondary_indexes
+        .iter()
+        .flatten()
+        .map(|gsi| gsi.projection.clone())
+        .chain(
+            input
+                .local_secondary_indexes
+                .iter()
+                .flatten()
+                .map(|lsi| lsi.projection.clone()),
+        );
+    validate_projected_attribute_count(
+        projected_attribute_count(projections),
+        max_projected_attributes,
+    )
+}
+
+/// Validate DynamoDB's table-wide INCLUDE projection attribute count.
+///
+/// # Errors
+///
+/// Returns `ValidationException` when the count exceeds the configured limit.
+pub fn validate_projected_attribute_count(
+    count: usize,
+    max_projected_attributes: usize,
+) -> Result<(), DynamoDbError> {
+    if count > max_projected_attributes {
+        return Err(DynamoDbError::ValidationException(format!(
+            "One or more parameter values were invalid: Number of attributes projected into all of the secondary indexes exceeds the limit of {max_projected_attributes}"
         )));
     }
     Ok(())
@@ -1123,7 +1182,7 @@ fn validate_unique_index_names(input: &CreateTableInput) -> Result<(), DynamoDbE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AttributeValueUpdate, GsiInput, Projection, ProjectionType};
+    use crate::types::{AttributeValueUpdate, GsiInput};
 
     fn make_ks(name: &str, key_type: KeyType) -> KeySchemaElement {
         KeySchemaElement {
@@ -1279,6 +1338,101 @@ mod tests {
             provisioned_throughput: None,
         }]);
         assert!(validate_create_table(&input, &limits).is_err());
+    }
+
+    #[test]
+    fn projected_attributes_across_indexes_rejects_over_limit() {
+        let limits = LimitsConfig::default();
+        let mut input = base_input(
+            vec![make_ks("pk", KeyType::Hash)],
+            vec![
+                make_ad("pk", ScalarAttributeType::S),
+                make_ad("gsi_pk", ScalarAttributeType::S),
+            ],
+        );
+        input.global_secondary_indexes = Some(vec![GsiInput {
+            index_name: "include-index".to_owned(),
+            key_schema: vec![make_ks("gsi_pk", KeyType::Hash)],
+            projection: Projection {
+                projection_type: ProjectionType::Include,
+                non_key_attributes: Some((0..=100).map(|i| format!("attr_{i}")).collect()),
+            },
+            provisioned_throughput: None,
+        }]);
+
+        let err = validate_create_table(&input, &limits).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("projected into all of the secondary indexes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn projected_attributes_count_repeated_names_per_index() {
+        let limits = LimitsConfig {
+            max_projected_attributes_per_table: 1,
+            ..Default::default()
+        };
+        let mut input = base_input(
+            vec![make_ks("pk", KeyType::Hash)],
+            vec![
+                make_ad("pk", ScalarAttributeType::S),
+                make_ad("gsi_pk", ScalarAttributeType::S),
+            ],
+        );
+        input.global_secondary_indexes = Some(vec![
+            GsiInput {
+                index_name: "first-index".to_owned(),
+                key_schema: vec![make_ks("gsi_pk", KeyType::Hash)],
+                projection: Projection {
+                    projection_type: ProjectionType::Include,
+                    non_key_attributes: Some(vec!["shared".to_owned()]),
+                },
+                provisioned_throughput: None,
+            },
+            GsiInput {
+                index_name: "second-index".to_owned(),
+                key_schema: vec![make_ks("gsi_pk", KeyType::Hash)],
+                projection: Projection {
+                    projection_type: ProjectionType::Include,
+                    non_key_attributes: Some(vec!["shared".to_owned()]),
+                },
+                provisioned_throughput: None,
+            },
+        ]);
+
+        let err = validate_create_table(&input, &limits).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds the limit of 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn projected_attributes_ignores_all_projection_type() {
+        let limits = LimitsConfig {
+            max_projected_attributes_per_table: 0,
+            ..Default::default()
+        };
+        let mut input = base_input(
+            vec![make_ks("pk", KeyType::Hash)],
+            vec![
+                make_ad("pk", ScalarAttributeType::S),
+                make_ad("gsi_pk", ScalarAttributeType::S),
+            ],
+        );
+        input.global_secondary_indexes = Some(vec![GsiInput {
+            index_name: "all-index".to_owned(),
+            key_schema: vec![make_ks("gsi_pk", KeyType::Hash)],
+            projection: Projection {
+                projection_type: ProjectionType::All,
+                non_key_attributes: None,
+            },
+            provisioned_throughput: None,
+        }]);
+
+        assert!(validate_create_table(&input, &limits).is_ok());
     }
 
     #[test]

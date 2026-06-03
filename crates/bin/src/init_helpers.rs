@@ -150,6 +150,7 @@ key_path = "{tls_key}"
 # max_tables_per_account = 2500
 # max_gsis_per_table = 20
 # max_lsis_per_table = 5
+# max_projected_attributes_per_table = 100
 # list_tables_max_per_page = 100
 # max_table_name_length = 255
 # min_table_name_length = 3

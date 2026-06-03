@@ -18,6 +18,8 @@ pub struct LimitsConfig {
     pub max_gsis_per_table: usize,
     #[serde(default = "default_max_lsis")]
     pub max_lsis_per_table: usize,
+    #[serde(default = "default_max_projected_attributes_per_table")]
+    pub max_projected_attributes_per_table: usize,
     #[serde(default = "default_list_tables_max")]
     pub list_tables_max_per_page: i32,
     #[serde(default = "default_max_table_name_len")]
@@ -81,6 +83,7 @@ impl Default for LimitsConfig {
             max_tables_per_account: default_max_tables(),
             max_gsis_per_table: default_max_gsis(),
             max_lsis_per_table: default_max_lsis(),
+            max_projected_attributes_per_table: default_max_projected_attributes_per_table(),
             list_tables_max_per_page: default_list_tables_max(),
             max_table_name_length: default_max_table_name_len(),
             min_table_name_length: default_min_table_name_len(),
@@ -121,6 +124,9 @@ fn default_max_gsis() -> usize {
 }
 fn default_max_lsis() -> usize {
     5
+}
+fn default_max_projected_attributes_per_table() -> usize {
+    100
 }
 fn default_list_tables_max() -> i32 {
     100

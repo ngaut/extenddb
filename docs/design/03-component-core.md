@@ -186,6 +186,8 @@ The expression engine is split into distinct phases for clarity and testability.
 Converts expression strings into a stream of typed tokens.
 The tokenizer rejects expressions over the configured byte limit before scanning
 tokens, then applies the token-count limit while scanning.
+The engine also rejects oversized `ExpressionAttributeNames` and
+`ExpressionAttributeValues` maps before constructing resolver state.
 
 ```rust
 pub enum Token {

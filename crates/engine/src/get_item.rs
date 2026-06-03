@@ -18,7 +18,7 @@ use extenddb_core::types::item_size_bytes;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::{build_expression_maps, tokenize_typed_expression};
+use crate::expression_helpers::{build_checked_expression_maps, tokenize_typed_expression};
 use crate::serialize_output;
 use crate::{DispatchMetrics, DispatchResult};
 
@@ -47,17 +47,6 @@ pub async fn handle_get_item(
         &key_info.key_schema,
         &key_info.attribute_definitions,
     )?;
-
-    let item = ctx
-        .storage
-        .get_item(&key_info, &input.key, input.consistent_read == Some(true))
-        .await
-        .map_err(storage_err_to_dynamo)?;
-
-    // Capacity metering: full item size pre-projection, rounded up to 4 KB.
-    let pre_projection_bytes = item.as_ref().map_or(0, item_size_bytes);
-    let strongly_consistent = input.consistent_read == Some(true);
-    let rcu = capacity_helpers::read_capacity_units(pre_projection_bytes, strongly_consistent);
 
     // Apply projection if requested.
     // M4: Mutual exclusivity — real DynamoDB rejects both at once.
@@ -102,17 +91,29 @@ pub async fn handle_get_item(
         Some(merged)
     };
 
-    // Validate projection expression upfront (before item fetch result matters)
-    if let Some(ref proj_str) = effective_projection {
-        tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
-    }
+    let projection = if let Some(ref proj_str) = effective_projection {
+        let proj_tokens = tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
+        let projection = parse_projection(&proj_tokens)?;
+        let maps = build_checked_expression_maps(effective_proj_names.as_ref(), None, &ctx.limits)?;
+        Some((projection, maps))
+    } else {
+        build_checked_expression_maps(effective_proj_names.as_ref(), None, &ctx.limits)?;
+        None
+    };
 
-    let item = match (&effective_projection, item) {
-        (Some(proj_str), Some(fetched)) => {
-            let proj_tokens =
-                tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
-            let projection = parse_projection(&proj_tokens)?;
-            let maps = build_expression_maps(effective_proj_names.as_ref(), None);
+    let item = ctx
+        .storage
+        .get_item(&key_info, &input.key, input.consistent_read == Some(true))
+        .await
+        .map_err(storage_err_to_dynamo)?;
+
+    // Capacity metering: full item size pre-projection, rounded up to 4 KB.
+    let pre_projection_bytes = item.as_ref().map_or(0, item_size_bytes);
+    let strongly_consistent = input.consistent_read == Some(true);
+    let rcu = capacity_helpers::read_capacity_units(pre_projection_bytes, strongly_consistent);
+
+    let item = match (projection, item) {
+        (Some((projection, maps)), Some(fetched)) => {
             Some(apply_projection(&fetched, &projection, &maps)?)
         }
         (_, item) => item,

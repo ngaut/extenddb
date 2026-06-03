@@ -96,7 +96,7 @@ See `docs/dynamodb-limits.md` for the full catalog. The following are the highes
 | L-7 | Tag key/value length limits | 128/256 chars | Low | P42 |
 | L-8 | LSI item collection size | 10 GB | Low | P42 |
 | L-9 | Provisioned capacity decrease limit | 27/day | Low | P42 |
-| L-10 | ExpressionAttributeNames/ExpressionAttributeValues aggregate size | 2 MB each | Low | P42 |
+| L-10 | ~~ExpressionAttributeNames/ExpressionAttributeValues aggregate size~~ | ~~2 MB each~~ | ~~Low~~ | P42 |
 
 ## File Size Overages (>500 lines)
 
@@ -137,6 +137,7 @@ Resolved (split in P94–P96):
 - ~~C-4: Numeric comparison parsing repeated `BigDecimal` work in the expression evaluator~~ (fixed: request placeholder numerics remain pre-parsed in `ExpressionMaps`, and item path numerics are now cached once per condition evaluation with regression coverage for repeated numeric path operands)
 - ~~L-4/L-5: Streams limit tracker still listed `GetRecords` max-per-call and shard iterator lifetime as unenforced~~ (fixed: `GetRecords` defaults and caps `Limit` at 1,000, shard iterators expire after the 15-minute DynamoDB window, and both behaviors now have direct regression coverage)
 - ~~L-2: Expression string byte limits were not enforced~~ (fixed: all engine expression tokenization now rejects strings above `limits.max_expression_bytes` before parsing, with typed regression coverage for condition, filter, projection, key-condition, and update-expression paths)
+- ~~L-10: ExpressionAttributeNames/ExpressionAttributeValues aggregate size was not enforced~~ (fixed: engine expression-map construction now rejects oversized 2 MiB name/value substitution maps before expression parsing, evaluation, or storage access)
 
 ## Resolved in P30
 

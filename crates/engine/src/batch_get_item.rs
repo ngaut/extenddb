@@ -19,7 +19,7 @@ use extenddb_core::validation::validate_batch_key_only;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::build_expression_maps;
+use crate::expression_helpers::build_checked_expression_maps;
 use crate::serialize_output;
 use crate::{DispatchMetrics, DispatchResult};
 
@@ -206,11 +206,11 @@ fn build_batch_get_projection(
     )?;
     let paths = parse_projection(&proj_tokens)?;
     let maps = if extra_proj_names.is_empty() {
-        build_expression_maps(ka.expression_attribute_names.as_ref(), None)
+        build_checked_expression_maps(ka.expression_attribute_names.as_ref(), None, limits)?
     } else {
         let mut merged = ka.expression_attribute_names.clone().unwrap_or_default();
         merged.extend(extra_proj_names);
-        build_expression_maps(Some(&merged), None)
+        build_checked_expression_maps(Some(&merged), None, limits)?
     };
 
     Ok(Some(BatchGetProjection { paths, maps }))

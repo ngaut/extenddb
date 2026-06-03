@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::build_expression_maps;
+use crate::expression_helpers::build_checked_expression_maps;
 use crate::serialize_output;
 use crate::stream_capture;
 use crate::transact_write_helpers::{
@@ -260,10 +260,11 @@ fn prepare_write_op(
         validate_item_size(&put.item, ctx.limits.max_item_size_bytes)?;
         validate_attribute_name_sizes(&put.item, &ctx.limits)?;
         validate_key_sizes(&put.item, &key_info.key_schema, &ctx.limits)?;
-        let maps = build_expression_maps(
+        let maps = build_checked_expression_maps(
             put.expression_attribute_names.as_ref(),
             put.expression_attribute_values.as_ref(),
-        );
+            &ctx.limits,
+        )?;
         let condition = parse_optional_condition(put.condition_expression.as_deref(), &ctx.limits)?;
         {
             let exprs: Vec<&extenddb_core::expression::Expr> = condition.iter().collect();
@@ -293,10 +294,11 @@ fn prepare_write_op(
     }
 
     if let Some(del) = &twi.delete {
-        let maps = build_expression_maps(
+        let maps = build_checked_expression_maps(
             del.expression_attribute_names.as_ref(),
             del.expression_attribute_values.as_ref(),
-        );
+            &ctx.limits,
+        )?;
         let condition = parse_optional_condition(del.condition_expression.as_deref(), &ctx.limits)?;
         {
             let exprs: Vec<&extenddb_core::expression::Expr> = condition.iter().collect();
@@ -326,10 +328,11 @@ fn prepare_write_op(
     }
 
     if let Some(upd) = &twi.update {
-        let maps = build_expression_maps(
+        let maps = build_checked_expression_maps(
             upd.expression_attribute_names.as_ref(),
             upd.expression_attribute_values.as_ref(),
-        );
+            &ctx.limits,
+        )?;
         let update_tokens = crate::expression_helpers::tokenize_typed_expression(
             &upd.update_expression,
             &ctx.limits,
@@ -383,10 +386,11 @@ fn prepare_write_op(
     }
 
     if let Some(cc) = &twi.condition_check {
-        let maps = build_expression_maps(
+        let maps = build_checked_expression_maps(
             cc.expression_attribute_names.as_ref(),
             cc.expression_attribute_values.as_ref(),
-        );
+            &ctx.limits,
+        )?;
         let tokens = crate::expression_helpers::tokenize_typed_expression(
             &cc.condition_expression,
             &ctx.limits,

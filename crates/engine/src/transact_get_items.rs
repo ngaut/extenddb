@@ -9,7 +9,8 @@ use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{apply_projection, parse_projection};
+use extenddb_core::expression::{ExpressionMaps, PathElement, apply_projection, parse_projection};
+use extenddb_core::limits::LimitsConfig;
 use extenddb_core::types::{
     ItemResponse, TableKeyInfo, TransactGetItem, TransactGetItemsInput, TransactGetItemsOutput,
     item_size_bytes,
@@ -19,12 +20,14 @@ use extenddb_storage::TransactGetOp;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::{build_expression_maps, tokenize_typed_expression};
+use crate::expression_helpers::{build_checked_expression_maps, tokenize_typed_expression};
 use crate::serialize_output;
 use crate::{DispatchMetrics, DispatchResult};
 
 /// Maximum number of items in a single `TransactGetItems` request.
 const MAX_TRANSACT_GET_ITEMS: usize = 100;
+
+type TransactGetProjection = Option<(Vec<Vec<PathElement>>, ExpressionMaps)>;
 
 /// Handle a `TransactGetItems` request.
 ///
@@ -88,6 +91,12 @@ pub async fn handle_transact_get_items(
         })
         .collect::<Result<Vec<_>, DynamoDbError>>()?;
 
+    let projections = input
+        .transact_items
+        .iter()
+        .map(|tgi| build_transact_get_projection(tgi, &ctx.limits))
+        .collect::<Result<Vec<_>, DynamoDbError>>()?;
+
     // Build storage operations
     // Key type validation is deferred to the storage layer so mismatches
     // produce TransactionCanceledException with ValidationError cancellation
@@ -136,45 +145,15 @@ pub async fn handle_transact_get_items(
     // Apply per-item projection
     let responses: Vec<ItemResponse> = items
         .into_iter()
-        .zip(input.transact_items.iter())
-        .map(|(opt, tgi)| {
-            let maps = build_expression_maps(tgi.get.expression_attribute_names.as_ref(), None);
-            if let Some(ref proj_str) = tgi.get.projection_expression {
-                let proj_tokens =
-                    tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
-                let projection = parse_projection(&proj_tokens)?;
-                let mut extra_names = std::collections::HashSet::new();
-                for path in &projection {
-                    for el in path {
-                        if let extenddb_core::expression::PathElement::Attribute(name) = el
-                            && let Some(ref_name) = name.strip_prefix('#')
-                        {
-                            extra_names.insert(ref_name.to_owned());
-                        }
-                    }
-                }
-                extenddb_core::expression::validate_unused_attributes(
-                    &maps.names,
-                    &maps.values,
-                    &[],
-                    &[],
-                    &extra_names,
-                    &std::collections::HashSet::new(),
-                )?;
+        .zip(projections)
+        .map(|(opt, projection)| {
+            if let Some((projection, maps)) = projection {
                 let item = opt
                     .map(|item| apply_projection(&item, &projection, &maps))
                     .transpose()?
                     .filter(|i| !i.is_empty());
                 Ok(ItemResponse { item })
             } else {
-                extenddb_core::expression::validate_unused_attributes(
-                    &maps.names,
-                    &maps.values,
-                    &[],
-                    &[],
-                    &std::collections::HashSet::new(),
-                    &std::collections::HashSet::new(),
-                )?;
                 Ok(ItemResponse { item: opt })
             }
         })
@@ -199,6 +178,47 @@ pub async fn handle_transact_get_items(
             ..Default::default()
         },
     })
+}
+
+fn build_transact_get_projection(
+    tgi: &TransactGetItem,
+    limits: &LimitsConfig,
+) -> Result<TransactGetProjection, DynamoDbError> {
+    let maps =
+        build_checked_expression_maps(tgi.get.expression_attribute_names.as_ref(), None, limits)?;
+    let Some(ref proj_str) = tgi.get.projection_expression else {
+        extenddb_core::expression::validate_unused_attributes(
+            &maps.names,
+            &maps.values,
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+        )?;
+        return Ok(None);
+    };
+
+    let proj_tokens = tokenize_typed_expression(proj_str, limits, "ProjectionExpression")?;
+    let projection = parse_projection(&proj_tokens)?;
+    let mut extra_names = HashSet::new();
+    for path in &projection {
+        for el in path {
+            if let PathElement::Attribute(name) = el
+                && let Some(ref_name) = name.strip_prefix('#')
+            {
+                extra_names.insert(ref_name.to_owned());
+            }
+        }
+    }
+    extenddb_core::expression::validate_unused_attributes(
+        &maps.names,
+        &maps.values,
+        &[],
+        &[],
+        &extra_names,
+        &HashSet::new(),
+    )?;
+    Ok(Some((projection, maps)))
 }
 
 async fn transact_get_table_infos(

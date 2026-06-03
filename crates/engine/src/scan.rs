@@ -17,7 +17,7 @@ use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
 use crate::expression_helpers::{
-    build_expression_maps, parse_optional_filter, tokenize_typed_expression,
+    build_checked_expression_maps, parse_optional_filter, tokenize_typed_expression,
 };
 use crate::index_helpers::{
     index_projection_for_read, validate_gsi_projection_request, validate_scan_exclusive_start_key,
@@ -130,10 +130,11 @@ pub async fn handle_scan(
         ));
     }
 
-    let maps = build_expression_maps(
+    let maps = build_checked_expression_maps(
         input.expression_attribute_names.as_ref(),
         input.expression_attribute_values.as_ref(),
-    );
+        &ctx.limits,
+    )?;
 
     // Parse FilterExpression or desugar legacy ScanFilter
     let (filter, filter_maps) = if let Some(ref sf) = input.scan_filter {

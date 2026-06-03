@@ -11,7 +11,9 @@ use extenddb_core::expression::{
     validate_no_reserved_words,
 };
 use extenddb_core::limits::LimitsConfig;
-use extenddb_core::types::{AttributeValue, ConditionalOperator, ExpectedAttributeValue};
+use extenddb_core::types::{
+    AttributeValue, ConditionalOperator, ExpectedAttributeValue, attribute_value_size,
+};
 
 use crate::expected::desugar_expected;
 
@@ -58,6 +60,62 @@ pub fn build_expression_maps(
             })
             .unwrap_or_default(),
     )
+}
+
+/// Validate and build `ExpressionMaps` from optional request fields.
+pub fn build_checked_expression_maps(
+    names: Option<&HashMap<String, String>>,
+    values: Option<&HashMap<String, AttributeValue>>,
+    limits: &LimitsConfig,
+) -> Result<ExpressionMaps, DynamoDbError> {
+    validate_expression_attribute_maps(names, values, limits)?;
+    Ok(build_expression_maps(names, values))
+}
+
+/// Validate DynamoDB aggregate expression attribute map limits.
+pub fn validate_expression_attribute_maps(
+    names: Option<&HashMap<String, String>>,
+    values: Option<&HashMap<String, AttributeValue>>,
+    limits: &LimitsConfig,
+) -> Result<(), DynamoDbError> {
+    if let Some(names) = names {
+        let size = expression_attribute_names_size(names);
+        if size > limits.max_expression_attribute_names_bytes {
+            return Err(expression_attribute_map_size_error(
+                "ExpressionAttributeNames",
+                limits.max_expression_attribute_names_bytes,
+            ));
+        }
+    }
+
+    if let Some(values) = values {
+        let size = expression_attribute_values_size(values);
+        if size > limits.max_expression_attribute_values_bytes {
+            return Err(expression_attribute_map_size_error(
+                "ExpressionAttributeValues",
+                limits.max_expression_attribute_values_bytes,
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn expression_attribute_names_size(names: &HashMap<String, String>) -> usize {
+    names.iter().map(|(k, v)| k.len() + v.len()).sum()
+}
+
+fn expression_attribute_values_size(values: &HashMap<String, AttributeValue>) -> usize {
+    values
+        .iter()
+        .map(|(k, v)| k.len() + attribute_value_size(v))
+        .sum()
+}
+
+fn expression_attribute_map_size_error(field: &str, max_bytes: usize) -> DynamoDbError {
+    DynamoDbError::ValidationException(format!(
+        "{field} size has exceeded the maximum allowed size; maximum: {max_bytes} bytes"
+    ))
 }
 
 /// Parse an optional condition expression string into an AST.
@@ -114,6 +172,8 @@ pub fn resolve_condition(
     conditional_operator: Option<ConditionalOperator>,
     limits: &LimitsConfig,
 ) -> Result<(Option<Expr>, ExpressionMaps), DynamoDbError> {
+    validate_expression_attribute_maps(names, values, limits)?;
+
     let has_condition = condition_expression.is_some_and(|s| !s.is_empty());
     let has_expected = expected.is_some_and(|m| !m.is_empty());
 
@@ -176,8 +236,11 @@ pub fn prefix_expression_error(err: DynamoDbError, expr_type: &str) -> DynamoDbE
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use extenddb_core::limits::LimitsConfig;
+    use extenddb_core::types::{AttributeValue, ExpectedAttributeValue};
 
     const CONDITION_REDUNDANT: &str =
         "Invalid ConditionExpression: The expression has redundant parentheses;";
@@ -284,6 +347,75 @@ mod tests {
             matches!(&err, DynamoDbError::ValidationException(msg)
                 if msg.starts_with("Invalid ProjectionExpression:")
                     && msg.contains("Expression size has exceeded")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn expression_attribute_names_aggregate_limit_is_enforced() {
+        let limits = LimitsConfig {
+            max_expression_attribute_names_bytes: 8,
+            ..Default::default()
+        };
+        let names = HashMap::from([("#long".to_owned(), "attribute".to_owned())]);
+
+        let err = build_checked_expression_maps(Some(&names), None, &limits)
+            .expect_err("oversized ExpressionAttributeNames map must fail");
+
+        assert!(
+            matches!(&err, DynamoDbError::ValidationException(msg)
+                if msg.starts_with("ExpressionAttributeNames size has exceeded")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn expression_attribute_values_aggregate_limit_is_enforced() {
+        let limits = LimitsConfig {
+            max_expression_attribute_values_bytes: 8,
+            ..Default::default()
+        };
+        let values = HashMap::from([(
+            ":long".to_owned(),
+            AttributeValue::S("substitution".to_owned()),
+        )]);
+
+        let err = build_checked_expression_maps(None, Some(&values), &limits)
+            .expect_err("oversized ExpressionAttributeValues map must fail");
+
+        assert!(
+            matches!(&err, DynamoDbError::ValidationException(msg)
+                if msg.starts_with("ExpressionAttributeValues size has exceeded")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn expected_condition_branch_still_enforces_request_map_limit() {
+        let limits = LimitsConfig {
+            max_expression_attribute_values_bytes: 8,
+            ..Default::default()
+        };
+        let expected = HashMap::from([(
+            "pk".to_owned(),
+            ExpectedAttributeValue {
+                value: Some(AttributeValue::S("ok".to_owned())),
+                exists: None,
+                comparison_operator: None,
+                attribute_value_list: None,
+            },
+        )]);
+        let values = HashMap::from([(
+            ":large".to_owned(),
+            AttributeValue::S("substitution".to_owned()),
+        )]);
+
+        let err = resolve_condition(None, None, Some(&values), Some(&expected), None, &limits)
+            .expect_err("Expected branch must validate request expression maps");
+
+        assert!(
+            matches!(&err, DynamoDbError::ValidationException(msg)
+                if msg.starts_with("ExpressionAttributeValues size has exceeded")),
             "got {err:?}"
         );
     }

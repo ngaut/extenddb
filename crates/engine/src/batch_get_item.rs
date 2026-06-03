@@ -9,7 +9,8 @@ use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{apply_projection, parse_projection};
+use extenddb_core::expression::{ExpressionMaps, PathElement, apply_projection, parse_projection};
+use extenddb_core::limits::LimitsConfig;
 use extenddb_core::types::{
     BatchGetItemInput, BatchGetItemOutput, Item, KeysAndAttributes, TableKeyInfo, item_size_bytes,
 };
@@ -24,6 +25,12 @@ use crate::{DispatchMetrics, DispatchResult};
 
 /// Maximum number of keys across all tables in a single `BatchGetItem` request.
 const MAX_BATCH_GET_KEYS: usize = 100;
+
+#[derive(Debug)]
+struct BatchGetProjection {
+    paths: Vec<Vec<PathElement>>,
+    maps: ExpressionMaps,
+}
 
 /// Handle a `BatchGetItem` request.
 ///
@@ -89,56 +96,7 @@ pub async fn handle_batch_get_item(
             ))
         })?;
 
-        // Parse per-table projection. AttributesToGet is desugared into a
-        // ProjectionExpression with synthetic name placeholders.
-        if ka.projection_expression.is_some()
-            && ka.attributes_to_get.as_ref().is_some_and(|a| !a.is_empty())
-        {
-            return Err(DynamoDbError::ValidationException(
-                "Can not use both expression and non-expression parameters in the same request: \
-                 Non-expression parameters: {AttributesToGet} Expression parameters: {ProjectionExpression}"
-                    .to_owned(),
-            ));
-        }
-
-        let (effective_proj_str, extra_proj_names) = if ka.projection_expression.is_some() {
-            (ka.projection_expression.clone(), HashMap::new())
-        } else if let Some(attrs) = &ka.attributes_to_get {
-            let mut names_map = HashMap::new();
-            let placeholders: Vec<String> = attrs
-                .iter()
-                .enumerate()
-                .map(|(i, attr)| {
-                    let placeholder = format!("#_ag{i}");
-                    names_map.insert(placeholder.clone(), attr.clone());
-                    placeholder
-                })
-                .collect();
-            (Some(placeholders.join(", ")), names_map)
-        } else {
-            (None, HashMap::new())
-        };
-
-        let projection = if let Some(ref proj_str) = effective_proj_str {
-            let proj_tokens =
-                crate::expression_helpers::tokenize_expression(proj_str, &ctx.limits)?;
-            Some(parse_projection(&proj_tokens)?)
-        } else {
-            None
-        };
-        let ean = if extra_proj_names.is_empty() {
-            ka.expression_attribute_names.as_ref()
-        } else {
-            // Merge extra names with any user-provided names.
-            None // extra_proj_names used directly below
-        };
-        let maps = if extra_proj_names.is_empty() {
-            build_expression_maps(ean, None)
-        } else {
-            let mut merged = ka.expression_attribute_names.clone().unwrap_or_default();
-            merged.extend(extra_proj_names);
-            build_expression_maps(Some(&merged), None)
-        };
+        let batch_projection = build_batch_get_projection(ka, ctx.limits.as_ref())?;
 
         let mut table_items: Vec<Item> = Vec::new();
         let mut seen_keys: HashSet<Vec<u8>> = HashSet::with_capacity(ka.keys.len());
@@ -166,8 +124,8 @@ pub async fn handle_batch_get_item(
             *per_table_rcu.entry(table_name.clone()).or_default() += item_rcu;
             total_pre_proj_bytes += size;
             returned_count += 1;
-            let item = if let Some(ref paths) = projection {
-                apply_projection(&item, paths, &maps)?
+            let item = if let Some(ref projection) = batch_projection {
+                apply_projection(&item, &projection.paths, &projection.maps)?
             } else {
                 item
             };
@@ -205,6 +163,55 @@ fn serialize_key_for_dedup(key: &Item) -> Vec<u8> {
     serde_json::to_vec(key).unwrap_or_default()
 }
 
+fn build_batch_get_projection(
+    ka: &KeysAndAttributes,
+    limits: &LimitsConfig,
+) -> Result<Option<BatchGetProjection>, DynamoDbError> {
+    if ka.projection_expression.is_some()
+        && ka.attributes_to_get.as_ref().is_some_and(|a| !a.is_empty())
+    {
+        return Err(DynamoDbError::ValidationException(
+            "Can not use both expression and non-expression parameters in the same request: \
+             Non-expression parameters: {AttributesToGet} Expression parameters: {ProjectionExpression}"
+                .to_owned(),
+        ));
+    }
+
+    let (effective_proj_str, extra_proj_names) = if ka.projection_expression.is_some() {
+        (ka.projection_expression.clone(), HashMap::new())
+    } else if let Some(attrs) = &ka.attributes_to_get {
+        let mut names_map = HashMap::new();
+        let placeholders: Vec<String> = attrs
+            .iter()
+            .enumerate()
+            .map(|(i, attr)| {
+                let placeholder = format!("#_ag{i}");
+                names_map.insert(placeholder.clone(), attr.clone());
+                placeholder
+            })
+            .collect();
+        (Some(placeholders.join(", ")), names_map)
+    } else {
+        (None, HashMap::new())
+    };
+
+    let Some(proj_str) = effective_proj_str else {
+        return Ok(None);
+    };
+
+    let proj_tokens = crate::expression_helpers::tokenize_expression(&proj_str, limits)?;
+    let paths = parse_projection(&proj_tokens)?;
+    let maps = if extra_proj_names.is_empty() {
+        build_expression_maps(ka.expression_attribute_names.as_ref(), None)
+    } else {
+        let mut merged = ka.expression_attribute_names.clone().unwrap_or_default();
+        merged.extend(extra_proj_names);
+        build_expression_maps(Some(&merged), None)
+    };
+
+    Ok(Some(BatchGetProjection { paths, maps }))
+}
+
 async fn batch_get_table_infos(
     ctx: &OperationContext,
     request_items: &HashMap<String, KeysAndAttributes>,
@@ -227,4 +234,80 @@ async fn batch_get_table_infos(
         table_infos.insert(table_name, result?);
     }
     Ok(table_infos)
+}
+
+#[cfg(test)]
+mod tests {
+    use extenddb_core::types::AttributeValue;
+
+    use super::*;
+
+    fn keys_and_attributes() -> KeysAndAttributes {
+        KeysAndAttributes {
+            keys: Vec::new(),
+            consistent_read: None,
+            projection_expression: None,
+            expression_attribute_names: None,
+            attributes_to_get: None,
+        }
+    }
+
+    #[test]
+    fn attributes_to_get_is_desugared_to_projection() {
+        let ka = KeysAndAttributes {
+            attributes_to_get: Some(vec!["visible".to_owned(), "count".to_owned()]),
+            ..keys_and_attributes()
+        };
+        let projection = build_batch_get_projection(&ka, &LimitsConfig::default())
+            .expect("projection should parse")
+            .expect("AttributesToGet should create a projection");
+
+        let item = Item::from([
+            ("visible".to_owned(), AttributeValue::S("keep".to_owned())),
+            ("count".to_owned(), AttributeValue::N("3".to_owned())),
+            ("hidden".to_owned(), AttributeValue::S("drop".to_owned())),
+        ]);
+
+        let projected = apply_projection(&item, &projection.paths, &projection.maps)
+            .expect("projection should apply");
+
+        assert_eq!(projected.len(), 2);
+        assert_eq!(
+            projected.get("visible"),
+            Some(&AttributeValue::S("keep".to_owned()))
+        );
+        assert_eq!(
+            projected.get("count"),
+            Some(&AttributeValue::N("3".to_owned()))
+        );
+        assert!(!projected.contains_key("hidden"));
+    }
+
+    #[test]
+    fn attributes_to_get_rejects_projection_expression_conflict() {
+        let ka = KeysAndAttributes {
+            projection_expression: Some("visible".to_owned()),
+            attributes_to_get: Some(vec!["count".to_owned()]),
+            ..keys_and_attributes()
+        };
+
+        let err = build_batch_get_projection(&ka, &LimitsConfig::default())
+            .expect_err("legacy and expression projections cannot be mixed");
+
+        assert!(matches!(
+            err,
+            DynamoDbError::ValidationException(message)
+                if message.contains("AttributesToGet")
+                    && message.contains("ProjectionExpression")
+        ));
+    }
+
+    #[test]
+    fn absent_projection_returns_none() {
+        let projection =
+            build_batch_get_projection(&keys_and_attributes(), &LimitsConfig::default())
+                .expect("missing projection should be valid");
+
+        assert!(projection.is_none());
+    }
 }

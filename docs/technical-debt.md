@@ -13,7 +13,7 @@ Last updated: 2026-06-03 (P160)
 
 | # | Item | Location | Priority | Origin |
 |---|------|----------|----------|--------|
-| F-1 | `AttributesToGet` (legacy API) not supported | `core/types/batch.rs:27` | Low | P6 |
+| F-1 | ~~`AttributesToGet` (legacy API) not supported~~ | ~~`core/types/batch.rs`~~ | ~~Low~~ | P6 |
 | F-2 | PostgreSQL has no optional default-read topology for `ConsistentRead=false`; TiDB default reads now use native follower-read routing | `storage-postgres` | Low | P5 |
 | F-3 | Import/export: full Ion parser not implemented (JSON subset only) | `engine/import_export.rs:339` | Medium | P24 |
 | F-4 | Import/export: full Ion writer not implemented (JSON subset only) | `engine/import_export.rs:433` | Medium | P24 |
@@ -132,6 +132,7 @@ Resolved (split in P94–P96):
 - ~~F-5: PutItem returned `None`/`Item` shape instead of omitting the absent result field~~ (fixed: `PutItemOutput` serializes old values only as `Attributes`, omits absent `Attributes`, and has regression coverage for both `NONE` and `ALL_OLD` response shapes)
 - ~~F-6: Key extraction could choose the alphabetically first item attribute instead of the declared table key~~ (fixed: shared key extraction walks the declared `KeySchemaElement` list and has regression coverage for unordered composite-key items)
 - ~~F-7: `MissingAuthenticationToken` returned regardless of auth-provider state~~ (fixed: unauthenticated DynamoDB requests are only valid under mandatory `builtin` auth; `auth.provider = "none"` and unknown providers are rejected at startup, with regression coverage)
+- ~~F-1: BatchGetItem legacy `AttributesToGet` was listed as unsupported~~ (fixed: BatchGetItem desugars `AttributesToGet` into a projection with synthetic expression names, rejects mixing it with `ProjectionExpression`, and now has direct regression coverage)
 
 ## Resolved in P30
 

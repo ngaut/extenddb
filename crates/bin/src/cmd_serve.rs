@@ -84,18 +84,7 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
     }
 
     // D6: Auth is mandatory. Only "builtin" is supported.
-    if app_config.auth.provider == "none" {
-        anyhow::bail!(
-            "auth.provider = \"none\" is no longer supported. \
-             Set auth.provider = \"builtin\" and run `extenddb init`."
-        );
-    }
-    if app_config.auth.provider != "builtin" {
-        anyhow::bail!(
-            "Unknown auth provider '{}'. Only 'builtin' is supported.",
-            app_config.auth.provider
-        );
-    }
+    validate_auth_provider(&app_config.auth.provider)?;
 
     // Check backend is supported by this build.
     let backend = &app_config.storage._backend;
@@ -217,6 +206,19 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
             run_dir,
             args.foreground,
         ))
+}
+
+fn validate_auth_provider(provider: &str) -> anyhow::Result<()> {
+    if provider == "none" {
+        anyhow::bail!(
+            "auth.provider = \"none\" is no longer supported. \
+             Set auth.provider = \"builtin\" and run `extenddb init`."
+        );
+    }
+    if provider != "builtin" {
+        anyhow::bail!("Unknown auth provider '{provider}'. Only 'builtin' is supported.");
+    }
+    Ok(())
 }
 
 /// Async entry point: initializes syslog logging, storage, and auth, then
@@ -673,7 +675,7 @@ async fn serve_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::{ServeArgs, frontend_throttle_manager};
+    use super::{ServeArgs, frontend_throttle_manager, validate_auth_provider};
     use clap::Parser;
     use extenddb_core::limits::LimitsConfig;
 
@@ -746,5 +748,22 @@ mod tests {
         // Guard against accidental future renames silently dropping the flag.
         let result = TestCli::try_parse_from(["extenddb-serve", "--daemon-off"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn builtin_auth_provider_is_accepted() {
+        assert!(validate_auth_provider("builtin").is_ok());
+    }
+
+    #[test]
+    fn no_auth_provider_is_rejected() {
+        let err = validate_auth_provider("none").unwrap_err().to_string();
+        assert!(err.contains("auth.provider = \"none\" is no longer supported"));
+    }
+
+    #[test]
+    fn unknown_auth_provider_is_rejected() {
+        let err = validate_auth_provider("aws_iam").unwrap_err().to_string();
+        assert!(err.contains("Unknown auth provider 'aws_iam'"));
     }
 }

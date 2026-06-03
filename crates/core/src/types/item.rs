@@ -412,3 +412,38 @@ fn dynamodb_number_size(n: &str) -> usize {
     }
     size.min(21)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn put_item_output_without_return_values_omits_attributes() {
+        let output = PutItemOutput {
+            attributes: None,
+            consumed_capacity: None,
+            item_collection_metrics: None,
+        };
+
+        let json = serde_json::to_value(&output).expect("PutItemOutput should serialize");
+
+        assert_eq!(json, serde_json::json!({}));
+    }
+
+    #[test]
+    fn put_item_output_with_all_old_uses_attributes_field() {
+        let mut old_item = Item::new();
+        old_item.insert("pk".to_owned(), AttributeValue::S("old".to_owned()));
+
+        let output = PutItemOutput {
+            attributes: Some(old_item),
+            consumed_capacity: None,
+            item_collection_metrics: None,
+        };
+
+        let json = serde_json::to_value(&output).expect("PutItemOutput should serialize");
+
+        assert_eq!(json["Attributes"]["pk"]["S"], "old");
+        assert!(json.get("Item").is_none());
+    }
+}

@@ -58,6 +58,8 @@ pub(crate) fn stream_shard_id_for_partition_key(
 }
 
 const STREAM_FINALIZE_READ_REPAIR_BATCH_SIZE: i64 = 256;
+const STREAM_READER_LIMIT_EXCEEDED_MESSAGE: &str =
+    "The maximum number of simultaneous readers for this stream shard has been exceeded.";
 
 impl TidbEngine {
     pub(crate) fn new_stream_label() -> String {
@@ -495,6 +497,88 @@ impl StreamEngine for TidbEngine {
                 )));
             }
             Ok(())
+        })
+    }
+
+    fn claim_stream_reader(
+        &self,
+        shard_id: &str,
+        reader_id: &str,
+        lease_seconds: u64,
+        max_readers: i64,
+    ) -> BoxFuture<'_, Result<(), StorageError>> {
+        let shard_id = shard_id.to_string();
+        let reader_id = reader_id.to_string();
+        Box::pin(async move {
+            let lease_seconds = i64::try_from(lease_seconds).map_err(|_| {
+                StorageError::Validation("stream reader lease is too long".to_owned())
+            })?;
+            let max_readers = u16::try_from(max_readers).map_err(|_| {
+                StorageError::Validation("stream reader limit is invalid".to_owned())
+            })?;
+
+            let mut tx = self
+                .data_pool
+                .begin()
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+            sqlx::query(
+                "DELETE FROM stream_reader_leases \
+                 WHERE shard_id = ? AND expires_at <= CURRENT_TIMESTAMP(6)",
+            )
+            .bind(&shard_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+            let renewed = sqlx::query(
+                "UPDATE stream_reader_leases \
+                 SET expires_at = TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6)) \
+                 WHERE shard_id = ? AND reader_id = ?",
+            )
+            .bind(lease_seconds)
+            .bind(&shard_id)
+            .bind(&reader_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+            if renewed.rows_affected() > 0 {
+                tx.commit()
+                    .await
+                    .map_err(|e| StorageError::Internal(e.to_string()))?;
+                return Ok(());
+            }
+
+            for slot in 0..max_readers {
+                let inserted = sqlx::query(
+                    "INSERT IGNORE INTO stream_reader_leases \
+                     (shard_id, reader_slot, reader_id, expires_at) \
+                     VALUES (?, ?, ?, TIMESTAMPADD(SECOND, ?, CURRENT_TIMESTAMP(6)))",
+                )
+                .bind(&shard_id)
+                .bind(i32::from(slot))
+                .bind(&reader_id)
+                .bind(lease_seconds)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+                if inserted.rows_affected() > 0 {
+                    tx.commit()
+                        .await
+                        .map_err(|e| StorageError::Internal(e.to_string()))?;
+                    return Ok(());
+                }
+            }
+
+            tx.rollback()
+                .await
+                .map_err(|e| StorageError::Internal(e.to_string()))?;
+            Err(StorageError::Validation(
+                STREAM_READER_LIMIT_EXCEEDED_MESSAGE.to_owned(),
+            ))
         })
     }
 

@@ -136,6 +136,8 @@ const DATA_STREAM_RECORD_BUCKET_SPLITS_MIGRATION: &str =
     include_str!("../../storage-tidb/data_migrations/004_stream_record_bucket_splits.sql");
 const DATA_IDEMPOTENCY_TOKEN_NATIVE_LAYOUT_MARKER_MIGRATION: &str =
     include_str!("../../storage-tidb/data_migrations/005_idempotency_token_native_layout.sql");
+const DATA_STREAM_READER_LEASES_MIGRATION: &str =
+    include_str!("../../storage-tidb/data_migrations/006_stream_reader_leases.sql");
 pub(crate) const DATA_MIGRATIONS: &[(&str, &str)] = &[
     ("001_data_schema.sql", DATA_SCHEMA_MIGRATION),
     (
@@ -149,6 +151,10 @@ pub(crate) const DATA_MIGRATIONS: &[(&str, &str)] = &[
     (
         "005_idempotency_token_native_layout.sql",
         DATA_IDEMPOTENCY_TOKEN_NATIVE_LAYOUT_MARKER_MIGRATION,
+    ),
+    (
+        "006_stream_reader_leases.sql",
+        DATA_STREAM_READER_LEASES_MIGRATION,
     ),
 ];
 #[cfg(test)]
@@ -164,7 +170,11 @@ const DATA_NATIVE_TTL_LOOKUP_INDEX_DROPS: &[(&str, &str)] = &[
     ),
 ];
 const CATALOG_REGION_MERGE_DENY_TABLES: &[&str] = &["metrics_samples", "login_attempts"];
-const DATA_REGION_MERGE_DENY_TABLES: &[&str] = &["stream_records", "idempotency_tokens"];
+const DATA_REGION_MERGE_DENY_TABLES: &[&str] = &[
+    "stream_records",
+    "idempotency_tokens",
+    "stream_reader_leases",
+];
 const MIGRATION_SESSION_INIT_STATEMENTS: &[&str] = &[
     "SET SESSION tidb_scatter_region = 'global'",
     "SET SESSION tidb_wait_split_region_finish = ON",
@@ -535,7 +545,11 @@ async fn ensure_data_table_binary_defaults(pool: &MySqlPool) -> OpResult<()> {
         .await
         .map_err(|e| OpError::Internal(format!("Configure TiDB data database collation: {e}")))?;
 
-    for table in ["stream_records", "idempotency_tokens"] {
+    for table in [
+        "stream_records",
+        "idempotency_tokens",
+        "stream_reader_leases",
+    ] {
         if !table_exists(pool, table).await? {
             continue;
         }
@@ -841,6 +855,8 @@ async fn ensure_data_table_ttl(pool: &MySqlPool) -> OpResult<()> {
         "ALTER TABLE stream_records TTL_ENABLE = 'ON'",
         "ALTER TABLE idempotency_tokens TTL = `created_at` + INTERVAL 600 SECOND TTL_JOB_INTERVAL = '10m'",
         "ALTER TABLE idempotency_tokens TTL_ENABLE = 'ON'",
+        "ALTER TABLE stream_reader_leases TTL = `expires_at` + INTERVAL 0 SECOND TTL_JOB_INTERVAL = '10m'",
+        "ALTER TABLE stream_reader_leases TTL_ENABLE = 'ON'",
     ] {
         sqlx::query(statement)
             .execute(pool)
@@ -1296,7 +1312,7 @@ mod tests {
             DATA_SCHEMA_MIGRATION
                 .matches(TIDB_BINARY_COLLATION_TABLE_OPTION)
                 .count(),
-            2
+            3
         );
     }
 
@@ -1356,6 +1372,21 @@ mod tests {
                 .iter()
                 .all(|(_, sql)| !sql.contains("SPLIT TABLE idempotency_tokens"))
         );
+    }
+
+    #[test]
+    fn data_migration_adds_stream_reader_leases() {
+        let (filename, sql) = DATA_MIGRATIONS
+            .iter()
+            .find(|(filename, _)| *filename == "006_stream_reader_leases.sql")
+            .expect("stream reader lease migration");
+
+        assert_eq!(*filename, "006_stream_reader_leases.sql");
+        assert!(DATA_SCHEMA_MIGRATION.contains("CREATE TABLE IF NOT EXISTS stream_reader_leases"));
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS stream_reader_leases"));
+        assert!(sql.contains("PRIMARY KEY (shard_id, reader_slot) CLUSTERED"));
+        assert!(sql.contains("UNIQUE KEY uk_stream_reader_leases_reader"));
+        assert!(sql.contains("TTL = `expires_at` + INTERVAL 0 SECOND"));
     }
 
     #[test]
@@ -1445,7 +1476,11 @@ mod tests {
         );
         assert_eq!(
             DATA_REGION_MERGE_DENY_TABLES,
-            ["stream_records", "idempotency_tokens"]
+            [
+                "stream_records",
+                "idempotency_tokens",
+                "stream_reader_leases"
+            ]
         );
     }
 
@@ -1456,6 +1491,7 @@ mod tests {
         assert!(!DATA_SCHEMA_MIGRATION.contains("DELETE FROM idempotency_tokens"));
         assert!(DATA_SCHEMA_MIGRATION.contains("TTL = `created_at` + INTERVAL 24 HOUR"));
         assert!(DATA_SCHEMA_MIGRATION.contains("TTL = `created_at` + INTERVAL 600 SECOND"));
+        assert!(DATA_SCHEMA_MIGRATION.contains("TTL = `expires_at` + INTERVAL 0 SECOND"));
         assert_eq!(
             DATA_NATIVE_TTL_LOOKUP_INDEX_DROPS,
             [

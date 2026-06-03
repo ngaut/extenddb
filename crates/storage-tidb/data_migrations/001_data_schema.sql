@@ -28,6 +28,24 @@ CREATE TABLE IF NOT EXISTS stream_records (
 
 ALTER TABLE stream_records ATTRIBUTES 'merge_option=deny';
 
+-- Active stream reader leases. DynamoDB allows at most two simultaneous
+-- readers per shard; fixed reader slots plus native unique keys make admission
+-- a storage-enforced operation across frontends.
+CREATE TABLE IF NOT EXISTS stream_reader_leases (
+    shard_id VARCHAR(128) NOT NULL,
+    reader_slot TINYINT UNSIGNED NOT NULL,
+    reader_id VARCHAR(36) NOT NULL,
+    expires_at TIMESTAMP(6) NOT NULL,
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    PRIMARY KEY (shard_id, reader_slot) CLUSTERED,
+    UNIQUE KEY uk_stream_reader_leases_reader (shard_id, reader_id),
+    INDEX idx_stream_reader_leases_expires (expires_at)
+) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+  PRE_SPLIT_REGIONS = 4
+  TTL = `expires_at` + INTERVAL 0 SECOND TTL_JOB_INTERVAL = '10m';
+
+ALTER TABLE stream_reader_leases ATTRIBUTES 'merge_option=deny';
+
 -- Idempotency token storage for TransactWriteItems.
 CREATE TABLE IF NOT EXISTS idempotency_tokens (
     token_id    BIGINT NOT NULL AUTO_RANDOM(4),

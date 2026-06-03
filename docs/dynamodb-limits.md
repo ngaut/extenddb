@@ -91,7 +91,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 
 | Limit | DynamoDB Value | Status | Notes |
 |-------|---------------|--------|-------|
-| Simultaneous shard readers | 2 (1 for global tables) | Not enforced | No concurrent reader tracking |
+| Simultaneous shard readers | 2 (1 for global tables) | Enforced | Storage-backed stream reader leases admit at most two active reader ids per shard; ExtendDB has no global tables, so the global-table value is N/A |
 | Max write capacity with streams (provisioned) | 40,000 WCU | Enforced | Same as table WCU limit |
 | GetRecords: max records per call | 1,000 | Enforced | `GetRecords` defaults and caps `Limit` at 1,000 before storage reads |
 | Shard iterator lifetime | 15 minutes | Enforced | Iterator tokens carry creation time and `GetRecords` rejects expired iterators |
@@ -154,19 +154,18 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Query/Scan | 7 | 0 | 0 | 0 |
 | Batch Operations | 5 | 0 | 0 | 0 |
 | Transactions | 4 | 0 | 0 | 0 |
-| Streams | 3 | 0 | 1 | 0 |
+| Streams | 4 | 0 | 0 | 0 |
 | API-Level | 4 | 0 | 0 | 1 |
 | Import/Export/Backup | 0 | 0 | 0 | 8 |
 | Global Tables | 0 | 0 | 0 | 2 |
 | Contributor Insights | 0 | 0 | 0 | 1 |
-| **Total** | **44** | **0** | **2** | **14** |
+| **Total** | **45** | **0** | **1** | **14** |
 
 ### Unenforced Limits Requiring Tracking
 
 The following unenforced limits are tracked in `docs/technical-debt.md`:
 
 1. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
-2. **Simultaneous shard readers** (2 per shard) — requires active-reader coordination
 
 ---
 

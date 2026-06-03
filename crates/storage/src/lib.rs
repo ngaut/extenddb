@@ -632,6 +632,20 @@ pub trait StreamEngine: Send + Sync {
         shard_id: &str,
     ) -> BoxFuture<'_, Result<(), StorageError>>;
 
+    /// Claim or renew a live reader lease for a stream shard.
+    ///
+    /// Backends enforce the DynamoDB simultaneous-reader quota with storage
+    /// coordination rather than frontend-local counters. The same `reader_id`
+    /// may renew its lease; a new reader is admitted only when a reader slot is
+    /// available after expired leases are removed.
+    fn claim_stream_reader(
+        &self,
+        shard_id: &str,
+        reader_id: &str,
+        lease_seconds: u64,
+        max_readers: i64,
+    ) -> BoxFuture<'_, Result<(), StorageError>>;
+
     /// Return a sequence marker for the current end of a shard.
     ///
     /// Used by `GetShardIterator` with `LATEST` to resolve the current position

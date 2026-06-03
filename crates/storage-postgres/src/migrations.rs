@@ -59,6 +59,30 @@ pub(crate) async fn run_data_migrations(pool: &PgPool) -> OpResult<()> {
             .map_err(|e| OpError::Internal(format!("Data migration failed: {e}")))?;
         println!("    Data schema initialized.");
     }
+    ensure_stream_reader_leases(pool).await?;
+    Ok(())
+}
+
+async fn ensure_stream_reader_leases(pool: &PgPool) -> OpResult<()> {
+    sqlx::raw_sql(
+        r"
+        CREATE TABLE IF NOT EXISTS stream_reader_leases (
+            shard_id TEXT NOT NULL,
+            reader_slot SMALLINT NOT NULL,
+            reader_id TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (shard_id, reader_slot),
+            UNIQUE (shard_id, reader_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_stream_reader_leases_expires
+            ON stream_reader_leases (expires_at);
+        ",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| OpError::Internal(format!("Ensure stream reader leases: {e}")))?;
     Ok(())
 }
 

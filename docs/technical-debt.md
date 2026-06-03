@@ -142,6 +142,7 @@ Resolved (split in P94–P96):
 - ~~L-6/L-7: DynamoDB tag count and tag key/value length limits were not enforced~~ (fixed: CreateTable, TagResource, and UntagResource validate tag key/value lengths; storage tag writes validate the merged per-resource tag count before catalog upsert)
 - ~~L-3: Batch and transaction aggregate sizes were not enforced~~ (fixed: BatchGetItem tracks aggregate response bytes and returns overflow keys in `UnprocessedKeys`; BatchWriteItem and transaction handlers validate request bytes, and transactions validate aggregate item/response bytes before returning or writing)
 - ~~L-9: Provisioned capacity decrease limit was not enforced~~ (fixed: shared throughput accounting now enforces DynamoDB's 4-plus-1-per-hour daily table decrease quota under catalog row locks, persists the decrease counter/timestamps, and preserves the metadata in `DescribeTable`)
+- ~~Streams simultaneous shard-reader limit was not enforced~~ (fixed: `GetShardIterator` and `GetRecords` now claim/renew storage-backed reader leases, with TiDB native unique constraints and TTL enforcing at most two live reader ids per stream shard across frontends)
 
 ## Resolved in P30
 

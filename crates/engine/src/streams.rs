@@ -20,6 +20,7 @@ struct ShardIteratorToken {
     sequence: String,
     created_at: u64,
     stream_arn: String,
+    reader_id: Option<String>,
 }
 
 fn stream_limit_or_default(
@@ -114,6 +115,17 @@ pub async fn handle_get_shard_iterator(
         .await
         .map_err(storage_to_dynamo)?;
 
+    let reader_id = uuid::Uuid::new_v4().to_string();
+    ctx.storage
+        .claim_stream_reader(
+            &input.shard_id,
+            &reader_id,
+            SHARD_ITERATOR_EXPIRY_SECS,
+            MAX_SIMULTANEOUS_SHARD_READERS,
+        )
+        .await
+        .map_err(storage_to_dynamo)?;
+
     let seq = match input.shard_iterator_type {
         ShardIteratorType::TrimHorizon => String::new(),
         ShardIteratorType::Latest => {
@@ -161,6 +173,7 @@ pub async fn handle_get_shard_iterator(
             &seq,
             created_at,
             &input.stream_arn,
+            Some(&reader_id),
         )),
     };
     serialize_output(&output)
@@ -168,6 +181,7 @@ pub async fn handle_get_shard_iterator(
 
 /// Shard iterator expiration: 15 minutes (900 seconds), matching real DynamoDB.
 const SHARD_ITERATOR_EXPIRY_SECS: u64 = 900;
+const MAX_SIMULTANEOUS_SHARD_READERS: i64 = 2;
 
 fn shard_iterator_is_expired(created_at: u64, now: u64) -> bool {
     now.saturating_sub(created_at) > SHARD_ITERATOR_EXPIRY_SECS
@@ -213,6 +227,17 @@ pub async fn handle_get_records(
         .validate_shard(&ctx.account_id, &token.stream_arn, &token.shard_id)
         .await
         .map_err(storage_to_dynamo)?;
+    if let Some(reader_id) = token.reader_id.as_deref() {
+        ctx.storage
+            .claim_stream_reader(
+                &token.shard_id,
+                reader_id,
+                SHARD_ITERATOR_EXPIRY_SECS,
+                MAX_SIMULTANEOUS_SHARD_READERS,
+            )
+            .await
+            .map_err(storage_to_dynamo)?;
+    }
 
     let limit = stream_limit_or_default(input.limit, 1000, 1000)?;
 
@@ -243,6 +268,7 @@ pub async fn handle_get_records(
             &next_seq,
             now,
             &token.stream_arn,
+            token.reader_id.as_deref(),
         ))
     };
 
@@ -258,8 +284,16 @@ fn encode_shard_iterator(
     sequence: &str,
     created_at: u64,
     stream_arn: &str,
+    reader_id: Option<&str>,
 ) -> String {
-    let token = format!("{shard_id}|AFTER_SEQUENCE_NUMBER|{sequence}|{created_at}|{stream_arn}");
+    let token = reader_id.map_or_else(
+        || format!("{shard_id}|AFTER_SEQUENCE_NUMBER|{sequence}|{created_at}|{stream_arn}"),
+        |reader_id| {
+            format!(
+                "{shard_id}|AFTER_SEQUENCE_NUMBER|{sequence}|{created_at}|{stream_arn}|{reader_id}"
+            )
+        },
+    );
     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, token)
 }
 
@@ -270,8 +304,8 @@ fn decode_shard_iterator(encoded: &str) -> Result<ShardIteratorToken, DynamoDbEr
         DynamoDbError::ValidationException("Invalid shard iterator encoding".to_owned())
     })?;
 
-    let parts: Vec<&str> = token.splitn(5, '|').collect();
-    if parts.len() != 5 || parts[0].is_empty() || parts[1] != "AFTER_SEQUENCE_NUMBER" {
+    let parts: Vec<&str> = token.splitn(6, '|').collect();
+    if !matches!(parts.len(), 5 | 6) || parts[0].is_empty() || parts[1] != "AFTER_SEQUENCE_NUMBER" {
         return Err(DynamoDbError::ValidationException(
             "Invalid shard iterator format".to_owned(),
         ));
@@ -284,12 +318,23 @@ fn decode_shard_iterator(encoded: &str) -> Result<ShardIteratorToken, DynamoDbEr
             "Invalid shard iterator format".to_owned(),
         ));
     }
+    let reader_id = if parts.len() == 6 {
+        if parts[5].is_empty() {
+            return Err(DynamoDbError::ValidationException(
+                "Invalid shard iterator format".to_owned(),
+            ));
+        }
+        Some(parts[5].to_owned())
+    } else {
+        None
+    };
 
     Ok(ShardIteratorToken {
         shard_id: parts[0].to_owned(),
         sequence: parts[2].to_owned(),
         created_at,
         stream_arn: parts[4].to_owned(),
+        reader_id,
     })
 }
 
@@ -318,6 +363,9 @@ fn previous_decimal_sequence(raw: &str) -> Result<String, DynamoDbError> {
 
 fn storage_to_dynamo(e: StorageError) -> DynamoDbError {
     match e {
+        StorageError::Validation(msg) if msg.contains("simultaneous readers") => {
+            DynamoDbError::ThrottlingException(msg)
+        }
         StorageError::Validation(msg) => DynamoDbError::ValidationException(msg),
         StorageError::TableNotFound(name) => DynamoDbError::ResourceNotFoundException(name),
         other => crate::storage_other_to_dynamo(other, "streams storage error"),
@@ -399,14 +447,46 @@ mod tests {
     #[test]
     fn shard_iterator_round_trips_stream_binding() {
         let stream_arn = "arn:aws:dynamodb:us-east-1:123456789012:table/t/stream/label";
-        let encoded =
-            encode_shard_iterator("shardId-000000000001-label-table", "42", 123, stream_arn);
+        let encoded = encode_shard_iterator(
+            "shardId-000000000001-label-table",
+            "42",
+            123,
+            stream_arn,
+            Some("reader-1"),
+        );
         let decoded = decode_shard_iterator(&encoded).expect("valid iterator");
 
         assert_eq!(decoded.shard_id, "shardId-000000000001-label-table");
         assert_eq!(decoded.sequence, "42");
         assert_eq!(decoded.created_at, 123);
         assert_eq!(decoded.stream_arn, stream_arn);
+        assert_eq!(decoded.reader_id.as_deref(), Some("reader-1"));
+    }
+
+    #[test]
+    fn shard_iterator_accepts_compat_tokens_without_reader_id() {
+        let stream_arn = "arn:aws:dynamodb:us-east-1:123456789012:table/t/stream/label";
+        let encoded = encode_shard_iterator(
+            "shardId-000000000001-label-table",
+            "42",
+            123,
+            stream_arn,
+            None,
+        );
+        let decoded = decode_shard_iterator(&encoded).expect("valid compat iterator");
+
+        assert_eq!(decoded.stream_arn, stream_arn);
+        assert_eq!(decoded.reader_id, None);
+    }
+
+    #[test]
+    fn shard_iterator_rejects_empty_reader_id() {
+        let encoded = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            "shardId-000000000001-label-table|AFTER_SEQUENCE_NUMBER|42|123|arn|",
+        );
+
+        assert!(decode_shard_iterator(&encoded).is_err());
     }
 
     #[test]

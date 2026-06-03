@@ -20,11 +20,14 @@ pub(crate) async fn validate_catalog_data_same_cluster(
     data_pool: &MySqlPool,
     data_connection_string: &str,
 ) -> Result<(), StorageError> {
-    let same_sql_login = same_sql_login(catalog_connection_string, data_connection_string)?;
+    if same_sql_endpoint(catalog_connection_string, data_connection_string)? {
+        return Ok(());
+    }
+
     let catalog_fingerprint = read_cluster_fingerprint(catalog_pool).await?;
     let data_fingerprint = read_cluster_fingerprint(data_pool).await?;
 
-    validate_cluster_fingerprints(&catalog_fingerprint, &data_fingerprint, same_sql_login)
+    validate_cluster_fingerprints(&catalog_fingerprint, &data_fingerprint)
 }
 
 async fn read_cluster_fingerprint(pool: &MySqlPool) -> Result<ClusterFingerprint, StorageError> {
@@ -58,7 +61,6 @@ async fn read_cluster_fingerprint(pool: &MySqlPool) -> Result<ClusterFingerprint
 fn validate_cluster_fingerprints(
     catalog: &ClusterFingerprint,
     data: &ClusterFingerprint,
-    same_sql_login: bool,
 ) -> Result<(), StorageError> {
     match (catalog, data) {
         (ClusterFingerprint::Visible(catalog_rows), ClusterFingerprint::Visible(data_rows))
@@ -76,19 +78,8 @@ fn validate_cluster_fingerprints(
         (
             ClusterFingerprint::Unavailable(catalog_reason),
             ClusterFingerprint::Unavailable(data_reason),
-        ) if same_sql_login => {
-            tracing::warn!(
-                catalog_reason,
-                data_reason,
-                "TiDB cluster topology metadata is unavailable; accepting catalog/data split because both databases use the same SQL endpoint and user"
-            );
-            Ok(())
-        }
-        (
-            ClusterFingerprint::Unavailable(catalog_reason),
-            ClusterFingerprint::Unavailable(data_reason),
         ) => Err(StorageError::Configuration(format!(
-            "TiDB catalog and data databases must be in the same cluster; information_schema.cluster_info is unavailable for both connections and the SQL endpoints or users differ (catalog: {catalog_reason}; data: {data_reason})"
+            "TiDB catalog and data databases must be in the same cluster; SQL endpoints differ and information_schema.cluster_info is unavailable for both connections (catalog: {catalog_reason}; data: {data_reason})"
         ))),
         (ClusterFingerprint::Unavailable(reason), ClusterFingerprint::Visible(_)) => {
             Err(StorageError::Configuration(format!(
@@ -103,15 +94,13 @@ fn validate_cluster_fingerprints(
     }
 }
 
-fn same_sql_login(left: &str, right: &str) -> Result<bool, StorageError> {
+fn same_sql_endpoint(left: &str, right: &str) -> Result<bool, StorageError> {
     let left = parse_connection_string(left)
         .map_err(|error| StorageError::Configuration(error.to_string()))?;
     let right = parse_connection_string(right)
         .map_err(|error| StorageError::Configuration(error.to_string()))?;
 
-    Ok(left.host.eq_ignore_ascii_case(&right.host)
-        && left.port == right.port
-        && left.user == right.user)
+    Ok(left.host.eq_ignore_ascii_case(&right.host) && left.port == right.port)
 }
 
 fn cluster_info_unavailable(error: &sqlx::Error) -> bool {
@@ -123,14 +112,13 @@ fn cluster_info_unavailable(error: &sqlx::Error) -> bool {
     db_error
         .code()
         .is_some_and(|code| matches!(code.as_ref(), "1044" | "1142" | "1146" | "1227"))
+        || message.contains("access denied")
+        || message.contains("privilege")
         || ((message.contains("cluster_info")
             || message.contains("information_schema.cluster_info"))
             && (message.contains("not available")
                 || message.contains("doesn't exist")
-                || message.contains("does not exist")
-                || message.contains("access denied")
-                || message.contains("denied")
-                || message.contains("privilege")))
+                || message.contains("does not exist")))
 }
 
 fn database_error_text(error: &sqlx::Error) -> String {
@@ -160,7 +148,7 @@ fn summarize_fingerprint(rows: &[String]) -> String {
 mod tests {
     use extenddb_storage::error::StorageError;
 
-    use super::{ClusterFingerprint, same_sql_login, validate_cluster_fingerprints};
+    use super::{ClusterFingerprint, same_sql_endpoint, validate_cluster_fingerprints};
 
     fn visible(rows: &[&str]) -> ClusterFingerprint {
         ClusterFingerprint::Visible(rows.iter().map(|row| (*row).to_owned()).collect())
@@ -178,7 +166,7 @@ mod tests {
             "tikv\t127.0.0.1:20160\t127.0.0.1:20180",
         ]);
 
-        validate_cluster_fingerprints(&fingerprint, &fingerprint, false)
+        validate_cluster_fingerprints(&fingerprint, &fingerprint)
             .expect("same native topology should validate");
     }
 
@@ -187,20 +175,10 @@ mod tests {
         let catalog = visible(&["pd\t127.0.0.1:2379\t127.0.0.1:2379"]);
         let data = visible(&["pd\t127.0.0.2:2379\t127.0.0.2:2379"]);
 
-        let err = validate_cluster_fingerprints(&catalog, &data, true).unwrap_err();
+        let err = validate_cluster_fingerprints(&catalog, &data).unwrap_err();
 
         assert!(matches!(err, StorageError::Configuration(_)));
         assert!(err.to_string().contains("topology differs"));
-    }
-
-    #[test]
-    fn accepts_unavailable_topology_only_for_same_sql_login() {
-        validate_cluster_fingerprints(
-            &unavailable("not available"),
-            &unavailable("not available"),
-            true,
-        )
-        .expect("same SQL login is the only safe fallback when topology metadata is hidden");
     }
 
     #[test]
@@ -208,12 +186,11 @@ mod tests {
         let err = validate_cluster_fingerprints(
             &unavailable("not available"),
             &unavailable("not available"),
-            false,
         )
         .unwrap_err();
 
         assert!(matches!(err, StorageError::Configuration(_)));
-        assert!(err.to_string().contains("SQL endpoints or users differ"));
+        assert!(err.to_string().contains("SQL endpoints differ"));
     }
 
     #[test]
@@ -221,7 +198,6 @@ mod tests {
         let err = validate_cluster_fingerprints(
             &unavailable("access denied"),
             &visible(&["pd\t127.0.0.1:2379\t127.0.0.1:2379"]),
-            true,
         )
         .unwrap_err();
 
@@ -230,25 +206,32 @@ mod tests {
     }
 
     #[test]
-    fn compares_sql_login_without_database_name() {
+    fn compares_sql_endpoint_without_database_name_or_user() {
         assert!(
-            same_sql_login(
+            same_sql_endpoint(
                 "mysql://user:pass@example.com:4000/extenddb_catalog",
                 "mysql://user:pass@example.com:4000/extenddb_data"
             )
             .expect("valid connection strings")
         );
         assert!(
-            !same_sql_login(
+            same_sql_endpoint(
+                "mysql://catalog_user:pass@example.com:4000/extenddb_catalog",
+                "mysql://data_user:pass@example.com:4000/extenddb_data"
+            )
+            .expect("valid connection strings")
+        );
+        assert!(
+            !same_sql_endpoint(
                 "mysql://user:pass@example.com:4000/extenddb_catalog",
                 "mysql://user:pass@other.example.com:4000/extenddb_data"
             )
             .expect("valid connection strings")
         );
         assert!(
-            !same_sql_login(
-                "mysql://catalog_user:pass@example.com:4000/extenddb_catalog",
-                "mysql://data_user:pass@example.com:4000/extenddb_data"
+            !same_sql_endpoint(
+                "mysql://user:pass@example.com:4000/extenddb_catalog",
+                "mysql://user:pass@example.com:4001/extenddb_data"
             )
             .expect("valid connection strings")
         );

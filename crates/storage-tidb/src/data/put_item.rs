@@ -10,6 +10,7 @@ use extenddb_storage::error::StorageError;
 use extenddb_storage::util::{parse_sk, sk_column, sk_info};
 
 use super::index::validate_item_secondary_index_key_constraints;
+use super::item_collections::apply_lsi_item_collection_delta_in_tx;
 use super::query::{bind_sk_value, check_condition};
 use super::tx_helpers::{
     StreamSequenceAllocator, finalize_stream_records_best_effort,
@@ -45,8 +46,8 @@ impl TidbEngine {
             &self.limits,
         )?;
 
-        // When there's a condition, return_old, or stream capture, we need a transaction.
-        let needs_tx = condition.is_some() || return_old || stream.is_some();
+        // LSI item collection accounting needs the old item size delta.
+        let needs_tx = condition.is_some() || return_old || stream.is_some() || key_info.has_lsi;
 
         if let Some((sk_name, sk_type)) =
             sk_info(&key_info.key_schema, &key_info.attribute_definitions)
@@ -57,8 +58,9 @@ impl TidbEngine {
             let sk = parse_sk(sk_value, sk_type)?;
             let sk_col = sk_column(sk_type);
 
-            if let Some(capture) =
-                put_stream_capture_without_old_item(return_old, condition, stream)
+            if !key_info.has_lsi
+                && let Some(capture) =
+                    put_stream_capture_without_old_item(return_old, condition, stream)
             {
                 let mut tx = self
                     .data_pool
@@ -105,6 +107,15 @@ impl TidbEngine {
                         }
                         Err(e) => return Err(e),
                     }
+                    apply_lsi_item_collection_delta_in_tx(
+                        &mut tx,
+                        key_info,
+                        &pk,
+                        Some(&old_item),
+                        Some(item),
+                        self.limits.max_lsi_item_collection_size_bytes,
+                    )
+                    .await?;
                     // Row exists, condition passed — update in place.
                     let update_sql = format!(
                         "UPDATE {ddb_table} SET item_data = ? WHERE pk = ? AND {sk_col} = ?"
@@ -120,6 +131,15 @@ impl TidbEngine {
                         }
                         Err(e) => return Err(e),
                     }
+                    apply_lsi_item_collection_delta_in_tx(
+                        &mut tx,
+                        key_info,
+                        &pk,
+                        None,
+                        Some(item),
+                        self.limits.max_lsi_item_collection_size_bytes,
+                    )
+                    .await?;
                     // Condition passed against empty. In pessimistic mode,
                     // the preceding point SELECT FOR UPDATE locks this
                     // primary key even when absent. A duplicate here is still
@@ -182,8 +202,9 @@ impl TidbEngine {
             }
         } else {
             // No sort key — PK-only table
-            if let Some(capture) =
-                put_stream_capture_without_old_item(return_old, condition, stream)
+            if !key_info.has_lsi
+                && let Some(capture) =
+                    put_stream_capture_without_old_item(return_old, condition, stream)
             {
                 let mut tx = self
                     .data_pool
@@ -232,6 +253,15 @@ impl TidbEngine {
                         }
                         Err(e) => return Err(e),
                     }
+                    apply_lsi_item_collection_delta_in_tx(
+                        &mut tx,
+                        key_info,
+                        &pk,
+                        Some(&old_item),
+                        Some(item),
+                        self.limits.max_lsi_item_collection_size_bytes,
+                    )
+                    .await?;
                     // Row exists, condition passed — update in place.
                     let update_sql = format!("UPDATE {ddb_table} SET item_data = ? WHERE pk = ?");
                     sqlx::query(&update_sql)
@@ -249,6 +279,15 @@ impl TidbEngine {
                         }
                         Err(e) => return Err(e),
                     }
+                    apply_lsi_item_collection_delta_in_tx(
+                        &mut tx,
+                        key_info,
+                        &pk,
+                        None,
+                        Some(item),
+                        self.limits.max_lsi_item_collection_size_bytes,
+                    )
+                    .await?;
                     // Condition passed against empty. The preceding point
                     // SELECT FOR UPDATE locks the primary key in TiDB
                     // pessimistic mode; duplicate-key remains the final race

@@ -23,7 +23,7 @@ use sqlx::{MySql, QueryBuilder};
 use tokio::process::Command;
 
 use crate::TidbEngine;
-use crate::data::physical_data_table_name;
+use crate::data::{physical_data_table_name, physical_item_collection_table_name};
 use crate::metadata_engine::drop_ttl_artifacts;
 use crate::table_helpers::TableStats;
 use crate::tidb_util::{
@@ -985,7 +985,12 @@ impl BackupEngine for TidbEngine {
 
             let target_table_id = uuid::Uuid::new_v4().to_string();
             let target_physical_table = physical_data_table_name(&target_table_id);
+            let target_item_collection_table =
+                physical_item_collection_table_name(&target_table_id);
             let target_table_arn = table_arn(&self.region, &account_id, &target_table_name);
+            let has_lsi = backup_index_rows
+                .iter()
+                .any(|index| index.index_type == "LSI");
 
             let restore_result = async {
                 self.native_backup
@@ -1003,6 +1008,11 @@ impl BackupEngine for TidbEngine {
                 // source table's physical shape, so normalize restored TiDB TTL
                 // artifacts before the catalog row becomes ACTIVE.
                 drop_ttl_artifacts(&self.data_pool, &target_table_id).await?;
+
+                if has_lsi {
+                    Self::ensure_lsi_item_collection_table(&self.data_pool, &target_table_id)
+                        .await?;
+                }
 
                 self.publish_restored_table_catalog(RestoreCatalogInsert {
                     account_id: &account_id,
@@ -1027,6 +1037,8 @@ impl BackupEngine for TidbEngine {
                 self.drop_physical_table_if_exists(source_physical_table)
                     .await;
                 self.drop_physical_table_if_exists(&target_physical_table)
+                    .await;
+                self.drop_physical_table_if_exists(&target_item_collection_table)
                     .await;
                 return Err(err);
             }

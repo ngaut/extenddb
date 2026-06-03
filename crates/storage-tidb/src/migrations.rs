@@ -412,11 +412,10 @@ async fn idempotency_token_layout_is_native(pool: &MySqlPool) -> OpResult<bool> 
     .await
     .map_err(|e| OpError::Internal(format!("Inspect TiDB idempotency token hash: {e}")))?;
 
-    let Some((column_type, extra, generation_expression)) = token_hash else {
+    let Some((column_type, _extra, generation_expression)) = token_hash else {
         return Ok(false);
     };
     if !column_type.eq_ignore_ascii_case("bigint unsigned")
-        || !extra.to_ascii_lowercase().contains("stored generated")
         || !generation_expression
             .as_deref()
             .is_some_and(|expr| expr.to_ascii_lowercase().contains("crc32(`token`)"))
@@ -446,7 +445,7 @@ async fn idempotency_token_layout_is_native(pool: &MySqlPool) -> OpResult<bool> 
 }
 
 async fn idempotency_token_unique_index_is_native(pool: &MySqlPool) -> OpResult<bool> {
-    let rows: Vec<(i64, Option<String>, Option<String>, i64)> = sqlx::query_as(
+    let rows: Vec<(i64, Option<String>, Option<String>, String)> = sqlx::query_as(
         "SELECT SEQ_IN_INDEX, COLUMN_NAME, EXPRESSION, NON_UNIQUE \
          FROM information_schema.statistics \
          WHERE TABLE_SCHEMA = DATABASE() \
@@ -458,7 +457,7 @@ async fn idempotency_token_unique_index_is_native(pool: &MySqlPool) -> OpResult<
     .await
     .map_err(|e| OpError::Internal(format!("Inspect TiDB idempotency token index: {e}")))?;
 
-    if rows.len() != 3 || rows.iter().any(|(_, _, _, non_unique)| *non_unique != 0) {
+    if rows.len() != 3 || rows.iter().any(|(_, _, _, non_unique)| non_unique != "0") {
         return Ok(false);
     }
 
@@ -468,13 +467,17 @@ async fn idempotency_token_unique_index_is_native(pool: &MySqlPool) -> OpResult<
         .unwrap_or_default()
         .to_ascii_lowercase();
     Ok(rows[0].0 == 1
-        && rows[0].1.is_none()
+        && information_schema_null(rows[0].1.as_deref())
         && expression.contains("tidb_shard")
         && expression.contains("token_hash")
         && rows[1].0 == 2
         && rows[1].1.as_deref() == Some("token_hash")
         && rows[2].0 == 3
         && rows[2].1.as_deref() == Some("token"))
+}
+
+fn information_schema_null(value: Option<&str>) -> bool {
+    value.is_none() || value.is_some_and(|value| value.eq_ignore_ascii_case("NULL"))
 }
 
 #[derive(sqlx::FromRow)]
@@ -970,7 +973,7 @@ mod tests {
         incompatible_dynamodb_hash_key_column_error,
         incompatible_dynamodb_secondary_index_global_error,
         incompatible_idempotency_token_layout_error, incompatible_stream_record_layout_error,
-        should_apply_consolidated_catalog_schema,
+        information_schema_null, should_apply_consolidated_catalog_schema,
     };
     use crate::{CATALOG_VERSION, data::USER_TABLE_FULL_KEYSPACE_SPLITS_MIGRATION};
 
@@ -1418,6 +1421,14 @@ mod tests {
         assert!(error.contains("AUTO_RANDOM clustered token_id primary key"));
         assert!(error.contains("TIDB_SHARD unique token index"));
         assert!(error.contains("Recreate the TiDB data database"));
+    }
+
+    #[test]
+    fn information_schema_null_accepts_tidb_string_null() {
+        assert!(information_schema_null(None));
+        assert!(information_schema_null(Some("NULL")));
+        assert!(information_schema_null(Some("null")));
+        assert!(!information_schema_null(Some("token_hash")));
     }
 
     #[test]

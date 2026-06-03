@@ -9,6 +9,7 @@ use extenddb_storage::StreamCapture;
 use extenddb_storage::error::StorageError;
 use extenddb_storage::util::{SortKeyValue, parse_sk, sk_column, sk_info};
 
+use super::item_collections::apply_lsi_item_collection_delta_in_tx;
 use super::query::check_condition;
 use super::tx_helpers::{
     StreamSequenceAllocator, delete_item_without_old_item_in_tx,
@@ -32,9 +33,11 @@ impl TidbEngine {
         let ddb_table = data_table_name(&key_info.table_id);
         let pk = physical_pk_bytes(key, &key_info.key_schema)?;
 
-        let needs_tx = condition.is_some() || return_old || stream.is_some();
+        let needs_tx = condition.is_some() || return_old || stream.is_some() || key_info.has_lsi;
 
-        if let Some(capture) = delete_stream_capture_without_old_item(return_old, condition, stream)
+        if !key_info.has_lsi
+            && let Some(capture) =
+                delete_stream_capture_without_old_item(return_old, condition, stream)
         {
             let mut tx = self
                 .data_pool
@@ -87,6 +90,15 @@ impl TidbEngine {
                         }
                         Err(e) => return Err(e),
                     }
+                    apply_lsi_item_collection_delta_in_tx(
+                        &mut tx,
+                        key_info,
+                        &pk,
+                        Some(&old_item),
+                        None,
+                        self.limits.max_lsi_item_collection_size_bytes,
+                    )
+                    .await?;
                 } else {
                     // No existing item — condition checks against empty item
                     let empty = std::collections::BTreeMap::new();
@@ -215,6 +227,15 @@ impl TidbEngine {
                         }
                         Err(e) => return Err(e),
                     }
+                    apply_lsi_item_collection_delta_in_tx(
+                        &mut tx,
+                        key_info,
+                        &pk,
+                        Some(&old_item),
+                        None,
+                        self.limits.max_lsi_item_collection_size_bytes,
+                    )
+                    .await?;
                 } else {
                     let empty = std::collections::BTreeMap::new();
                     match check_condition(condition, &empty, maps) {

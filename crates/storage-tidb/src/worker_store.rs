@@ -22,7 +22,7 @@ type CreatingTableRow = (
     serde_json::Value,
     Option<serde_json::Value>,
 );
-type CreateIndexRow = (String, serde_json::Value);
+type CreateIndexRow = (String, String, serde_json::Value);
 type UpdatingTableRow = (
     String,
     serde_json::Value,
@@ -46,6 +46,7 @@ struct CreateReconcilePlan {
     key_schema: Vec<KeySchemaElement>,
     attr_defs: Vec<AttributeDefinition>,
     stream_enabled: bool,
+    has_lsi: bool,
     indexes: Vec<(String, Vec<KeySchemaElement>)>,
 }
 
@@ -264,15 +265,19 @@ impl TidbEngine {
             .transpose()?;
         let stream_enabled = stream_spec.as_ref().is_some_and(|spec| spec.stream_enabled);
 
-        let index_rows: Vec<CreateIndexRow> =
-            sqlx::query_as("SELECT index_id, key_schema FROM indexes WHERE table_id = ?")
-                .bind(table_id)
-                .fetch_all(&self.pool)
-                .await
-                .map_err(|e| StorageError::Internal(e.to_string()))?;
+        let index_rows: Vec<CreateIndexRow> = sqlx::query_as(
+            "SELECT index_id, index_type, key_schema FROM indexes WHERE table_id = ?",
+        )
+        .bind(table_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| StorageError::Internal(e.to_string()))?;
+        let has_lsi = index_rows
+            .iter()
+            .any(|(_, index_type, _)| index_type == "LSI");
         let indexes = index_rows
             .into_iter()
-            .map(|(index_id, index_key_schema_json)| {
+            .map(|(index_id, _, index_key_schema_json)| {
                 parse_json(index_key_schema_json, "index key schema")
                     .map(|index_key_schema| (index_id, index_key_schema))
             })
@@ -283,6 +288,7 @@ impl TidbEngine {
             key_schema,
             attr_defs,
             stream_enabled,
+            has_lsi,
             indexes,
         };
 
@@ -304,6 +310,7 @@ impl TidbEngine {
             &plan.key_schema,
             &plan.attr_defs,
             &indexes,
+            plan.has_lsi,
         )
         .await?;
 

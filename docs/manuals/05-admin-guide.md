@@ -180,6 +180,8 @@ Statistics are exposed at `/management/auth-cache-metrics` (JSON, admin-authenti
 
 All defaults match real DynamoDB limits. Override only for testing edge cases.
 
+`max_lsi_item_collection_size_bytes` defaults to `10737418240` (10 GB).
+
 #### [logging]
 
 | Key | Default | Description |

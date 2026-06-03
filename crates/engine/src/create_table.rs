@@ -129,6 +129,9 @@ pub(crate) fn storage_err_to_dynamo(e: extenddb_storage::error::StorageError) ->
         }
         StorageError::Validation(msg) => DynamoDbError::ValidationException(msg),
         StorageError::NoOpUpdate(msg) => DynamoDbError::ValidationException(msg),
+        StorageError::ItemCollectionSizeLimitExceeded(msg) => {
+            DynamoDbError::ItemCollectionSizeLimitExceededException(msg)
+        }
         StorageError::IdempotentReplay | StorageError::IdempotentMismatch => {
             // These are handled directly by the transact_write_items caller.
             // If they reach here, it's a programming error.
@@ -195,5 +198,18 @@ mod tests {
 
         assert!(matches!(error, DynamoDbError::InternalServerError(_)));
         assert_eq!(error.status_code(), 500);
+    }
+
+    #[test]
+    fn storage_err_to_dynamo_maps_item_collection_limit() {
+        let error = storage_err_to_dynamo(StorageError::ItemCollectionSizeLimitExceeded(
+            "Item collection size limit exceeded".to_owned(),
+        ));
+
+        assert!(matches!(
+            error,
+            DynamoDbError::ItemCollectionSizeLimitExceededException(_)
+        ));
+        assert_eq!(error.status_code(), 400);
     }
 }

@@ -9,6 +9,7 @@ use extenddb_storage::util::{SortKeyValue, parse_sk, sk_column, sk_info};
 use extenddb_storage::{BatchWriteOp, StreamCapture};
 
 use super::index::validate_item_index_key_constraints;
+use super::item_collections::apply_lsi_item_collection_delta_in_tx;
 use super::tx_helpers::{
     StreamSequenceAllocator, delete_item_without_old_item_in_tx, fetch_item_for_update,
     finalize_stream_records_best_effort, put_item_without_old_item_in_tx,
@@ -42,6 +43,12 @@ impl TidbEngine {
     ) -> Result<(), StorageError> {
         if ops.is_empty() {
             return Ok(());
+        }
+
+        if key_info.has_lsi {
+            return self
+                .batch_write_items_with_lsi_accounting(key_info, ops, stream)
+                .await;
         }
 
         if let Some(capture) = stream {
@@ -81,6 +88,90 @@ impl TidbEngine {
             .await?;
         }
 
+        Ok(())
+    }
+
+    async fn batch_write_items_with_lsi_accounting(
+        &self,
+        key_info: &TableKeyInfo,
+        ops: &[BatchWriteOp<'_>],
+        stream: Option<&StreamCapture>,
+    ) -> Result<(), StorageError> {
+        self.validate_batch_write_secondary_index_keys(key_info, ops)?;
+
+        let mut tx = self
+            .data_pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+        let mut sequence_allocator = StreamSequenceAllocator::default();
+
+        for op in ops {
+            match op {
+                BatchWriteOp::Put(item) => {
+                    let pk = physical_pk_bytes(item, &key_info.key_schema)?;
+                    let old_item = fetch_item_for_update(&mut tx, key_info, item).await?;
+                    apply_lsi_item_collection_delta_in_tx(
+                        &mut tx,
+                        key_info,
+                        &pk,
+                        old_item.as_ref(),
+                        Some(item),
+                        self.limits.max_lsi_item_collection_size_bytes,
+                    )
+                    .await?;
+                    upsert_item_in_tx(&mut tx, key_info, item).await?;
+                    if let Some(capture) = stream {
+                        write_stream_record_in_tx(
+                            &mut tx,
+                            &mut sequence_allocator,
+                            key_info,
+                            capture,
+                            old_item.as_ref(),
+                            Some(item),
+                        )
+                        .await?;
+                    }
+                }
+                BatchWriteOp::Delete(key) => {
+                    let pk = physical_pk_bytes(key, &key_info.key_schema)?;
+                    let old_item = fetch_item_for_update(&mut tx, key_info, key).await?;
+                    if let Some(old_item) = old_item {
+                        apply_lsi_item_collection_delta_in_tx(
+                            &mut tx,
+                            key_info,
+                            &pk,
+                            Some(&old_item),
+                            None,
+                            self.limits.max_lsi_item_collection_size_bytes,
+                        )
+                        .await?;
+                        delete_item_without_old_item_in_tx(&mut tx, key_info, key).await?;
+                        if let Some(capture) = stream {
+                            write_stream_record_in_tx(
+                                &mut tx,
+                                &mut sequence_allocator,
+                                key_info,
+                                capture,
+                                Some(&old_item),
+                                None,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+        finalize_stream_records_best_effort(
+            &self.data_pool,
+            "batch_write_items",
+            sequence_allocator.pending_records(),
+        )
+        .await;
         Ok(())
     }
 

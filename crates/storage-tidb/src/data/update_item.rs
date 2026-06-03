@@ -11,6 +11,7 @@ use extenddb_storage::error::StorageError;
 use extenddb_storage::util::{parse_sk, sk_column, sk_info};
 
 use super::index::validate_item_secondary_index_key_constraints;
+use super::item_collections::apply_lsi_item_collection_delta_in_tx;
 use super::query::check_condition;
 use super::tx_helpers::{
     StreamSequenceAllocator, finalize_stream_records_best_effort, write_stream_record_in_tx,
@@ -76,8 +77,8 @@ impl TidbEngine {
         };
         let item_existed = old_json.is_some();
 
-        // Save pre-mutation item for stream capture.
-        let pre_mutation_item = if stream.is_some() && item_existed {
+        // Save pre-mutation item for stream capture and LSI collection accounting.
+        let pre_mutation_item = if (stream.is_some() || key_info.has_lsi) && item_existed {
             Some(item.clone())
         } else {
             None
@@ -123,6 +124,16 @@ impl TidbEngine {
             .map_err(|e| StorageError::Validation(e.to_string()))?;
 
         let new_item = if return_new { Some(item.clone()) } else { None };
+
+        apply_lsi_item_collection_delta_in_tx(
+            &mut tx,
+            key_info,
+            &pk,
+            pre_mutation_item.as_ref(),
+            Some(&item),
+            self.limits.max_lsi_item_collection_size_bytes,
+        )
+        .await?;
 
         // Write the updated item back
         let item_json =

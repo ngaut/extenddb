@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS stream_records (
 ALTER TABLE stream_records ATTRIBUTES 'merge_option=deny';
 
 -- Active stream reader leases. DynamoDB allows at most two simultaneous
--- readers per shard; fixed reader slots plus native unique keys make admission
+-- readers per shard. Fixed reader slots plus native unique keys make admission
 -- a storage-enforced operation across frontends.
 CREATE TABLE IF NOT EXISTS stream_reader_leases (
     shard_id VARCHAR(128) NOT NULL,

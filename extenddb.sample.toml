@@ -135,6 +135,7 @@
 # All defaults match real DynamoDB limits.
 # Override only for testing edge cases.
 #
+# max_lsi_item_collection_size_bytes = 10737418240  # 10 GB
 # max_attribute_name_bytes = 65535  # REQ-LIM-004: 64 KB
 #
 # Preview extension: allow multi-part (composite) keys on base tables.

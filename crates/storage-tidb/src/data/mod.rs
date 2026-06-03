@@ -54,6 +54,16 @@ pub(crate) fn physical_data_table_name(table_id: &str) -> String {
     format!("_ddb_{table_id}")
 }
 
+/// SQL table name for the per-table LSI item collection size ledger.
+pub(crate) fn item_collection_table_name(table_id: &str) -> String {
+    format!("`{}`", physical_item_collection_table_name(table_id))
+}
+
+/// Raw TiDB table name for the per-table LSI item collection size ledger.
+pub(crate) fn physical_item_collection_table_name(table_id: &str) -> String {
+    format!("_ddb_{table_id}_collections")
+}
+
 /// Encode the DynamoDB partition-key tuple exactly as TiDB stores it in `pk`.
 pub(crate) fn physical_pk_bytes(
     item: &Item,
@@ -287,6 +297,7 @@ mod data_engine;
 mod ddl;
 mod delete_item;
 mod index;
+mod item_collections;
 mod put_item;
 mod query;
 mod query_scan;

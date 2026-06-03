@@ -55,6 +55,7 @@ Environment variables use double-underscore (`__`) as a nesting separator, prefi
 | `auth.provider` | `EXTENDDB__AUTH__PROVIDER` |
 | `auth.encryption_key` | `EXTENDDB__AUTH__ENCRYPTION_KEY` |
 | `limits.max_item_size_bytes` | `EXTENDDB__LIMITS__MAX_ITEM_SIZE_BYTES` |
+| `limits.max_lsi_item_collection_size_bytes` | `EXTENDDB__LIMITS__MAX_LSI_ITEM_COLLECTION_SIZE_BYTES` |
 
 ### 2.3 Loading
 
@@ -140,6 +141,7 @@ timestamp_skew_secs = 300
 [limits]
 # Item & attribute limits
 max_item_size_bytes = 409600           # 400 KB
+max_lsi_item_collection_size_bytes = 10737418240  # 10 GB
 max_partition_key_size_bytes = 2048
 max_sort_key_size_bytes = 1024
 max_attribute_name_bytes = 65535
@@ -234,6 +236,7 @@ pub struct ServerConfig {
 pub struct LimitsConfig {
     // All fields have #[serde(default = "...")] with DynamoDB-compatible defaults
     pub max_item_size_bytes: usize,           // 409600
+    pub max_lsi_item_collection_size_bytes: usize, // 10737418240
     pub max_partition_key_size_bytes: usize,   // 2048
     pub max_sort_key_size_bytes: usize,        // 1024
     pub max_tables_per_account: usize,         // 2500

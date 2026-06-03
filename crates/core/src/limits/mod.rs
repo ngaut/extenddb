@@ -8,6 +8,9 @@ use serde::Deserialize;
 pub struct LimitsConfig {
     #[serde(default = "default_max_item_size")]
     pub max_item_size_bytes: usize,
+    /// Maximum total item bytes for one LSI item collection.
+    #[serde(default = "default_max_lsi_item_collection_size_bytes")]
+    pub max_lsi_item_collection_size_bytes: usize,
     #[serde(default = "default_max_pk_size")]
     pub max_partition_key_size_bytes: usize,
     #[serde(default = "default_max_sk_size")]
@@ -96,6 +99,7 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             max_item_size_bytes: default_max_item_size(),
+            max_lsi_item_collection_size_bytes: default_max_lsi_item_collection_size_bytes(),
             max_partition_key_size_bytes: default_max_pk_size(),
             max_sort_key_size_bytes: default_max_sk_size(),
             max_tables_per_account: default_max_tables(),
@@ -133,6 +137,9 @@ impl Default for LimitsConfig {
 
 fn default_max_item_size() -> usize {
     409_600
+}
+fn default_max_lsi_item_collection_size_bytes() -> usize {
+    10 * 1024 * 1024 * 1024
 }
 fn default_max_pk_size() -> usize {
     2048

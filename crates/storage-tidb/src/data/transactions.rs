@@ -20,6 +20,7 @@ use super::batch_write::{
     prepare_batch_put,
 };
 use super::index::validate_item_index_key_constraints;
+use super::item_collections::apply_lsi_item_collection_delta_in_tx;
 use super::tx_helpers::{
     StreamSequenceAllocator, check_idempotency_token_in_tx, delete_item_in_tx,
     delete_item_without_old_item_in_tx, fetch_item_for_update, finalize_stream_records_best_effort,
@@ -460,15 +461,17 @@ fn transact_op_stream_capture<'a>(op: &'a TransactWriteOp<'_>) -> Option<&'a Str
 fn transact_put_needs_existing_item(
     condition: Option<&extenddb_core::expression::Expr>,
     stream: &Option<StreamCapture>,
+    has_lsi: bool,
 ) -> bool {
-    condition.is_some() || stream.as_ref().is_some_and(stream_capture_needs_old_item)
+    has_lsi || condition.is_some() || stream.as_ref().is_some_and(stream_capture_needs_old_item)
 }
 
 fn transact_delete_needs_existing_item(
     condition: Option<&extenddb_core::expression::Expr>,
     stream: &Option<StreamCapture>,
+    has_lsi: bool,
 ) -> bool {
-    condition.is_some() || stream.as_ref().is_some_and(stream_capture_needs_old_item)
+    has_lsi || condition.is_some() || stream.as_ref().is_some_and(stream_capture_needs_old_item)
 }
 
 impl<'a> NativeTxnWriteBatch<'a> {
@@ -548,7 +551,7 @@ fn stage_native_transact_write_op<'a>(
             condition: None,
             stream: None,
             ..
-        } => {
+        } if !key_info.has_lsi => {
             validate_transact_put(key_info, item, indexes, limits)?;
             batch
                 .push_put(key_info, item)
@@ -561,7 +564,7 @@ fn stage_native_transact_write_op<'a>(
             condition: None,
             stream: None,
             ..
-        } => {
+        } if !key_info.has_lsi => {
             validate_transact_key_only(key_info, key)?;
             batch
                 .push_delete(key_info, key)
@@ -606,6 +609,15 @@ impl From<CancellationReason> for TxnOpError {
     }
 }
 
+fn txn_storage_or_cancel(error: StorageError) -> TxnOpError {
+    match error {
+        StorageError::ItemCollectionSizeLimitExceeded(message) => TxnOpError::Cancel(
+            CancellationReason::item_collection_size_limit_exceeded(message),
+        ),
+        other => TxnOpError::Storage(other),
+    }
+}
+
 /// Execute a single transactional write operation, including native index-key validation.
 /// Returns stream capture material on success.
 async fn execute_transact_write_op(
@@ -628,7 +640,7 @@ async fn execute_transact_write_op(
             // TransactionCanceledException with ValidationError cancellation
             // reasons, matching real DynamoDB behavior.
             validate_transact_put(key_info, item, indexes, limits)?;
-            if !transact_put_needs_existing_item(*condition, stream) {
+            if !transact_put_needs_existing_item(*condition, stream, key_info.has_lsi) {
                 let event = if stream.is_some() {
                     Some(
                         put_item_without_old_item_in_tx(tx, key_info, item)
@@ -666,6 +678,17 @@ async fn execute_transact_write_op(
                 )?;
                 existing
             };
+            let pk = physical_pk_bytes(item, &key_info.key_schema).map_err(TxnOpError::Storage)?;
+            apply_lsi_item_collection_delta_in_tx(
+                tx,
+                key_info,
+                &pk,
+                existing.as_ref(),
+                Some(item),
+                limits.max_lsi_item_collection_size_bytes,
+            )
+            .await
+            .map_err(txn_storage_or_cancel)?;
             upsert_item_in_tx(tx, key_info, item)
                 .await
                 .map_err(TxnOpError::Storage)?;
@@ -688,7 +711,7 @@ async fn execute_transact_write_op(
             ..
         } => {
             validate_transact_key_only(key_info, key)?;
-            if !transact_delete_needs_existing_item(*condition, stream) {
+            if !transact_delete_needs_existing_item(*condition, stream, key_info.has_lsi) {
                 let removed = delete_item_without_old_item_in_tx(tx, key_info, key)
                     .await
                     .map_err(TxnOpError::Storage)?;
@@ -718,6 +741,20 @@ async fn execute_transact_write_op(
                 )?;
                 existing
             };
+            if let Some(existing_item) = existing.as_ref() {
+                let pk =
+                    physical_pk_bytes(key, &key_info.key_schema).map_err(TxnOpError::Storage)?;
+                apply_lsi_item_collection_delta_in_tx(
+                    tx,
+                    key_info,
+                    &pk,
+                    Some(existing_item),
+                    None,
+                    limits.max_lsi_item_collection_size_bytes,
+                )
+                .await
+                .map_err(txn_storage_or_cancel)?;
+            }
             delete_item_in_tx(tx, key_info, key)
                 .await
                 .map_err(TxnOpError::Storage)?;
@@ -771,6 +808,17 @@ async fn execute_transact_write_op(
                 &key_info.attribute_definitions,
                 limits,
             )?;
+            let pk = physical_pk_bytes(key, &key_info.key_schema).map_err(TxnOpError::Storage)?;
+            apply_lsi_item_collection_delta_in_tx(
+                tx,
+                key_info,
+                &pk,
+                existing.as_ref(),
+                Some(&item),
+                limits.max_lsi_item_collection_size_bytes,
+            )
+            .await
+            .map_err(txn_storage_or_cancel)?;
             upsert_item_in_tx(tx, key_info, &item)
                 .await
                 .map_err(TxnOpError::Storage)?;
@@ -940,17 +988,24 @@ mod tests {
 
     #[test]
     fn unconditional_transaction_write_without_stream_skips_existing_item_read() {
-        assert!(!transact_put_needs_existing_item(None, &None));
-        assert!(!transact_delete_needs_existing_item(None, &None));
+        assert!(!transact_put_needs_existing_item(None, &None, false));
+        assert!(!transact_delete_needs_existing_item(None, &None, false));
+        assert!(transact_put_needs_existing_item(None, &None, true));
+        assert!(transact_delete_needs_existing_item(None, &None, true));
     }
 
     #[test]
     fn transaction_put_reads_existing_item_for_conditions_or_old_image_streams() {
         let condition = condition();
-        assert!(transact_put_needs_existing_item(Some(&condition), &None));
+        assert!(transact_put_needs_existing_item(
+            Some(&condition),
+            &None,
+            false
+        ));
         assert!(!transact_put_needs_existing_item(
             None,
-            &Some(stream_capture())
+            &Some(stream_capture()),
+            false
         ));
         assert!(transact_put_needs_existing_item(
             None,
@@ -958,7 +1013,8 @@ mod tests {
                 view_type: StreamViewType::OldImage,
                 user_identity: None,
                 region: Arc::from("us-east-1"),
-            })
+            }),
+            false
         ));
         assert!(transact_put_needs_existing_item(
             None,
@@ -966,17 +1022,23 @@ mod tests {
                 view_type: StreamViewType::NewAndOldImages,
                 user_identity: None,
                 region: Arc::from("us-east-1"),
-            })
+            }),
+            false
         ));
     }
 
     #[test]
     fn transaction_delete_reads_existing_item_only_for_conditions_or_old_image_streams() {
         let condition = condition();
-        assert!(transact_delete_needs_existing_item(Some(&condition), &None));
+        assert!(transact_delete_needs_existing_item(
+            Some(&condition),
+            &None,
+            false
+        ));
         assert!(!transact_delete_needs_existing_item(
             None,
-            &Some(stream_capture())
+            &Some(stream_capture()),
+            false
         ));
         assert!(!transact_delete_needs_existing_item(
             None,
@@ -984,7 +1046,8 @@ mod tests {
                 view_type: StreamViewType::NewImage,
                 user_identity: None,
                 region: Arc::from("us-east-1"),
-            })
+            }),
+            false
         ));
         assert!(transact_delete_needs_existing_item(
             None,
@@ -992,7 +1055,8 @@ mod tests {
                 view_type: StreamViewType::OldImage,
                 user_identity: None,
                 region: Arc::from("us-east-1"),
-            })
+            }),
+            false
         ));
         assert!(transact_delete_needs_existing_item(
             None,
@@ -1000,7 +1064,8 @@ mod tests {
                 view_type: StreamViewType::NewAndOldImages,
                 user_identity: None,
                 region: Arc::from("us-east-1"),
-            })
+            }),
+            false
         ));
     }
 
@@ -1120,6 +1185,43 @@ mod tests {
         assert_eq!(batch.groups.len(), 1);
         assert_eq!(batch.groups[0].puts.len(), 1);
         assert_eq!(batch.groups[0].deletes.len(), 1);
+    }
+
+    #[test]
+    fn lsi_transaction_put_delete_do_not_stage_native_batch() {
+        let mut key_info = key_info();
+        key_info.has_lsi = true;
+        let maps = ExpressionMaps::default();
+        let limits = LimitsConfig::default();
+        let put_item = item("put");
+        let delete_key = item("delete");
+        let mut batch = NativeTxnWriteBatch::default();
+
+        let put_op = TransactWriteOp::Put {
+            key_info: &key_info,
+            item: &put_item,
+            condition: None,
+            maps: &maps,
+            return_values_on_ccf: ReturnValuesOnConditionCheckFailure::None,
+            stream: None,
+        };
+        let put_outcome =
+            stage_native_transact_write_op(&put_op, &[], &limits, &mut batch).unwrap();
+
+        let delete_op = TransactWriteOp::Delete {
+            key_info: &key_info,
+            key: &delete_key,
+            condition: None,
+            maps: &maps,
+            return_values_on_ccf: ReturnValuesOnConditionCheckFailure::None,
+            stream: None,
+        };
+        let delete_outcome =
+            stage_native_transact_write_op(&delete_op, &[], &limits, &mut batch).unwrap();
+
+        assert!(put_outcome.is_none());
+        assert!(delete_outcome.is_none());
+        assert!(batch.groups.is_empty());
     }
 
     #[test]

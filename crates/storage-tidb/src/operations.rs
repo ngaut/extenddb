@@ -16,6 +16,7 @@ use futures::future::BoxFuture;
 use crate::data::{
     DATA_TABLE_METADATA_LIKE_BIND_CLAUSE, DATA_TABLE_METADATA_LIKE_BIND_PATTERN, data_table_name,
     native_index_key_tuple_columns, native_index_name, physical_data_table_name,
+    physical_item_collection_table_name,
 };
 use crate::metadata_engine::{create_table_has_disabled_ttl, create_table_has_native_ttl};
 use crate::tidb_util::{execute_tidb_idempotent_ddl, tidb_pool_options};
@@ -33,6 +34,32 @@ type NativeIndexArtifactRow = (
 );
 
 type CatalogTransitionRow = (String, String, String);
+
+fn catalog_status_requires_data_artifacts(status: &str) -> bool {
+    matches!(status, "ACTIVE" | "CREATING" | "UPDATING")
+}
+
+fn add_catalog_table_data_artifacts(
+    owned_artifacts: &mut HashSet<String>,
+    required_artifacts: &mut HashSet<String>,
+    table_id: &str,
+    table_status: &str,
+    has_lsi: bool,
+) {
+    let required = catalog_status_requires_data_artifacts(table_status);
+    let physical_name = physical_data_table_name(table_id);
+    owned_artifacts.insert(physical_name.clone());
+    if required {
+        required_artifacts.insert(physical_name);
+    }
+    if has_lsi {
+        let collection_name = physical_item_collection_table_name(table_id);
+        owned_artifacts.insert(collection_name.clone());
+        if required {
+            required_artifacts.insert(collection_name);
+        }
+    }
+}
 
 struct RequiredCatalogLookupIndex {
     table: &'static str,
@@ -160,9 +187,12 @@ async fn tidb_catalog_check(
         .await
         .map_err(|e| StorageError::Connection(format!("Cannot connect to data database: {e}")))?;
 
-    let catalog_tables: Vec<(String, String)> = sqlx::query_as(
-        "SELECT table_id, table_status FROM tables \
-         WHERE table_status IN ('ACTIVE', 'CREATING', 'UPDATING', 'DELETING')",
+    let catalog_tables: Vec<(String, String, Option<bool>)> = sqlx::query_as(
+        "SELECT t.table_id, t.table_status, \
+                EXISTS(SELECT 1 FROM indexes i \
+                       WHERE i.table_id = t.table_id AND i.index_type = 'LSI') AS has_lsi \
+         FROM tables t \
+         WHERE t.table_status IN ('ACTIVE', 'CREATING', 'UPDATING', 'DELETING')",
     )
     .fetch_all(&catalog_pool)
     .await
@@ -170,12 +200,14 @@ async fn tidb_catalog_check(
 
     let mut owned_artifacts: HashSet<String> = HashSet::new();
     let mut required_artifacts: HashSet<String> = HashSet::new();
-    for (table_id, table_status) in &catalog_tables {
-        let physical_name = physical_data_table_name(table_id);
-        owned_artifacts.insert(physical_name.clone());
-        if matches!(table_status.as_str(), "ACTIVE" | "CREATING" | "UPDATING") {
-            required_artifacts.insert(physical_name);
-        }
+    for (table_id, table_status, has_lsi) in &catalog_tables {
+        add_catalog_table_data_artifacts(
+            &mut owned_artifacts,
+            &mut required_artifacts,
+            table_id,
+            table_status,
+            has_lsi.unwrap_or(false),
+        );
     }
 
     let sql = format!(
@@ -541,17 +573,43 @@ impl OperationsEngine for TidbOperationsEngine {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use super::{
-        TidbDdlJob, catalog_lookup_index_issues, ddl_jobs_for_tables_sql, quote_tidb_identifier,
-        stale_catalog_transition_issues, stale_catalog_transitions_sql,
+        TidbDdlJob, add_catalog_table_data_artifacts, catalog_lookup_index_issues,
+        ddl_jobs_for_tables_sql, quote_tidb_identifier, stale_catalog_transition_issues,
+        stale_catalog_transitions_sql,
     };
 
     #[test]
     fn catalog_check_quotes_tidb_physical_table_names_for_cleanup() {
         assert_eq!(quote_tidb_identifier("_ddb_abc").unwrap(), "`_ddb_abc`");
         assert!(quote_tidb_identifier("_ddb_bad`name").is_err());
+    }
+
+    #[test]
+    fn catalog_check_owns_lsi_collection_table_artifacts() {
+        let mut owned = HashSet::new();
+        let mut required = HashSet::new();
+
+        add_catalog_table_data_artifacts(&mut owned, &mut required, "tableid", "ACTIVE", true);
+
+        assert!(owned.contains("_ddb_tableid"));
+        assert!(owned.contains("_ddb_tableid_collections"));
+        assert!(required.contains("_ddb_tableid"));
+        assert!(required.contains("_ddb_tableid_collections"));
+    }
+
+    #[test]
+    fn catalog_check_keeps_deleting_lsi_artifacts_owned_but_not_required() {
+        let mut owned = HashSet::new();
+        let mut required = HashSet::new();
+
+        add_catalog_table_data_artifacts(&mut owned, &mut required, "tableid", "DELETING", true);
+
+        assert!(owned.contains("_ddb_tableid"));
+        assert!(owned.contains("_ddb_tableid_collections"));
+        assert!(required.is_empty());
     }
 
     #[test]

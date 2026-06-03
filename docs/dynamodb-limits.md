@@ -54,7 +54,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Projected attributes across all indexes | 100 | Enforced | `validate_projected_attribute_count` counts INCLUDE `NonKeyAttributes` across GSIs/LSIs before CreateTable and TiDB GSI create |
 | Index name length | 3–255 characters | Enforced | `validate_index_name` |
 | Index name character set | `[a-zA-Z0-9_.-]` | Enforced | `validate_index_name` |
-| LSI item collection size | 10 GB | Not enforced | No item collection size tracking |
+| LSI item collection size | 10 GB | Enforced for TiDB | LSI tables store exact partition-key totals in a table-local `_collections` ledger; TiDB write transactions update old/new size deltas and reject positive deltas above `LimitsConfig::max_lsi_item_collection_size_bytes` |
 
 ## Query and Scan
 
@@ -150,7 +150,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Throughput | 6 | 0 | 0 | 2 |
 | Tables | 4 | 0 | 0 | 0 |
 | Items | 6 | 0 | 0 | 0 |
-| Secondary Indexes | 5 | 0 | 1 | 0 |
+| Secondary Indexes | 6 | 0 | 0 | 0 |
 | Query/Scan | 7 | 0 | 0 | 0 |
 | Batch Operations | 5 | 0 | 0 | 0 |
 | Transactions | 4 | 0 | 0 | 0 |
@@ -159,13 +159,7 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 | Import/Export/Backup | 0 | 0 | 0 | 8 |
 | Global Tables | 0 | 0 | 0 | 2 |
 | Contributor Insights | 0 | 0 | 0 | 1 |
-| **Total** | **45** | **0** | **1** | **14** |
-
-### Unenforced Limits Requiring Tracking
-
-The following unenforced limits are tracked in `docs/technical-debt.md`:
-
-1. **LSI item collection size** (10 GB) — requires per-partition size tracking in storage layer
+| **Total** | **46** | **0** | **0** | **14** |
 
 ---
 

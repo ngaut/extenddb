@@ -94,7 +94,7 @@ See `docs/dynamodb-limits.md` for the full catalog. The following are the highes
 | L-5 | ~~Shard iterator lifetime~~ | ~~15 minutes~~ | ~~Medium~~ | P42 |
 | L-6 | ~~Tag count per resource~~ | ~~50~~ | ~~Low~~ | P42 |
 | L-7 | ~~Tag key/value length limits~~ | ~~128/256 chars~~ | ~~Low~~ | P42 |
-| L-8 | LSI item collection size | 10 GB | Low | P42 |
+| L-8 | ~~LSI item collection size~~ | ~~10 GB~~ | ~~Low~~ | P42 |
 | L-9 | ~~Provisioned capacity decrease limit~~ | ~~27/day~~ | ~~Low~~ | P42 |
 | L-10 | ~~ExpressionAttributeNames/ExpressionAttributeValues aggregate size~~ | ~~2 MB each~~ | ~~Low~~ | P42 |
 

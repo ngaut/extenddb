@@ -305,6 +305,16 @@ impl CancellationReason {
             item: None,
         }
     }
+
+    /// Create a reason for an LSI item collection size limit failure.
+    #[must_use]
+    pub fn item_collection_size_limit_exceeded(msg: impl Into<String>) -> Self {
+        Self {
+            code: "ItemCollectionSizeLimitExceeded".to_owned(),
+            message: Some(msg.into()),
+            item: None,
+        }
+    }
 }
 
 #[cfg(test)]

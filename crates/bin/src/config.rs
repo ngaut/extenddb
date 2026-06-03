@@ -628,6 +628,10 @@ pub fn build_config_entries(cfg: &AppConfig) -> Vec<(String, String)> {
             lim.max_item_size_bytes.to_string(),
         ),
         (
+            "limits.max_lsi_item_collection_size_bytes".into(),
+            lim.max_lsi_item_collection_size_bytes.to_string(),
+        ),
+        (
             "limits.max_tables_per_account".into(),
             lim.max_tables_per_account.to_string(),
         ),

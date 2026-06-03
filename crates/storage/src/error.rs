@@ -26,6 +26,8 @@ pub enum StorageError {
     IdempotentMismatch,
     #[error("No-op update: {0}")]
     NoOpUpdate(String),
+    #[error("Item collection size limit exceeded: {0}")]
+    ItemCollectionSizeLimitExceeded(String),
     #[error("Validation error: {0}")]
     Validation(String),
     #[error(

@@ -145,6 +145,7 @@ key_path = "{tls_key}"
 [limits]
 # All defaults match real DynamoDB limits. Override only for testing.
 # max_item_size_bytes = 409600
+# max_lsi_item_collection_size_bytes = 10737418240
 # max_partition_key_size_bytes = 2048
 # max_sort_key_size_bytes = 1024
 # max_tables_per_account = 2500

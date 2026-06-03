@@ -19,7 +19,8 @@ use super::{
     DATA_TABLE_PARTITIONS, DATA_TABLE_SPLIT_REGIONS, DECIMAL_SPLIT_LOWER, DECIMAL_SPLIT_UPPER,
     DYNAMODB_HASH_KEY_COLUMN_BYTES, DYNAMODB_HASH_KEY_COLUMN_TYPE, DYNAMODB_SORT_KEY_COLUMN_BYTES,
     DYNAMODB_SORT_KEY_COLUMN_TYPE, VARBINARY_SPLIT_LOWER, all_sort_key_info, data_table_name,
-    physical_data_table_name, validate_native_key_schema_shape, varbinary_split_upper,
+    item_collection_table_name, physical_data_table_name, physical_item_collection_table_name,
+    validate_native_key_schema_shape, varbinary_split_upper,
 };
 use crate::TidbEngine;
 use crate::table_attributes::deny_table_region_merges;
@@ -120,6 +121,19 @@ fn data_table_ddl(
     ))
 }
 
+fn item_collection_table_ddl(table_id: &str) -> String {
+    let table = item_collection_table_name(table_id);
+    format!(
+        "CREATE TABLE {table} (\n    \
+         pk {DYNAMODB_HASH_KEY_COLUMN_TYPE} NOT NULL,\n    \
+         size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,\n    \
+         updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),\n    \
+         PRIMARY KEY (pk) CLUSTERED\n\
+         ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin\n\
+         PARTITION BY KEY(pk) PARTITIONS {DATA_TABLE_PARTITIONS}"
+    )
+}
+
 fn split_bound_for_sort_key(
     scalar_type: extenddb_core::types::ScalarAttributeType,
     lower: bool,
@@ -173,6 +187,13 @@ fn native_index_region_split_sql(table: &str, index_id: &str) -> String {
     )
 }
 
+fn item_collection_table_region_split_sql(table: &str) -> String {
+    let upper = varbinary_split_upper(DYNAMODB_HASH_KEY_COLUMN_BYTES);
+    format!(
+        "SPLIT TABLE {table} BETWEEN ({VARBINARY_SPLIT_LOWER}) AND ({upper}) REGIONS {DATA_TABLE_SPLIT_REGIONS}",
+    )
+}
+
 async fn split_native_secondary_index_regions(
     pool: &sqlx::MySqlPool,
     table_id: &str,
@@ -199,7 +220,27 @@ async fn split_data_table_regions(
     split_native_secondary_index_regions(pool, table_id, indexes).await
 }
 
+async fn create_item_collection_table(
+    pool: &sqlx::MySqlPool,
+    table_id: &str,
+) -> Result<(), StorageError> {
+    let ddl = item_collection_table_ddl(table_id);
+    execute_tidb_create_table_ddl(pool, "create_lsi_item_collection_table", &ddl).await?;
+    deny_table_region_merges(pool, &physical_item_collection_table_name(table_id)).await?;
+    let table = item_collection_table_name(table_id);
+    let split = item_collection_table_region_split_sql(&table);
+    execute_tidb_idempotent_ddl(pool, "split_lsi_item_collection_table_regions", &split).await?;
+    Ok(())
+}
+
 impl TidbEngine {
+    pub(crate) async fn ensure_lsi_item_collection_table(
+        pool: &sqlx::MySqlPool,
+        table_id: &str,
+    ) -> Result<(), StorageError> {
+        create_item_collection_table(pool, table_id).await
+    }
+
     /// Create the per-DynamoDB-table data table in `TiDB`.
     ///
     /// The DDL is dynamically
@@ -221,6 +262,7 @@ impl TidbEngine {
         key_schema: &[KeySchemaElement],
         attr_defs: &[AttributeDefinition],
         indexes: &[(&str, &[KeySchemaElement])],
+        has_lsi: bool,
     ) -> Result<(), StorageError> {
         let indexes = indexes
             .iter()
@@ -239,6 +281,9 @@ impl TidbEngine {
         }
         deny_table_region_merges(pool, &physical_data_table_name(table_id)).await?;
         split_data_table_regions(pool, table_id, key_schema, attr_defs, &indexes).await?;
+        if has_lsi {
+            Self::ensure_lsi_item_collection_table(pool, table_id).await?;
+        }
 
         Ok(())
     }
@@ -257,6 +302,9 @@ impl TidbEngine {
         let ddb_table = data_table_name(table_id);
         let ddl = format!("DROP TABLE IF EXISTS {ddb_table}");
         execute_tidb_idempotent_ddl(pool, "drop_data_table", &ddl).await?;
+        let collection_table = item_collection_table_name(table_id);
+        let ddl = format!("DROP TABLE IF EXISTS {collection_table}");
+        execute_tidb_idempotent_ddl(pool, "drop_item_collection_table", &ddl).await?;
         Ok(())
     }
 
@@ -612,7 +660,8 @@ mod tests {
     };
 
     use super::{
-        data_table_ddl, data_table_region_split_sql, native_index_region_split_sql,
+        data_table_ddl, data_table_region_split_sql, item_collection_table_ddl,
+        item_collection_table_region_split_sql, native_index_region_split_sql,
         table_accepts_data_plane, varbinary_split_upper,
     };
     use crate::data::{
@@ -711,6 +760,30 @@ mod tests {
         assert!(!ddl.contains("IF NOT EXISTS"));
         assert!(!ddl.contains("ALTER TABLE"));
         assert!(ddl.contains("PARTITION BY KEY(pk) PARTITIONS 16"));
+    }
+
+    #[test]
+    fn lsi_item_collection_table_is_table_local_and_partitioned_by_pk() {
+        let ddl = item_collection_table_ddl("tableid");
+
+        assert!(ddl.starts_with("CREATE TABLE `_ddb_tableid_collections`"));
+        assert!(ddl.contains("pk VARBINARY(2048) NOT NULL"));
+        assert!(ddl.contains("PRIMARY KEY (pk) CLUSTERED"));
+        assert!(ddl.contains("DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin"));
+        assert!(ddl.ends_with("PARTITION BY KEY(pk) PARTITIONS 16"));
+        assert!(!ddl.contains("table_id"));
+        assert!(!ddl.contains("initialized"));
+    }
+
+    #[test]
+    fn lsi_item_collection_table_is_split_by_pk_keyspace() {
+        assert_eq!(
+            item_collection_table_region_split_sql("`_ddb_tableid_collections`"),
+            format!(
+                "SPLIT TABLE `_ddb_tableid_collections` BETWEEN (X'') AND ({}) REGIONS 16",
+                varbinary_split_upper(DYNAMODB_HASH_KEY_COLUMN_BYTES)
+            )
+        );
     }
 
     #[test]

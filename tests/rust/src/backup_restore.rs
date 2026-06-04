@@ -391,7 +391,8 @@ async fn restore_table_to_point_in_time() {
     let table = format!("PITRRestore_{}", ts());
     make_table(&table).await;
 
-    // PITR restore is not yet implemented — should return an error.
+    // ExtendDB intentionally does not emulate table-level PITR restore when a
+    // backend cannot perform it as a native online restore into a live target.
     let restored = format!("PITRRestored_{}", ts());
     let err = c
         .restore_table_to_point_in_time()
@@ -399,11 +400,9 @@ async fn restore_table_to_point_in_time() {
         .target_table_name(&restored)
         .use_latest_restorable_time(true)
         .send()
-        .await;
-    assert!(
-        err.is_err(),
-        "RestoreTableToPointInTime should return an error (not yet supported)"
-    );
+        .await
+        .unwrap_err();
+    assert_eq!(err_code(&err), Some("ValidationException"));
 
     c.delete_table().table_name(&table).send().await.ok();
 }

@@ -8,11 +8,13 @@
 name = "extenddb-integration-tests"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 publish = false
 
 # Empty workspace table — this crate is intentionally NOT part of the
 # product workspace (tenet 6: tests live outside the core).
 [workspace]
+resolver = "3"
 
 # To override AWS SDK crates with a local checkout, create .cargo/config.toml:
 #   [paths]

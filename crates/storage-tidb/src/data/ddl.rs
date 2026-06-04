@@ -409,22 +409,12 @@ impl TidbEngine {
         account_id: &str,
         table_name: &str,
     ) -> Result<TableKeyInfo, StorageError> {
-        let row: Option<TableWriteInfoRow> = sqlx::query_as(
-            "SELECT key_schema, attribute_definitions, table_status, table_id, \
-             stream_specification, stream_label, \
-             EXISTS(SELECT 1 FROM indexes WHERE table_id = tables.table_id AND index_type = 'LSI') AS has_lsi, \
-             COALESCE(( \
-                 SELECT JSON_ARRAYAGG(key_schema) FROM indexes \
-                 WHERE table_id = tables.table_id AND index_status IN ('ACTIVE', 'CREATING') \
-             ), JSON_ARRAY()) AS secondary_index_key_schemas \
-             FROM tables \
-             WHERE account_id = ? AND table_name = ?",
-        )
-        .bind(account_id)
-        .bind(table_name)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| StorageError::Internal(e.to_string()))?;
+        let row: Option<TableWriteInfoRow> = sqlx::query_as(table_write_info_sql())
+            .bind(account_id)
+            .bind(table_name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
 
         let (
             ks_json,
@@ -653,6 +643,21 @@ impl TidbEngine {
     }
 }
 
+fn table_write_info_sql() -> &'static str {
+    "SELECT key_schema, attribute_definitions, table_status, table_id, \
+     stream_specification, stream_label, \
+     EXISTS(SELECT 1 FROM indexes WHERE table_id = tables.table_id AND index_type = 'LSI') AS has_lsi, \
+     CASE WHEN EXISTS( \
+         SELECT 1 FROM indexes \
+         WHERE table_id = tables.table_id AND index_status IN ('ACTIVE', 'CREATING') \
+     ) THEN ( \
+         SELECT JSON_ARRAYAGG(key_schema) FROM indexes \
+         WHERE table_id = tables.table_id AND index_status IN ('ACTIVE', 'CREATING') \
+     ) ELSE JSON_ARRAY() END AS secondary_index_key_schemas \
+     FROM tables \
+     WHERE account_id = ? AND table_name = ?"
+}
+
 #[cfg(test)]
 mod tests {
     use extenddb_core::types::{
@@ -662,7 +667,7 @@ mod tests {
     use super::{
         data_table_ddl, data_table_region_split_sql, item_collection_table_ddl,
         item_collection_table_region_split_sql, native_index_region_split_sql,
-        table_accepts_data_plane, varbinary_split_upper,
+        table_accepts_data_plane, table_write_info_sql, varbinary_split_upper,
     };
     use crate::data::{
         DYNAMODB_HASH_KEY_COLUMN_BYTES, DYNAMODB_SORT_KEY_COLUMN_BYTES, index::NativeSecondaryIndex,
@@ -680,6 +685,15 @@ mod tests {
             attribute_name: name.to_owned(),
             key_type,
         }
+    }
+
+    #[test]
+    fn table_write_info_uses_empty_json_array_for_tables_without_indexes() {
+        let sql = table_write_info_sql();
+
+        assert!(sql.contains("CASE WHEN EXISTS"));
+        assert!(sql.contains("ELSE JSON_ARRAY() END AS secondary_index_key_schemas"));
+        assert!(!sql.contains("COALESCE(("));
     }
 
     #[test]

@@ -138,6 +138,8 @@ const DATA_IDEMPOTENCY_TOKEN_NATIVE_LAYOUT_MARKER_MIGRATION: &str =
     include_str!("../../storage-tidb/data_migrations/005_idempotency_token_native_layout.sql");
 const DATA_STREAM_READER_LEASES_MIGRATION: &str =
     include_str!("../../storage-tidb/data_migrations/006_stream_reader_leases.sql");
+const DATA_IDEMPOTENCY_TOKEN_LOOKUP_INDEX_MIGRATION: &str =
+    include_str!("../../storage-tidb/data_migrations/007_idempotency_token_lookup_index.sql");
 pub(crate) const DATA_MIGRATIONS: &[(&str, &str)] = &[
     ("001_data_schema.sql", DATA_SCHEMA_MIGRATION),
     (
@@ -155,6 +157,10 @@ pub(crate) const DATA_MIGRATIONS: &[(&str, &str)] = &[
     (
         "006_stream_reader_leases.sql",
         DATA_STREAM_READER_LEASES_MIGRATION,
+    ),
+    (
+        "007_idempotency_token_lookup_index.sql",
+        DATA_IDEMPOTENCY_TOKEN_LOOKUP_INDEX_MIGRATION,
     ),
 ];
 #[cfg(test)]
@@ -441,7 +447,8 @@ async fn idempotency_token_layout_is_native(pool: &MySqlPool) -> OpResult<bool> 
         return Ok(false);
     }
 
-    idempotency_token_unique_index_is_native(pool).await
+    Ok(idempotency_token_unique_index_is_native(pool).await?
+        && idempotency_token_lookup_index_exists(pool).await?)
 }
 
 async fn idempotency_token_unique_index_is_native(pool: &MySqlPool) -> OpResult<bool> {
@@ -474,6 +481,25 @@ async fn idempotency_token_unique_index_is_native(pool: &MySqlPool) -> OpResult<
         && rows[1].1.as_deref() == Some("token_hash")
         && rows[2].0 == 3
         && rows[2].1.as_deref() == Some("token"))
+}
+
+async fn idempotency_token_lookup_index_exists(pool: &MySqlPool) -> OpResult<bool> {
+    let rows: Vec<(i64, Option<String>, String)> = sqlx::query_as(
+        "SELECT SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE \
+         FROM information_schema.statistics \
+         WHERE TABLE_SCHEMA = DATABASE() \
+           AND TABLE_NAME = 'idempotency_tokens' \
+           AND INDEX_NAME = 'idx_idempotency_tokens_token_lookup' \
+         ORDER BY SEQ_IN_INDEX",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| OpError::Internal(format!("Inspect TiDB idempotency token lookup index: {e}")))?;
+
+    Ok(rows.len() == 1
+        && rows[0].0 == 1
+        && rows[0].1.as_deref() == Some("token")
+        && rows[0].2 == "1")
 }
 
 fn information_schema_null(value: Option<&str>) -> bool {
@@ -537,7 +563,7 @@ fn incompatible_idempotency_token_layout_error(observed: String) -> OpError {
     OpError::Internal(format!(
         "TiDB idempotency_tokens must use native AUTO_RANDOM clustered token_id primary key, \
          generated token_hash = CRC32(token), NOT NULL claim_id, and a \
-         TIDB_SHARD unique token index; {observed}. Recreate the TiDB data database \
+         TIDB_SHARD unique token index plus token lookup index; {observed}. Recreate the TiDB data database \
          with the current ExtendDB TiDB schema before serving distributed transaction writes."
     ))
 }
@@ -1393,6 +1419,19 @@ mod tests {
     }
 
     #[test]
+    fn data_migration_adds_idempotency_token_lookup_index() {
+        let (filename, sql) = DATA_MIGRATIONS
+            .iter()
+            .find(|(filename, _)| *filename == "007_idempotency_token_lookup_index.sql")
+            .expect("idempotency token lookup index migration");
+
+        assert_eq!(*filename, "007_idempotency_token_lookup_index.sql");
+        assert!(sql.contains("ADD INDEX IF NOT EXISTS idx_idempotency_tokens_token_lookup"));
+        assert!(sql.contains("(token)"));
+        assert!(!sql.contains("idx_idempotency_tokens_token_lookup ((TIDB_SHARD"));
+    }
+
+    #[test]
     fn user_table_split_repair_is_a_dynamic_data_migration() {
         assert_eq!(
             USER_TABLE_FULL_KEYSPACE_SPLITS_MIGRATION,
@@ -1420,6 +1459,7 @@ mod tests {
         };
         assert!(error.contains("AUTO_RANDOM clustered token_id primary key"));
         assert!(error.contains("TIDB_SHARD unique token index"));
+        assert!(error.contains("token lookup index"));
         assert!(error.contains("Recreate the TiDB data database"));
     }
 
@@ -1528,6 +1568,7 @@ mod tests {
         assert!(DATA_SCHEMA_MIGRATION.contains(
             "UNIQUE KEY uk_idempotency_tokens_token ((TIDB_SHARD(token_hash)), token_hash, token)"
         ));
+        assert!(DATA_SCHEMA_MIGRATION.contains("KEY idx_idempotency_tokens_token_lookup (token)"));
         assert!(DATA_SCHEMA_MIGRATION.contains("PRIMARY KEY (token_id) CLUSTERED"));
         assert!(DATA_SCHEMA_MIGRATION.contains("PRE_SPLIT_REGIONS = 4"));
     }

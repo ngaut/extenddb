@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS idempotency_tokens (
     claim_id    VARCHAR(36) NOT NULL,
     created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (token_id) CLUSTERED,
-    UNIQUE KEY uk_idempotency_tokens_token ((TIDB_SHARD(token_hash)), token_hash, token)
+    UNIQUE KEY uk_idempotency_tokens_token ((TIDB_SHARD(token_hash)), token_hash, token),
+    KEY idx_idempotency_tokens_token_lookup (token)
 ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
   PRE_SPLIT_REGIONS = 4
   TTL = `created_at` + INTERVAL 600 SECOND TTL_JOB_INTERVAL = '10m';

@@ -603,9 +603,10 @@ pub(super) async fn check_idempotency_token_in_tx(
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
 
+    // The claim upsert already owns the conflict path. Use the plain token
+    // lookup index here; TiDB 8.5.6 can panic when a post-upsert prepared read
+    // probes the TIDB_SHARD(token_hash) expression index through UnionScan.
     let row: Option<(String, String)> = sqlx::query_as(idempotency_token_claim_select_sql())
-        .bind(storage_key)
-        .bind(storage_key)
         .bind(storage_key)
         .fetch_optional(&mut **tx)
         .await
@@ -631,10 +632,7 @@ fn idempotency_token_claim_sql() -> &'static str {
 
 fn idempotency_token_claim_select_sql() -> &'static str {
     "SELECT fingerprint, claim_id FROM idempotency_tokens \
-     WHERE TIDB_SHARD(token_hash) = TIDB_SHARD(CRC32(?)) \
-       AND token_hash = CRC32(?) \
-       AND token = ? \
-     FOR UPDATE"
+     WHERE token = ?"
 }
 
 #[cfg(test)]
@@ -681,13 +679,13 @@ mod tests {
     }
 
     #[test]
-    fn idempotency_token_claim_read_uses_native_shard_index_point_lookup() {
+    fn idempotency_token_claim_read_uses_plain_token_lookup_index() {
         let sql = idempotency_token_claim_select_sql();
 
-        assert!(sql.contains("TIDB_SHARD(token_hash) = TIDB_SHARD(CRC32(?))"));
-        assert!(sql.contains("token_hash = CRC32(?)"));
+        assert!(!sql.contains("TIDB_SHARD"));
+        assert!(!sql.contains("CRC32"));
+        assert!(!sql.contains("token_hash"));
         assert!(sql.contains("token = ?"));
-        assert!(sql.contains("FOR UPDATE"));
     }
 
     #[test]

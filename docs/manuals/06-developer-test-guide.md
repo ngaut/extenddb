@@ -191,9 +191,10 @@ devtools/tidb-acceptance --full
 ```
 
 `--changed` maps touched files to shell, whitespace, live-smoke, Rust, and
-documentation checks. `--full` runs shell checks, `git diff --check`, the live
-TiDB native-read smoke, `storage-tidb` tests and clippy, `extenddb --features
-tidb` tests and clippy, and documentation build. Each run writes a single
+Rust SDK compile checks, and documentation checks. `--full` runs shell checks,
+`git diff --check`, the live TiDB native-read smoke, `storage-tidb` tests and
+clippy, `extenddb --features tidb` tests and clippy, the standalone Rust SDK
+integration test compile, and documentation build. Each run writes a single
 artifact under `discussions/`, so TiDB backend proof is not lost in terminal
 scrollback.
 

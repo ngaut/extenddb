@@ -56,10 +56,11 @@ devtools/tidb-acceptance --full
 ```
 
 `devtools/tidb-acceptance --changed` maps touched files to the relevant shell,
-diff, live-smoke, Rust, and documentation checks. `--full` runs the complete
-TiDB developer gate: shell checks, whitespace, the live native-read smoke,
-`storage-tidb` tests and clippy, `extenddb --features tidb` tests and clippy,
-and documentation build.
+diff, live-smoke, Rust, Rust SDK compile, and documentation checks. `--full`
+runs the complete TiDB developer gate: shell checks, whitespace, the live
+native-read smoke, `storage-tidb` tests and clippy, `extenddb --features tidb`
+tests and clippy, standalone Rust SDK integration test compile, and
+documentation build.
 
 Pass `--with-playground` to let the acceptance loop start a local TiUP
 playground only when `127.0.0.1:4000` is down, wait for TiDB readiness, run the

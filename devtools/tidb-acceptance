@@ -22,6 +22,7 @@ RUN_SDK=false
 RUN_DOCS=false
 RUN_SHELL=false
 RUN_DIFF=true
+DRY_RUN=false
 MANAGE_PLAYGROUND=false
 
 MYSQL_BIN="${EXTENDDB_TIDB_MYSQL:-}"
@@ -48,6 +49,9 @@ Modes:
   --sdk                      compile standalone Rust SDK integration tests
   --docs                     rebuild documentation artifacts
   --full                     run shell, diff, smoke, rust, sdk, and docs checks
+
+Planning:
+  --dry-run                  show selected checks without running them
 
 Options passed through to the live smoke:
   --mysql PATH
@@ -83,6 +87,7 @@ while [[ $# -gt 0 ]]; do
         --rust) RUN_RUST=true; shift ;;
         --sdk) RUN_SDK=true; shift ;;
         --docs) RUN_DOCS=true; shift ;;
+        --dry-run) DRY_RUN=true; shift ;;
         --full)
             RUN_SMOKE=true
             RUN_RUST=true
@@ -404,7 +409,14 @@ echo "  rust:     ${RUN_RUST}"
 echo "  sdk:      ${RUN_SDK}"
 echo "  docs:     ${RUN_DOCS}"
 echo "  playground: ${MANAGE_PLAYGROUND}"
+echo "  dry-run:  ${DRY_RUN}"
 echo ""
+
+if $DRY_RUN; then
+    echo "[ok] dry run complete; no checks executed"
+    echo "artifact: ${ARTIFACT}"
+    exit 0
+fi
 
 if $RUN_SHELL; then
     run_step "shell script checks" run_shell_checks

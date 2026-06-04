@@ -4,7 +4,6 @@ Refreshed: v0.0.118 (P115)
 
 ## Fidelity Bugs
 
-- ⬜ **Tagging rate limiting** — extenddb should implement `LimitExceededException` for rapid tag operations to match real DynamoDB behavior. 5 tagging tests fail against real DynamoDB due to this. (P114 follow-up)
 - ⬜ **Key-vs-item size gap** — batch/transact delete/update WCU uses key size, not old item size. Minor fidelity gap.
 
 ## Test Gaps
@@ -26,12 +25,12 @@ Refreshed: v0.0.118 (P115)
 ## Feature Backlog (no phase assigned)
 
 - ⬜ **Ion parser** — `InputFormat::Ion` falls through to DynamoDB JSON reader. Full Ion support needed for import/export.
-- ⬜ **Key-vs-item size gap** — batch/transact delete/update WCU uses key size, not old item size. Minor fidelity gap.
 - ⬜ **PostgreSQL single-frontend-per-catalog enforcement** — the PostgreSQL backend still needs an HA-safe worker coordination design before shared-catalog multi-frontend deployment. TiDB is not blocked by this item because the TiDB backend uses idempotent catalog reconciliation and TiDB-native online DDL scheduling.
 - ⬜ **C/C++ test suite** — human has not confirmed whether this is desired. Rust + Python + Java suites are complete.
 
 ## Native Backend Boundaries
 
+- ✅ **DynamoDB tag API TPS boundary** — ExtendDB does not emulate AWS control-plane tag API TPS quotas with a frontend token bucket. If customer evidence makes this goal-critical, implement it as a storage-owned TiDB counter, not process-local throttling. Until then, prefer documenting the AWS quota difference over adding a distributed rate-limit subsystem to the hot archive path.
 - ✅ **TiDB table-level PITR restore boundary** — ExtendDB does not implement DynamoDB `RestoreTableToPointInTime` by replaying historical rows into a live table. TiDB BR PITR restores into an empty or conflict-free recovery cluster, `FLASHBACK TABLE` covers dropped/truncated tables, and historical reads are read-only for this live-target restore shape. If TiDB adds a native set-based online restore into a new table, this can move back to the feature backlog.
 
 ## Standing Items (need human decision)

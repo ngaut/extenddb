@@ -48,6 +48,9 @@ the full integration suite:
 # Select checks from files changed from HEAD
 devtools/tidb-acceptance --changed
 
+# Preview the selected checks without running them
+devtools/tidb-acceptance --changed --dry-run
+
 # Select checks and start/stop a local TiUP playground when needed
 devtools/tidb-acceptance --changed --with-playground
 
@@ -56,8 +59,9 @@ devtools/tidb-acceptance --full
 ```
 
 `devtools/tidb-acceptance --changed` maps touched files to the relevant shell,
-diff, live-smoke, Rust, Rust SDK compile, and documentation checks. `--full`
-runs the complete TiDB developer gate: shell checks, whitespace, the live
+diff, live-smoke, Rust, Rust SDK compile, and documentation checks. Add
+`--dry-run` to preview the selected gate without executing it. `--full` runs
+the complete TiDB developer gate: shell checks, whitespace, the live
 native-read smoke, `storage-tidb` tests and clippy, `extenddb --features tidb`
 tests and clippy, standalone Rust SDK integration test compile, and
 documentation build.

@@ -19,6 +19,7 @@ RUN_CHANGED=false
 RUN_SMOKE=false
 RUN_RUST=false
 RUN_SDK=false
+RUN_SDK_SMOKE=false
 RUN_DOCS=false
 RUN_SHELL=false
 RUN_DIFF=true
@@ -47,6 +48,7 @@ Modes:
   --smoke                    run live TiDB-native smoke checks
   --rust                     run TiDB Rust tests and clippy checks
   --sdk                      compile standalone Rust SDK integration tests
+  --sdk-smoke                run live DynamoDB SDK smoke against ExtendDB
   --docs                     rebuild documentation artifacts
   --full                     run shell, diff, smoke, rust, sdk, and docs checks
 
@@ -72,6 +74,10 @@ Environment:
   EXTENDDB_TIDB_USER, EXTENDDB_TIDB_PASSWORD,
   EXTENDDB_TIDB_MYSQL_PLUGIN_DIR, EXTENDDB_TIDB_STALENESS_SECONDS,
   EXTENDDB_TIDB_PLAYGROUND_VERSION, EXTENDDB_TIDB_PLAYGROUND_TAG.
+
+  --sdk-smoke also uses EXTENDDB_TEST_ENDPOINT, AWS_ACCESS_KEY_ID, and
+  AWS_SECRET_ACCESS_KEY. If SDK credentials are missing and
+  EXTENDDB_ADMIN_PASSWORD is set, devtools/tidb-sdk-smoke provisions them.
 EOF
 }
 
@@ -86,6 +92,7 @@ while [[ $# -gt 0 ]]; do
         --smoke) RUN_SMOKE=true; shift ;;
         --rust) RUN_RUST=true; shift ;;
         --sdk) RUN_SDK=true; shift ;;
+        --sdk-smoke) RUN_SDK_SMOKE=true; shift ;;
         --docs) RUN_DOCS=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --full)
@@ -138,7 +145,7 @@ if [[ -z "$PLUGIN_DIR" ]]; then
     PLUGIN_DIR="$(default_mysql_plugin_dir)"
 fi
 
-if ! $RUN_CHANGED && ! $RUN_SMOKE && ! $RUN_RUST && ! $RUN_SDK && ! $RUN_DOCS && ! $RUN_SHELL; then
+if ! $RUN_CHANGED && ! $RUN_SMOKE && ! $RUN_RUST && ! $RUN_SDK && ! $RUN_SDK_SMOKE && ! $RUN_DOCS && ! $RUN_SHELL; then
     echo "error: choose at least one mode"
     usage
     exit 1
@@ -350,11 +357,23 @@ stop_managed_playground() {
 
 trap stop_managed_playground EXIT
 
+python_for_tools() {
+    if [[ -x ".venv/bin/python" ]]; then
+        printf '%s\n' ".venv/bin/python"
+    else
+        printf '%s\n' "python3"
+    fi
+}
+
 run_shell_checks() {
+    local python_bin
+    python_bin="$(python_for_tools)"
     bash -n devtools/tidb-native-read-smoke
     bash -n devtools/tidb-acceptance
+    "$python_bin" -m py_compile devtools/provision-test-credentials devtools/tidb-sdk-smoke
     devtools/tidb-native-read-smoke --help >/dev/null
     devtools/tidb-acceptance --help >/dev/null
+    "$python_bin" devtools/tidb-sdk-smoke --help >/dev/null
 }
 
 run_smoke_checks() {
@@ -382,11 +401,7 @@ run_smoke_checks() {
 }
 
 python_for_docs() {
-    if [[ -x ".venv/bin/python" ]]; then
-        printf '%s\n' ".venv/bin/python"
-    else
-        printf '%s\n' "python3"
-    fi
+    python_for_tools
 }
 
 run_docs_check() {
@@ -399,6 +414,12 @@ run_sdk_client_check() {
     cargo test -j12 --manifest-path tests/rust/Cargo.toml --no-run
 }
 
+run_sdk_smoke_check() {
+    local python_bin
+    python_bin="$(python_for_tools)"
+    "$python_bin" devtools/tidb-sdk-smoke
+}
+
 echo "=== TiDB acceptance ==="
 echo "  commit:   ${HASH}"
 echo "  artifact: ${ARTIFACT}"
@@ -407,6 +428,7 @@ echo "  diff:     ${RUN_DIFF}"
 echo "  smoke:    ${RUN_SMOKE}"
 echo "  rust:     ${RUN_RUST}"
 echo "  sdk:      ${RUN_SDK}"
+echo "  sdk smoke: ${RUN_SDK_SMOKE}"
 echo "  docs:     ${RUN_DOCS}"
 echo "  playground: ${MANAGE_PLAYGROUND}"
 echo "  dry-run:  ${DRY_RUN}"
@@ -444,6 +466,10 @@ fi
 
 if $RUN_SDK; then
     run_step "Rust SDK integration test compile" run_sdk_client_check
+fi
+
+if $RUN_SDK_SMOKE; then
+    run_step "TiDB SDK customer smoke" run_sdk_smoke_check
 fi
 
 if $RUN_DOCS; then

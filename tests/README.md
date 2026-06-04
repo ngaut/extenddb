@@ -54,6 +54,12 @@ devtools/tidb-acceptance --changed --dry-run
 # Select checks and start/stop a local TiUP playground when needed
 devtools/tidb-acceptance --changed --with-playground
 
+# Run the live customer SDK smoke against a running TiDB-backed ExtendDB
+EXTENDDB_TEST_ENDPOINT=https://127.0.0.1:8000 \
+EXTENDDB_ADMIN_USER=admin \
+EXTENDDB_ADMIN_PASSWORD=<password-from-init> \
+devtools/tidb-acceptance --sdk-smoke
+
 # Run the full TiDB backend developer gate
 devtools/tidb-acceptance --full
 ```
@@ -79,6 +85,14 @@ native secondary index, then drops the database on exit. If your mysql client
 needs an explicit auth plugin directory, set `EXTENDDB_TIDB_MYSQL_PLUGIN_DIR` or
 pass `--plugin-dir`; Homebrew `mysql-client` plugin directories are detected
 automatically when available.
+
+The customer-path SDK smoke uses `devtools/tidb-sdk-smoke`. Start ExtendDB with
+the TiDB backend first, then run `devtools/tidb-acceptance --sdk-smoke`. The
+smoke creates a no-index table, verifies PutItem/GetItem, BatchWriteItem,
+TransactWriteItems, idempotent transaction replay, idempotency mismatch
+rejection, and table cleanup. If `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+are not set but `EXTENDDB_ADMIN_PASSWORD` is available, it provisions temporary
+test credentials through `devtools/provision-test-credentials`.
 
 ## Running against real DynamoDB
 

@@ -902,8 +902,8 @@ async fn run_sql_script(pool: &MySqlPool, sql: &str, label: &str) -> OpResult<()
         .map_err(|e| OpError::Internal(format!("Acquire migration connection: {e}")))?;
     configure_migration_session(&mut conn, label).await?;
     let restores_foreign_key_checks = sql.contains("FOREIGN_KEY_CHECKS");
-    for statement in sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
-        if let Err(err) = sqlx::query(statement).execute(&mut *conn).await {
+    for statement in sql_script_statements(sql) {
+        if let Err(err) = sqlx::query(&statement).execute(&mut *conn).await {
             if restores_foreign_key_checks {
                 let _ = sqlx::query("SET FOREIGN_KEY_CHECKS = 1")
                     .execute(&mut *conn)
@@ -915,6 +915,20 @@ async fn run_sql_script(pool: &MySqlPool, sql: &str, label: &str) -> OpResult<()
         }
     }
     Ok(())
+}
+
+fn sql_script_statements(sql: &str) -> Vec<String> {
+    let without_line_comments = sql
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    without_line_comments
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 async fn configure_migration_session(conn: &mut MySqlConnection, label: &str) -> OpResult<()> {
@@ -999,9 +1013,31 @@ mod tests {
         incompatible_dynamodb_hash_key_column_error,
         incompatible_dynamodb_secondary_index_global_error,
         incompatible_idempotency_token_layout_error, incompatible_stream_record_layout_error,
-        information_schema_null, should_apply_consolidated_catalog_schema,
+        information_schema_null, should_apply_consolidated_catalog_schema, sql_script_statements,
     };
     use crate::{CATALOG_VERSION, data::USER_TABLE_FULL_KEYSPACE_SPLITS_MIGRATION};
+
+    #[test]
+    fn sql_script_statements_strip_comment_only_lines() {
+        let statements = sql_script_statements(
+            "-- Copyright 2026 ExtendDB contributors\n\
+             -- SPDX-License-Identifier: Apache-2.0\n\
+             \n\
+             ALTER TABLE idempotency_tokens\n\
+                 ADD INDEX IF NOT EXISTS idx_idempotency_tokens_token_lookup (token);\n\
+             \n\
+             -- Keep the migration idempotent through schema_history.\n\
+             INSERT IGNORE INTO data_schema_history (filename) VALUES ('x.sql');\n",
+        );
+
+        assert_eq!(
+            statements,
+            vec![
+                "ALTER TABLE idempotency_tokens\nADD INDEX IF NOT EXISTS idx_idempotency_tokens_token_lookup (token)",
+                "INSERT IGNORE INTO data_schema_history (filename) VALUES ('x.sql')",
+            ]
+        );
+    }
 
     #[test]
     fn catalog_migration_pins_binary_collation_defaults() {

@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+# Copyright 2026 ExtendDB contributors
+# SPDX-License-Identifier: Apache-2.0
+"""Run a live DynamoDB SDK smoke against a TiDB-backed ExtendDB endpoint.
+
+This is the customer-path smoke for TiDB backend work. It exercises the cases
+that are easy to miss with SQL-only checks: a no-index table, normal item IO,
+BatchWriteItem, TransactWriteItems, and ClientRequestToken idempotency.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shlex
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_REGION = "us-east-1"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run a live DynamoDB SDK smoke against an ExtendDB endpoint. "
+            "Start ExtendDB with the TiDB backend before running this command."
+        )
+    )
+    parser.add_argument(
+        "--endpoint",
+        default=os.environ.get("EXTENDDB_TEST_ENDPOINT", "").strip(),
+        help="ExtendDB endpoint URL, defaults to EXTENDDB_TEST_ENDPOINT.",
+    )
+    parser.add_argument(
+        "--region",
+        default=os.environ.get("AWS_DEFAULT_REGION", DEFAULT_REGION),
+        help=f"AWS region for SigV4 signing, defaults to {DEFAULT_REGION}.",
+    )
+    parser.add_argument(
+        "--table-prefix",
+        default="extenddb-sdk-smoke",
+        help="Prefix for the throwaway table name.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=60.0,
+        help="Seconds to wait for table state transitions.",
+    )
+    parser.add_argument(
+        "--provision",
+        action="store_true",
+        help="Run devtools/provision-test-credentials before the smoke.",
+    )
+    parser.add_argument(
+        "--no-auto-provision",
+        action="store_true",
+        help=(
+            "Do not auto-provision when AWS credentials are missing and "
+            "EXTENDDB_ADMIN_PASSWORD is set."
+        ),
+    )
+    return parser.parse_args()
+
+
+def sdk_modules() -> tuple[Any, Any, Any]:
+    try:
+        import boto3
+        import urllib3
+        from botocore.config import Config
+        from botocore.exceptions import ClientError
+    except ImportError as exc:
+        print(
+            "error: boto3 dependencies are missing; install requirements.txt "
+            "or run from .venv",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    return boto3, Config, ClientError
+
+
+def parse_export_line(line: str) -> tuple[str, str] | None:
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return None
+    if len(parts) != 2 or parts[0] != "export":
+        return None
+    name, separator, value = parts[1].partition("=")
+    if not separator or not name:
+        return None
+    return name, value
+
+
+def should_auto_provision(args: argparse.Namespace) -> bool:
+    if args.no_auto_provision:
+        return False
+    has_sdk_creds = bool(os.environ.get("AWS_ACCESS_KEY_ID")) and bool(
+        os.environ.get("AWS_SECRET_ACCESS_KEY")
+    )
+    has_admin_creds = bool(os.environ.get("EXTENDDB_ADMIN_PASSWORD"))
+    return not has_sdk_creds and has_admin_creds
+
+
+def provision_credentials(args: argparse.Namespace) -> None:
+    env = os.environ.copy()
+    env["EXTENDDB_TEST_ENDPOINT"] = args.endpoint
+    cmd = [sys.executable, str(PROJECT_DIR / "devtools" / "provision-test-credentials")]
+    proc = subprocess.run(
+        cmd,
+        cwd=PROJECT_DIR,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.stderr:
+        print(proc.stderr, file=sys.stderr, end="")
+    if proc.returncode != 0:
+        if proc.stdout:
+            print(proc.stdout, file=sys.stderr, end="")
+        raise RuntimeError("credential provisioning failed")
+
+    exported: list[str] = []
+    for line in proc.stdout.splitlines():
+        parsed = parse_export_line(line)
+        if parsed is None:
+            continue
+        key, value = parsed
+        os.environ[key] = value
+        exported.append(key)
+
+    required = {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+    if not required.issubset(exported):
+        raise RuntimeError("credential provisioning did not emit AWS credentials")
+
+
+def ensure_environment(args: argparse.Namespace) -> None:
+    if not args.endpoint:
+        raise RuntimeError("EXTENDDB_TEST_ENDPOINT is not set; pass --endpoint")
+    if args.provision or should_auto_provision(args):
+        provision_credentials(args)
+    missing = [
+        name
+        for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+        if not os.environ.get(name)
+    ]
+    if missing:
+        raise RuntimeError(
+            "missing SDK credentials: "
+            + ", ".join(missing)
+            + "; set them or provide EXTENDDB_ADMIN_PASSWORD for auto-provisioning"
+        )
+    os.environ.setdefault("AWS_DEFAULT_REGION", args.region)
+
+
+def make_client(args: argparse.Namespace) -> Any:
+    boto3, Config, _ = sdk_modules()
+    kwargs: dict[str, Any] = {
+        "service_name": "dynamodb",
+        "region_name": args.region,
+        "endpoint_url": args.endpoint,
+        "config": Config(
+            connect_timeout=5,
+            read_timeout=20,
+            retries={"max_attempts": 2, "mode": "standard"},
+        ),
+    }
+    if args.endpoint.startswith("https://"):
+        kwargs["verify"] = False
+    return boto3.client(**kwargs)
+
+
+def wait_for_active(client: Any, table_name: str, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = client.describe_table(TableName=table_name)["Table"]["TableStatus"]
+        if status == "ACTIVE":
+            return
+        time.sleep(0.2)
+    raise TimeoutError(f"table {table_name} did not become ACTIVE within {timeout}s")
+
+
+def wait_for_deleted(client: Any, table_name: str, timeout: float) -> None:
+    _, _, ClientError = sdk_modules()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            client.describe_table(TableName=table_name)
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code")
+            if code == "ResourceNotFoundException":
+                return
+            raise
+        time.sleep(0.2)
+    raise TimeoutError(f"table {table_name} was not deleted within {timeout}s")
+
+
+def assert_item_value(client: Any, table_name: str, key: str, expected: str) -> None:
+    item = client.get_item(
+        TableName=table_name,
+        Key={"pk": {"S": key}},
+        ConsistentRead=True,
+    ).get("Item")
+    actual = item.get("v", {}).get("S") if item else None
+    if actual != expected:
+        raise AssertionError(f"item {key} value {actual!r}, expected {expected!r}")
+
+
+def run_smoke(client: Any, args: argparse.Namespace) -> None:
+    _, _, ClientError = sdk_modules()
+    table_name = f"{args.table_prefix}-{uuid.uuid4().hex[:12]}"
+    created = False
+    cleanup_error: Exception | None = None
+
+    print("=== TiDB SDK Smoke ===")
+    print(f"  endpoint: {args.endpoint}")
+    print(f"  region:   {args.region}")
+    print(f"  table:    {table_name}")
+    print("")
+
+    try:
+        client.create_table(
+            TableName=table_name,
+            AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+            KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        created = True
+        wait_for_active(client, table_name, args.timeout)
+        print("[ok] no-index table reached ACTIVE")
+
+        client.put_item(
+            TableName=table_name,
+            Item={"pk": {"S": "p1"}, "v": {"S": "put"}},
+        )
+        assert_item_value(client, table_name, "p1", "put")
+        print("[ok] PutItem/GetItem round trip")
+
+        response = client.batch_write_item(
+            RequestItems={
+                table_name: [
+                    {"PutRequest": {"Item": {"pk": {"S": "b1"}, "v": {"S": "batch-1"}}}},
+                    {"PutRequest": {"Item": {"pk": {"S": "b2"}, "v": {"S": "batch-2"}}}},
+                ]
+            }
+        )
+        if response.get("UnprocessedItems"):
+            raise AssertionError(f"unexpected unprocessed writes: {response['UnprocessedItems']}")
+        assert_item_value(client, table_name, "b1", "batch-1")
+        assert_item_value(client, table_name, "b2", "batch-2")
+        print("[ok] BatchWriteItem round trip")
+
+        token = uuid.uuid4().hex
+        tx_items = [
+            {
+                "Put": {
+                    "TableName": table_name,
+                    "Item": {"pk": {"S": "tx1"}, "v": {"S": "transact"}},
+                }
+            }
+        ]
+        client.transact_write_items(
+            TransactItems=tx_items,
+            ClientRequestToken=token,
+        )
+        client.transact_write_items(
+            TransactItems=tx_items,
+            ClientRequestToken=token,
+        )
+        assert_item_value(client, table_name, "tx1", "transact")
+        print("[ok] TransactWriteItems idempotent replay")
+
+        try:
+            client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Put": {
+                            "TableName": table_name,
+                            "Item": {
+                                "pk": {"S": "tx-mismatch"},
+                                "v": {"S": "different"},
+                            },
+                        }
+                    }
+                ],
+                ClientRequestToken=token,
+            )
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code")
+            if code != "IdempotentParameterMismatchException":
+                raise
+        else:
+            raise AssertionError("idempotency mismatch was accepted")
+        print("[ok] TransactWriteItems idempotency mismatch rejected")
+
+    finally:
+        if created:
+            try:
+                client.delete_table(TableName=table_name)
+                wait_for_deleted(client, table_name, args.timeout)
+                print("[ok] cleanup deleted table")
+            except Exception as exc:
+                cleanup_error = exc
+                print(f"[warn] cleanup failed for {table_name}: {exc}", file=sys.stderr)
+
+    if cleanup_error is not None:
+        raise RuntimeError(f"cleanup failed for {table_name}: {cleanup_error}")
+
+    print("")
+    print("=== TiDB SDK smoke passed ===")
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        ensure_environment(args)
+        client = make_client(args)
+        run_smoke(client, args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

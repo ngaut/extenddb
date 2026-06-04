@@ -189,6 +189,12 @@ devtools/tidb-acceptance --changed --dry-run
 # Select checks and start/stop a local TiUP playground when needed
 devtools/tidb-acceptance --changed --with-playground
 
+# Run the live customer SDK smoke against a running TiDB-backed ExtendDB
+EXTENDDB_TEST_ENDPOINT=https://127.0.0.1:8000 \
+EXTENDDB_ADMIN_USER=admin \
+EXTENDDB_ADMIN_PASSWORD=<password-from-init> \
+devtools/tidb-acceptance --sdk-smoke
+
 # Run the full TiDB backend developer gate
 devtools/tidb-acceptance --full
 ```
@@ -220,6 +226,15 @@ Configure non-default endpoints with `EXTENDDB_TIDB_HOST`, `EXTENDDB_TIDB_PORT`,
 `EXTENDDB_TIDB_MYSQL_PLUGIN_DIR`, or use the matching command-line flags. On
 Homebrew systems, the smoke auto-detects `mysql-client`'s
 `mysql_native_password` plugin directory when it is installed.
+
+Use `--sdk-smoke` after starting ExtendDB with the TiDB backend to prove the
+customer path, not just native SQL behavior. This invokes
+`devtools/tidb-sdk-smoke`, which creates a no-index table through the DynamoDB
+SDK, verifies PutItem/GetItem, BatchWriteItem, TransactWriteItems, idempotent
+transaction replay, idempotency mismatch rejection, and table cleanup. If SDK
+credentials are not already exported but `EXTENDDB_ADMIN_PASSWORD` is set, the
+smoke provisions temporary test credentials with
+`devtools/provision-test-credentials`.
 
 ### Test Suites
 

@@ -4,7 +4,6 @@ Refreshed: v0.0.118 (P115)
 
 ## Fidelity Bugs
 
-- ⬜ **Backup `TableNotFoundException`** — extenddb returns `ResourceNotFoundException` for backup operations on nonexistent tables; real DynamoDB returns `TableNotFoundException`. Requires adding a new error variant. (P114 follow-up)
 - ⬜ **Tagging rate limiting** — extenddb should implement `LimitExceededException` for rapid tag operations to match real DynamoDB behavior. 5 tagging tests fail against real DynamoDB due to this. (P114 follow-up)
 - ⬜ **Key-vs-item size gap** — batch/transact delete/update WCU uses key size, not old item size. Minor fidelity gap.
 
@@ -42,6 +41,7 @@ Refreshed: v0.0.118 (P115)
 ## Recently Completed
 
 ### P115 — TTL Redesign (v0.0.118)
+- ✅ Backup APIs now return `TableNotFoundException` for nonexistent source tables, matching DynamoDB's backup error shape.
 - ✅ Indexed TTL sweep — partial B-tree expression index created on TTL enable, sweeper uses index-ordered scan
 - ✅ Backend-owned TTL cleanup — PostgreSQL uses the indexed sweeper; TiDB uses native TTL instead of a frontend deletion target
 - ✅ Staleness metric — `TtlDeletionStaleness` records deletion lag (sum/count/min/max)

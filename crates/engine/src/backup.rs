@@ -384,7 +384,7 @@ fn ensure_backup_arn_account(backup_arn: &str, account_id: &str) -> Result<(), D
 fn storage_err_to_dynamo(e: extenddb_storage::error::StorageError) -> DynamoDbError {
     match e {
         extenddb_storage::error::StorageError::TableNotFound(msg) => {
-            DynamoDbError::ResourceNotFoundException(msg)
+            DynamoDbError::TableNotFoundException(msg)
         }
         extenddb_storage::error::StorageError::TableAlreadyExists(msg) => {
             DynamoDbError::ResourceInUseException(msg)
@@ -403,8 +403,9 @@ fn storage_err_to_dynamo(e: extenddb_storage::error::StorageError) -> DynamoDbEr
 
 #[cfg(test)]
 mod tests {
-    use super::{optional_timestamp, resolve_source_table_name};
+    use super::{optional_timestamp, resolve_source_table_name, storage_err_to_dynamo};
     use extenddb_core::error::DynamoDbError;
+    use extenddb_storage::error::StorageError;
     use serde_json::json;
 
     #[test]
@@ -456,5 +457,13 @@ mod tests {
 
         let err = optional_timestamp(&body, "RestoreDateTime", "restoreDateTime").unwrap_err();
         assert!(matches!(err, DynamoDbError::ValidationException(_)));
+    }
+
+    #[test]
+    fn backup_table_not_found_uses_backup_error_shape() {
+        let err = storage_err_to_dynamo(StorageError::TableNotFound("missing".to_owned()));
+        assert!(matches!(err, DynamoDbError::TableNotFoundException(_)));
+        assert_eq!(err.error_type(), "TableNotFoundException");
+        assert_eq!(err.status_code(), 400);
     }
 }

@@ -80,6 +80,28 @@ if [[ ! "$STALENESS_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
+default_mysql_plugin_dir() {
+    local prefix dir
+    if command -v brew >/dev/null 2>&1; then
+        prefix="$(brew --prefix mysql-client 2>/dev/null || true)"
+        if [[ -n "$prefix" && -f "$prefix/lib/plugin/mysql_native_password.so" ]]; then
+            printf '%s\n' "$prefix/lib/plugin"
+            return
+        fi
+    fi
+
+    for dir in /opt/homebrew/Cellar/mysql-client/*/lib/plugin /usr/local/Cellar/mysql-client/*/lib/plugin; do
+        if [[ -f "$dir/mysql_native_password.so" ]]; then
+            printf '%s\n' "$dir"
+            return
+        fi
+    done
+}
+
+if [[ -z "$PLUGIN_DIR" ]]; then
+    PLUGIN_DIR="$(default_mysql_plugin_dir)"
+fi
+
 MYSQL_ARGS=("$MYSQL_BIN")
 if [[ -n "$PLUGIN_DIR" ]]; then
     MYSQL_ARGS+=("--plugin-dir=$PLUGIN_DIR")

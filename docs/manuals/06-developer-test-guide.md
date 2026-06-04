@@ -213,7 +213,9 @@ session-level `tidb_replica_read` and `tidb_read_staleness`, then verifies both
 base-table and forced native-index reads before dropping the database on exit.
 Configure non-default endpoints with `EXTENDDB_TIDB_HOST`, `EXTENDDB_TIDB_PORT`,
 `EXTENDDB_TIDB_USER`, `EXTENDDB_TIDB_PASSWORD`, and
-`EXTENDDB_TIDB_MYSQL_PLUGIN_DIR`, or use the matching command-line flags.
+`EXTENDDB_TIDB_MYSQL_PLUGIN_DIR`, or use the matching command-line flags. On
+Homebrew systems, the smoke auto-detects `mysql-client`'s
+`mysql_native_password` plugin directory when it is installed.
 
 ### Test Suites
 

@@ -73,7 +73,8 @@ The live smoke uses `devtools/tidb-native-read-smoke`, which defaults to
 verifies session-level stale reads through both the base table and a forced TiDB
 native secondary index, then drops the database on exit. If your mysql client
 needs an explicit auth plugin directory, set `EXTENDDB_TIDB_MYSQL_PLUGIN_DIR` or
-pass `--plugin-dir`.
+pass `--plugin-dir`; Homebrew `mysql-client` plugin directories are detected
+automatically when available.
 
 ## Running against real DynamoDB
 

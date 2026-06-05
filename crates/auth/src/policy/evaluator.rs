@@ -95,7 +95,7 @@ where
         .chain(session_policy)
         .collect();
 
-    // Phase 1: Explicit Deny — any Deny statement in any policy
+    // Step 1: Explicit Deny — any Deny statement in any policy
     for policy in &all_policies {
         for stmt in &policy.statements {
             if stmt.effect == Effect::Deny
@@ -108,7 +108,7 @@ where
         }
     }
 
-    // Phase 2: Permissions Boundary — must find Allow (if boundary exists)
+    // Step 2: Permissions Boundary — must find Allow (if boundary exists)
     if let Some(boundary) = permissions_boundary {
         let boundary_allows = boundary.statements.iter().any(|stmt| {
             stmt.effect == Effect::Allow
@@ -121,7 +121,7 @@ where
         }
     }
 
-    // Phase 3: Session Policy — must find Allow (if session policy exists)
+    // Step 3: Session Policy — must find Allow (if session policy exists)
     if let Some(session) = session_policy {
         let session_allows = session.statements.iter().any(|stmt| {
             stmt.effect == Effect::Allow
@@ -134,7 +134,7 @@ where
         }
     }
 
-    // Phase 4: Identity Policy Allow
+    // Step 4: Identity Policy Allow
     for policy in identity_policies {
         for stmt in &policy.statements {
             if stmt.effect == Effect::Allow
@@ -147,7 +147,7 @@ where
         }
     }
 
-    // Phase 5: Implicit Deny
+    // Step 5: Implicit Deny
     AuthzDecision::Deny
 }
 

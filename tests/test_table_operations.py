@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 1 table operations tests — dual-target against real DynamoDB and extenddb.
+"""Table operations tests — dual-target against real DynamoDB and extenddb.
 
 Covers: CreateTable, DescribeTable, ListTables, DeleteTable, and key error paths.
 REQ-TEST-001, REQ-TEST-002, REQ-TEST-003, REQ-TEST-004

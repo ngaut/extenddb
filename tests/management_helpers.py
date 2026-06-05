@@ -4,8 +4,8 @@
 """Helper functions for calling the extenddb management API from tests.
 
 Wraps HTTP calls to /management/* endpoints with Basic auth. Used by
-the auth integration tests (Phase 12i) to provision accounts, users,
-roles, policies, and access keys before exercising the DynamoDB API.
+the auth integration tests to provision accounts, users, roles, policies,
+and access keys before exercising the DynamoDB API.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ class ManagementClient:
         self.base_url = base_url.rstrip("/") + "/management"
         self.admin_auth = (admin_user, admin_password)
         self.timeout = timeout
-        # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+        # Self-signed certs from ``extenddb init``; disable SSL verification.
         self.verify = not base_url.startswith("https://")
 
     def _iam_auth(self, account_id: str, user_name: str, password: str) -> tuple[str, str]:

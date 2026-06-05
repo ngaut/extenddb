@@ -536,7 +536,7 @@ fn redact_if_sensitive(key: &str, val: &str) -> String {
     }
 }
 
-/// D9: Build static configuration entries for the console settings page.
+/// Build static configuration entries for the console settings page.
 ///
 /// Extracts key-value pairs from the parsed `AppConfig` and pre-redacts
 /// sensitive values (connection strings, passwords, keys).

@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 6 batch operations tests — dual-target against real DynamoDB and extenddb.
+"""Batch operations tests — dual-target against real DynamoDB and extenddb.
 
 Covers: BatchGetItem, BatchWriteItem.
 REQ-TEST-001, REQ-TEST-002, REQ-TEST-003

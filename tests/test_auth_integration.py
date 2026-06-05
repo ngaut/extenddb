@@ -1,10 +1,11 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 12i: SDK integration tests for extenddb auth.
+"""SDK integration tests for extenddb auth.
 
 Verifies that real AWS SDKs (boto3) work against extenddb with builtin auth.
-Tests IBAC, RBAC patterns, error paths, and Mode 1 backward compat.
+Tests identity-based access control, role-based access control, error paths,
+and mandatory-auth rejection behavior.
 
 Prerequisites:
   - extenddb running with `auth.provider = "builtin"` on EXTENDDB_TEST_ENDPOINT
@@ -81,7 +82,7 @@ def _make_dynamodb_client(endpoint_url: str, access_key: str, secret_key: str,
         region_name=region,
         config=BotoConfig(retries={"max_attempts": 0}),
     )
-    # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+    # Self-signed certs from ``extenddb init``; disable SSL verification.
     if endpoint_url.startswith("https://"):
         kwargs["verify"] = False
     return boto3.client(**kwargs)
@@ -638,10 +639,10 @@ class TestAuthErrors:
         body = resp.json()
         assert body.get("__type", "").endswith("MissingAuthenticationToken")
 # ---------------------------------------------------------------------------
-# Mode 1 Backward Compatibility
+# Mandatory Auth Rejection
 # ---------------------------------------------------------------------------
 
-class TestMode1Compat:
+class TestMandatoryAuthRejection:
     """Verify that unauthenticated requests are REJECTED.
 
     When extenddb runs with auth.provider = 'builtin' (the shipped default),

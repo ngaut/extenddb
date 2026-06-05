@@ -79,10 +79,12 @@ Both debug and release builds must pass before any phase exit.
 
 ### Style
 
-- `#[allow(dead_code)]` requires a `TODO(phase-N)` comment
+- `#[allow(dead_code)]` requires a concrete `TODO(...)` comment that names
+  the reason and removal condition
 - All public APIs require `///` doc comments
 - All crate roots require `//!` module-level documentation
-- TODOs use category tags: `TODO(fidelity)`, `TODO(phase-N)`, `TODO(cleanup)`, `TODO(security)`
+- TODOs use category tags such as `TODO(fidelity)`, `TODO(cleanup)`, and
+  `TODO(security)`
 
 ### Copyright Header
 

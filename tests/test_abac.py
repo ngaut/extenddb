@@ -4,7 +4,7 @@
 """ABAC (Attribute-Based Access Control) tests.
 
 Verifies that IAM policies using condition keys with resource tags and
-principal tags work correctly. Requires Phase 15c resource tag support.
+principal tags work correctly.
 
 Prerequisites:
   - extenddb running with `auth.provider = "builtin"` on EXTENDDB_TEST_ENDPOINT
@@ -54,7 +54,7 @@ def _make_client(endpoint_url: str, access_key: str, secret_key: str,
         region_name=region,
         config=BotoConfig(retries={"max_attempts": 0}),
     )
-    # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+    # Self-signed certs from ``extenddb init``; disable SSL verification.
     if endpoint_url.startswith("https://"):
         kwargs["verify"] = False
     return boto3.client(**kwargs)

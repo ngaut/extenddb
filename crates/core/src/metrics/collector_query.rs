@@ -96,7 +96,7 @@ impl MetricsCollector {
     pub fn drain(&self, age: Duration) -> Vec<super::types::FlushBucket> {
         let cutoff = Instant::now().checked_sub(age).unwrap_or(Instant::now());
 
-        // Phase 1: under write lock, partition old points out and collect them.
+        // Step 1: under write lock, partition old points out and collect them.
         let drained: Vec<(
             super::collector::MetricKey,
             Vec<super::collector::DataPoint>,
@@ -117,7 +117,7 @@ impl MetricsCollector {
             result
         };
 
-        // Phase 2: aggregate outside the lock.
+        // Step 2: aggregate outside the lock.
         let mut buckets: HashMap<(super::collector::MetricKey, i64), (f64, u64, f64, f64)> =
             HashMap::new();
         for (key, points) in drained {

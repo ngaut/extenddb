@@ -324,9 +324,9 @@ class TestExactlyOnceDelivery:
     ):
         """Poll with small Limit across multiple calls, assert no duplicates.
 
-        P27 item 7: The previous test drains once with Limit=100. This test
-        uses Limit=2 to force multiple GetRecords calls per shard and verifies
-        that advancing the iterator never re-delivers records.
+        The previous test drains once with Limit=100. This test uses Limit=2
+        to force multiple GetRecords calls per shard and verifies that
+        advancing the iterator never re-delivers records.
         """
         table_name, stream_arn = stream_table
         n = 8

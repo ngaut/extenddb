@@ -54,7 +54,7 @@ class ConsoleClient:
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self._csrf_token: str | None = None
-        # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+        # Self-signed certs from ``extenddb init``; disable SSL verification.
         if base_url.startswith("https://"):
             self.session.verify = False
 

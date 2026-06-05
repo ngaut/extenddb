@@ -253,15 +253,12 @@ These are the core CRUD operations. All must be fully implemented.
 - REQ-AUTH-006: Credential lookup must be cached with configurable TTL
 - REQ-AUTH-007: Future providers must be addable without modifying core request handling code
 
-### 4.1.1 Auth Modes
+### 4.1.1 Authentication Provider
 
 extenddb supports the built-in authentication mode. The server refuses to start
 without authentication.
 
-**Mode 1: No auth** (removed — `auth.provider = "none"` is no longer accepted)
-Previously accepted any request regardless of the Authorization header. This mode has been removed. The server refuses to start with `provider = "none"`.
-
-**Supported mode: Local credential store** (`auth.provider = "builtin"`)
+**Supported provider: Local credential store** (`auth.provider = "builtin"`)
 extenddb maintains its own credential store and policy documents. SigV4 signatures are validated against locally stored secret keys. Authorization is evaluated against locally stored IAM-style policies. Credentials and policies are managed via the management API or seed configuration. This is the default for production in disconnected or semi-connected environments.
 
 **Future mode: External identity provider**
@@ -638,8 +635,8 @@ DynamoDB SDKs support optional endpoint discovery via the `DescribeEndpoints` op
 
 ## 13. Testing Requirements
 
-- REQ-TEST-001: A minimal test suite must exist for every phase, covering all implemented operations. No phase exits without a passing test suite
-- REQ-TEST-002: Tests are written in Python (boto3) and AWS CLI, covering all Phase 1 operations: CreateTable, DescribeTable, ListTables, DeleteTable, and key error paths
+- REQ-TEST-001: A minimal test suite must exist for every implemented operation family before it is considered complete
+- REQ-TEST-002: Tests are written in Python (boto3) and AWS CLI, covering CreateTable, DescribeTable, ListTables, DeleteTable, and key error paths
 - REQ-TEST-003: Tests must be dual-target — run against both real DynamoDB and extenddb with identical assertions, controlled by an endpoint parameter. No target-specific branching
 - REQ-TEST-004: If behavior differs between real DynamoDB and extenddb, that is a bug in extenddb
 - REQ-TEST-005: Tests must clean up after themselves — all created resources are deleted on exit, even on failure

@@ -6,7 +6,7 @@
 //! Parses a token stream into an expression AST. Supports comparisons,
 //! AND/OR/NOT, `attribute_exists`, and `attribute_not_exists`.
 //!
-//! Grammar (Phase 3 subset):
+//! Grammar:
 //! ```text
 //! condition     → or_expr
 //! or_expr       → and_expr ( OR and_expr )*

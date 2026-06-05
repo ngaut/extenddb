@@ -450,22 +450,22 @@ impl RequestContext {
 2. Collect boundary policies:
    - Permissions boundary (if set on user or role)
 
-3. Phase 1 — Explicit Deny:
+3. Step 1 — Explicit Deny:
    For each statement in ALL policies (identity + boundary + session):
      If effect == Deny AND action_matches AND resource_matches AND conditions_match:
        → Return DENY (explicit deny is final, no override)
 
-4. Phase 2 — Permissions Boundary check (if boundary exists):
+4. Step 2 — Permissions Boundary check (if boundary exists):
    Must find at least one Allow in boundary policies where
    action_matches AND resource_matches AND conditions_match.
    If no Allow found in boundary → Return DENY (implicit deny from boundary)
 
-5. Phase 3 — Session Policy check (if session policy exists):
+5. Step 3 — Session Policy check (if session policy exists):
    Must find at least one Allow in session policy where
    action_matches AND resource_matches AND conditions_match.
    If no Allow found in session policy → Return DENY
 
-6. Phase 4 — Identity Policy Allow:
+6. Step 4 — Identity Policy Allow:
    For each statement in identity policies:
      If effect == Allow AND action_matches AND resource_matches AND conditions_match:
        → Return ALLOW
@@ -755,13 +755,13 @@ impl ConditionContext for AssumeRoleContext {
 
 ## 8. Auth Providers
 
-### 8.1 No-Auth Provider (Mode 1) — REMOVED
+### 8.1 Removed No-Auth Provider
 
-> **Historical note (P63b):** The `NoopAuthProvider` and `AuthIdentity::Anonymous`
-> variant were removed in v0.0.67. Authentication is now mandatory — the server
-> refuses to start with `auth.provider = "none"`.
+The `NoopAuthProvider` and `AuthIdentity::Anonymous` variant were removed.
+Authentication is mandatory, and the server refuses to start with
+`auth.provider = "none"`.
 
-### 8.2 Built-in SigV4 Provider (Mode 2)
+### 8.2 Built-in SigV4 Provider
 
 The default provider for managed local identities. It composes the SigV4
 verification flow (§5.1) with the authentication-only credential store (§5.3).

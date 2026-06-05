@@ -55,7 +55,7 @@ def _make_dynamodb_client(endpoint_url: str, access_key: str, secret_key: str,
         region_name=region,
         config=BotoConfig(retries={"max_attempts": 0}),
     )
-    # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+    # Self-signed certs from ``extenddb init``; disable SSL verification.
     if endpoint_url.startswith("https://"):
         kwargs["verify"] = False
     return boto3.client(**kwargs)
@@ -318,7 +318,7 @@ class TestConsoleIsolation:
                        password: str) -> requests.Session:
         """Login to console as IAM user, return session with cookie."""
         session = requests.Session()
-        # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+        # Self-signed certs from ``extenddb init``; disable SSL verification.
         if self.endpoint.startswith("https://"):
             session.verify = False
         resp = session.post(

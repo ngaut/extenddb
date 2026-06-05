@@ -181,7 +181,7 @@ pub async fn create_account(
         return r;
     }
 
-    // D2: Auto-generate account ID if the user left the field empty.
+    // Auto-generate account ID if the user left the field empty.
     let account_id = if form.account_id.trim().is_empty() {
         crate::management::generate_account_id()
     } else {

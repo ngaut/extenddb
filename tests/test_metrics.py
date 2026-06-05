@@ -60,7 +60,7 @@ def ddb(endpoint_url: str):
         endpoint_url=endpoint_url,
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
     )
-    # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+    # Self-signed certs from ``extenddb init``; disable SSL verification.
     if endpoint_url.startswith("https://"):
         kwargs["verify"] = False
     return boto3.client(**kwargs)

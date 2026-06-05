@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 2 item operations tests — dual-target against real DynamoDB and extenddb.
+"""Item operations tests — dual-target against real DynamoDB and extenddb.
 
 Covers: PutItem, GetItem, composite keys, and all DynamoDB attribute types.
 REQ-TEST-001, REQ-TEST-002, REQ-TEST-003, REQ-TEST-004

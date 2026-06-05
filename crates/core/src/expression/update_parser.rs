@@ -4,16 +4,19 @@
 //! Update expression parser.
 //!
 //! Parses `UpdateExpression` strings into a list of `UpdateAction`s.
-//! Phase 3 supports SET and REMOVE actions.
 //!
 //! Grammar:
 //! ```text
 //! update_expr → action_clause ( action_clause )*
 //! action_clause → SET set_action ( ',' set_action )*
 //!               | REMOVE remove_action ( ',' remove_action )*
+//!               | ADD add_action ( ',' add_action )*
+//!               | DELETE delete_action ( ',' delete_action )*
 //! set_action → path '=' value_expr
 //! value_expr → operand ( ('+' | '-') operand )?
 //! remove_action → path
+//! add_action → path placeholder
+//! delete_action → path placeholder
 //! ```
 
 use super::ast::{ArithOp, Expr, UpdateAction};

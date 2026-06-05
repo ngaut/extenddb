@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""PostgreSQL-backed async GSI propagation delay tests (D-4, Phase 24).
+"""PostgreSQL-backed async GSI propagation delay tests.
 
 Verifies that the PostgreSQL backend can apply GSI updates asynchronously with
 a measurable delay, simulating real DynamoDB eventual consistency behavior.

@@ -1,12 +1,12 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Console metrics dashboard — P58 redesign.
+//! Console metrics dashboard.
 //!
-//! Renders a dashboard with line charts (D13), latency drill-down with
-//! p50/avg/p99 and operation selector (D14), control/data plane split (D15),
-//! availability chart (D16), admin vs user views (D17), and CSV/JSON
-//! data export (D19). Charts use inline `<canvas>` — no external deps.
+//! Renders a dashboard with line charts, latency drill-down with p50/avg/p99
+//! and operation selector, control/data plane split, availability chart, admin
+//! vs user views, and CSV/JSON data export. Charts use inline `<canvas>` with
+//! no external dependencies.
 //!
 //! HTML and JS content live in `metrics_content` to stay under the 500-line
 //! file limit.
@@ -47,7 +47,7 @@ pub async fn metrics_page(State(state): State<Arc<ConsoleState>>, headers: Heade
     let nav = html::nav_bar(&identity_label(&session.identity));
     let breadcrumb = html::breadcrumb(&[("Console", Some("/console")), ("Metrics", None)]);
 
-    // D17: For non-admin users, inject their account_id so JS can filter.
+    // For non-admin users, inject their account_id so JS can filter.
     let account_filter = match &session.identity {
         CallerIdentity::IamUser { account_id, .. } => {
             format!("const accountFilter = '{}';", html::escape(account_id))

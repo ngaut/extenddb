@@ -1,11 +1,9 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for TTL (Time To Live) subsystem (F-2, Phase 23).
+"""Tests for the TTL (Time To Live) subsystem.
 
 Covers UpdateTimeToLive, DescribeTimeToLive, and item expiry deletion.
-TTL + streams interaction is not yet covered (see debt section in
-discussions/2026-04-19-P23-01-interactive-review.md).
 """
 
 from __future__ import annotations
@@ -210,7 +208,7 @@ class TestTtlExpiry:
     @pytest.mark.slow
     # EXTENDDB_TEST_ENDPOINT is required — devtools/run-tests validates this.
     def test_ttl_expiry_generates_stream_record(self, dynamodb_client):
-        """TTL item expiry generates a stream delete event (P24 item 13).
+        """TTL item expiry generates a stream delete event.
 
         Creates a table with streams enabled and TTL, inserts an expired item,
         waits for the TTL worker to delete it, then verifies a REMOVE event

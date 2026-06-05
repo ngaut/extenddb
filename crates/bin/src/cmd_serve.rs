@@ -78,12 +78,12 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
     // Load config early so bind address is known before fork.
     let app_config = config::load(&args.config)?;
 
-    // D5: TLS is mandatory. Reject explicit opt-out.
+    // TLS is mandatory. Reject explicit opt-out.
     if !app_config.server.tls.enabled {
         anyhow::bail!("TLS is mandatory. Remove `tls.enabled = false` from your config file.");
     }
 
-    // D6: Auth is mandatory. Only "builtin" is supported.
+    // Auth is mandatory. Only "builtin" is supported.
     validate_auth_provider(&app_config.auth.provider)?;
 
     // Check backend is supported by this build.
@@ -374,9 +374,9 @@ async fn serve_inner(
         );
     }
 
-    // Phase 2: Wrap the raw credential store. In pass-through mode the
-    // wrapper bypasses the cache and forwards every lookup to the inner
-    // store; otherwise it caches per the TOML config.
+    // Wrap the raw credential store. In pass-through mode the wrapper bypasses
+    // the cache and forwards every lookup to the inner store; otherwise it
+    // caches per the TOML config.
     let cached_cred_store = Arc::new(if cache_enabled {
         extenddb_auth::CachedCredentialStore::with_arc(cred_store, make_cache_cfg("credential"))
     } else {
@@ -389,7 +389,7 @@ async fn serve_inner(
         extenddb_auth::BuiltinAuthProvider::new((*cached_cred_store).clone()),
     );
 
-    // Phase 3: Build the authorization cache.
+    // Build the authorization cache.
     let authz_cache: Arc<extenddb_server::CachedAuthzStore> = {
         let store: Arc<dyn extenddb_storage::authorization_store::AuthorizationStore> =
             catalog_store.clone();
@@ -408,7 +408,7 @@ async fn serve_inner(
         })
     };
 
-    // Phase 4: Build the TableKeyInfo cache.
+    // Build the TableKeyInfo cache.
     let table_key_info_cache: Arc<extenddb_server::CachedTableKeyInfoStore> =
         Arc::new(if cache_enabled {
             extenddb_server::CachedTableKeyInfoStore::new(
@@ -503,7 +503,7 @@ async fn serve_inner(
         }
     }
 
-    // D9: Build static config entries for the console settings page.
+    // Build static config entries for the console settings page.
     // Must be called before `app_config.limits` is moved.
     let config_entries = config::build_config_entries(&app_config);
     let setting_context =
@@ -611,7 +611,7 @@ async fn serve_inner(
         metrics.clone(),
         catalog_store.clone(),
     ));
-    // Phase 11a: Spawn background task to warn about approximate consumed capacity.
+    // Warn when requests use approximate consumed capacity.
     tokio::spawn(workers::capacity_warning_worker());
 
     // Spawn backend-specific workers via runtime hooks

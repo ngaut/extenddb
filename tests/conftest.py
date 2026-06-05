@@ -22,7 +22,7 @@ import pytest
 import urllib3
 from botocore.config import Config
 
-# D4: Suppress InsecureRequestWarning for self-signed TLS certs from ``extenddb init``.
+# Suppress InsecureRequestWarning for self-signed TLS certs from ``extenddb init``.
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -86,7 +86,7 @@ def dynamodb_client(endpoint_url: str | None):
     }
     if endpoint_url:
         kwargs["endpoint_url"] = endpoint_url
-        # D4: Self-signed certs from `extenddb init` — disable SSL verification.
+        # Self-signed certs from `extenddb init`; disable SSL verification.
         if endpoint_url.startswith("https://"):
             kwargs["verify"] = False
     return boto3.client(**kwargs)

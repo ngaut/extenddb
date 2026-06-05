@@ -954,7 +954,7 @@ nodes may append compatible GSI/TTL/delete intent while a table is already
 `UPDATING`; the catalog row lock is held only for the short metadata mutation,
 and TiDB's distributed online DDL queue owns the physical ordering.
 
-### 6.1.1 Async Control Plane Transitions (Phase 1c)
+### 6.1.1 Async Control Plane Transitions
 
 Real DynamoDB control plane operations are not instantaneous — `CreateTable` returns `CREATING` status and the table
 transitions to `ACTIVE` asynchronously. extenddb emulates this behavior while letting each backend use its native
@@ -986,7 +986,7 @@ when the transition fires. TiDB uses immediate eligibility and idempotent `DROP 
   poller reads the next eligible transitions in `status_transition_at,
   table_name` order; status is a filter, not the leading queue dimension.
 
-**Design decisions and future direction (from Phase 1c human review):**
+**Design decisions and future direction:**
 
 - The single-column approach works for base table lifecycle. Index-level
   transitions are represented by `indexes.index_status` while the parent table

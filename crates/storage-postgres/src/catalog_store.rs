@@ -35,7 +35,7 @@ impl PostgresCatalogStore {
         }
     }
 
-    /// Create a new catalog store with a pre-loaded encryption key (P119).
+    /// Create a new catalog store with a pre-loaded encryption key.
     pub fn with_encryption_key(pool: PgPool, encryption_key: String) -> Self {
         Self {
             pool,

@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for multi-part GSI keys (Phase 17).
+"""Tests for multi-part GSI keys.
 
 GSIs support up to 4 HASH + 4 RANGE key schema elements.
 These tests verify table creation, item writes, and queries

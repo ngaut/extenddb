@@ -23,7 +23,7 @@ This index maps each of the 16 known extenddb symptoms to the category file that
 | 13 | InvalidSignatureException | `06-auth-symptoms.md#invalidsignatureexception` | `InvalidSignatureException: The request signature we calculated does not match the signature you provided` |
 | 14 | UnrecognizedClientException | `06-auth-symptoms.md#unrecognizedclientexception` | `UnrecognizedClientException: The security token included in the request is invalid` |
 | 15 | AccessDeniedException | `06-auth-symptoms.md#accessdeniedexception` | `AccessDeniedException: User: <ARN> is not authorized to perform: <action>` |
-| 16 | Connection pool exhausted / HTTP 500 under load | `07-runtime-symptoms.md#connection-pool-exhausted` | `HTTP 500 on all requests under heavy load` |
+| 16 | Connection pool exhausted / HTTP 503 under load | `07-runtime-symptoms.md#connection-pool-exhausted` | `HTTP 503 on all requests under heavy load` |
 
 
 ## 3. Per-entry summaries
@@ -137,7 +137,7 @@ The cause and fix summaries below are paraphrased for quick scanning. The catego
 
 ### Connection pool exhausted
 
-**Error text:** `HTTP 500 on all requests under heavy load`
+**Error text:** `HTTP 503 on all requests under heavy load`
 **Cause summary:** The active storage backend connection pool is exhausted and new requests cannot acquire a connection within the timeout.
 **Fix summary:** For TiDB, raise `[storage.tidb] pool_size` and `catalog_pool_size`, then inspect TiDB sessions, slow queries, DDL jobs, and Resource Control. PostgreSQL alternate deployments should raise `[storage.postgres] pool_size` and inspect `pg_stat_activity`.
 **Full entry:** `references/07-runtime-symptoms.md#connection-pool-exhausted`

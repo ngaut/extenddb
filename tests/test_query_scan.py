@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 5 Query and Scan tests — dual-target against real DynamoDB and extenddb.
+"""Query and Scan tests — dual-target against real DynamoDB and extenddb.
 
 Covers: Query (KeyConditionExpression, FilterExpression, ProjectionExpression,
 pagination, ScanIndexForward, Select=COUNT), Scan (FilterExpression,

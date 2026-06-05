@@ -35,7 +35,7 @@ def _make_client(endpoint_url: str | None, access_key: str, secret_key: str) -> 
     }
     if endpoint_url:
         kwargs["endpoint_url"] = endpoint_url
-        # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+        # Self-signed certs from ``extenddb init``; disable SSL verification.
         if endpoint_url.startswith("https://"):
             kwargs["verify"] = False
     return boto3.client(**kwargs)
@@ -46,8 +46,6 @@ class TestAuthErrorFidelity:
     against real DynamoDB and extenddb — no management API required.
 
     When targeting extenddb, auth must be enabled (auth.provider = "builtin").
-    In Mode 1 (auth.provider = "none"), extenddb accepts all requests regardless
-    of credentials, so these tests are skipped.
     """
 
     @pytest.fixture(autouse=True)

@@ -3,8 +3,7 @@
 **Version:** 0.5 (Draft — Reviewer feedback round 3)
 **Date:** 2026-05-08
 **Status:** Draft — awaiting reviewer and principal reviewer deliberation
-**Phase:** P122
-**Applies to:** Both `extenddb` (ExtendDB) and `extenddb` (ExtendDB) with name substitution.
+**Applies to:** ExtendDB frontend deployments sharing one storage topology.
 
 ## 1. Problem Statement
 

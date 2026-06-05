@@ -10,8 +10,8 @@ and extenddb — failures always fail the suite.
 ```
 tests/
   python/          ← Primary suite (boto3 + pytest)
-  java/            ← Targeted Java coverage (JUnit 5 + Maven) — P90
-  rust/            ← Targeted Rust coverage (tokio::test) — P91
+  java/            ← Targeted Java coverage (JUnit 5 + Maven)
+  rust/            ← Targeted Rust coverage (tokio::test)
   shared/          ← Shared test data and configuration
 ```
 
@@ -74,6 +74,6 @@ python3 -m pytest -v
 - `test_tables.py` — CreateTable, DescribeTable, ListTables, UpdateTable, DeleteTable
 - `test_items.py` — PutItem, GetItem, DeleteItem, UpdateItem (all expression types)
 - `test_query_scan.py` — Query, Scan (key conditions, filters, pagination, parallel scan)
-- (P87) Batch, transactions, GSI, TTL, streams, tagging, expressions
-- (P88) Auth/permissions, import/export, error fidelity
-- (P89) CLI lifecycle, multi-instance isolation
+- Batch, transactions, GSI, TTL, streams, tagging, expressions
+- Auth/permissions, import/export, error fidelity
+- CLI lifecycle, multi-instance isolation

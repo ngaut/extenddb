@@ -4,9 +4,8 @@
 //! Static HTML and JavaScript content for the metrics dashboard.
 //!
 //! Separated from `metrics_pages` to keep both files under the 500-line limit.
-//! The HTML defines the dashboard layout (D15: control/data plane split) and
-//! the JS implements line charts (D13), latency drill-down (D14), availability
-//! (D16), and CSV/JSON export (D19).
+//! The HTML defines the dashboard layout and the JS implements line charts,
+//! latency drill-down, availability, and CSV/JSON export.
 
 /// Static HTML for the redesigned metrics dashboard.
 pub(crate) const METRICS_HTML: &str = r#"<h1>Metrics</h1>

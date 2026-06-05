@@ -159,9 +159,9 @@ pub(crate) async fn poll_throttling_enabled(
 /// Background worker that periodically logs a warning when requests use
 /// approximate consumed capacity information.
 ///
-/// Phase 11a: `ConsumedCapacity` returns plausible stubs, not real values.
-/// This worker reads and resets the counter on a fixed interval and emits
-/// a single log line summarizing usage since the last tick.
+/// `ConsumedCapacity` returns plausible stubs, not real values. This worker
+/// reads and resets the counter on a fixed interval and emits a single log line
+/// summarizing usage since the last tick.
 pub(crate) async fn capacity_warning_worker() {
     use extenddb_engine::capacity_helpers::CAPACITY_REQUEST_COUNT;
     use std::time::Duration;

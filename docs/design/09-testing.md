@@ -64,7 +64,8 @@ When new tests appear upstream, a developer reviews them for new scenarios to ad
 
 The coverage map (`tests/reference/coverage-map.md`) tracks which reference suite scenarios have corresponding extenddb tests. Every test method maps to an extenddb test scenario at per-method granularity.
 
-The coverage map is a living document, not a prerequisite — it is updated alongside development and does not block Phase 1 implementation.
+The coverage map is a living document, not a prerequisite; it is updated
+alongside development and does not block implementation.
 
 ## 4. Multi-Language Test Suites
 
@@ -76,12 +77,12 @@ Different SDKs serialize requests differently (field ordering, default values, h
 
 | Language | SDK | Role | When |
 |----------|-----|------|------|
-| Python | boto3 | Primary test suite. Full fidelity: golden files, error message matching, edge cases. Every phase starts here. | Phase 1+ |
-| Java | aws-sdk-java-v2 | Elevated integration. Covers more scenarios than Rust/C++ because the PostgreSQL extension suite (our primary reference) is Java. Tests scenarios that have a direct PostgreSQL extension suite counterpart. | Phase 2+ |
-| Rust | aws-sdk-rust | SDK integration validation. Core smoke tests proving the Rust SDK works against extenddb. | Phase 2+ |
-| C/C++ | aws-sdk-cpp | SDK integration validation. Exercises a fundamentally different SDK architecture. | Phase 7+ (Query/Scan gives a broad enough API surface — CRUD alone is too narrow to exercise C++'s distinct serialization and memory patterns meaningfully) |
+| Python | boto3 | Primary test suite. Full fidelity: golden files, error message matching, edge cases. | Always |
+| Java | aws-sdk-java-v2 | Elevated integration. Covers more scenarios than Rust/C++ because the PostgreSQL extension suite (our primary reference) is Java. Tests scenarios that have a direct PostgreSQL extension suite counterpart. | Required for matching reference-suite scenarios |
+| Rust | aws-sdk-rust | SDK integration validation. Core smoke tests proving the Rust SDK works against extenddb. | Smoke and customer-path coverage |
+| C/C++ | aws-sdk-cpp | SDK integration validation. Exercises a fundamentally different SDK architecture. | Deferred pending demand |
 
-**Phase exit criteria:**
+**Coverage criteria:**
 - Python tests: mandatory
 - Java tests: mandatory for scenarios with a direct PostgreSQL extension suite counterpart
 - Rust/C++ tests: best-effort, tracked but non-blocking
@@ -276,26 +277,29 @@ This pattern is standard for DynamoDB test suites and proven by the PostgreSQL e
 
 ### 7.2 Health and Metrics Endpoints (Q-6)
 
-Phase 1 includes `/health` and `/metrics` endpoints. They are trivial to implement (already designed in 06-component-server.md §7), useful for operational validation from day one, and tested by the PostgreSQL extension suite's `RawHttpTests`.
+`/health` and `/metrics` are part of the baseline operational surface. They are
+trivial to implement, useful for validation from day one, and tested by the
+PostgreSQL extension suite's `RawHttpTests`.
 
 ### 7.3 New Test Categories from PostgreSQL Extension Suite
 
 The PostgreSQL extension suite identified test categories the original implementation plan did not enumerate:
 
-| Category | Source | Phase |
+| Category | Source | Priority |
 |----------|--------|-------|
-| Empty value handling (empty strings, binary, sets) | `EmptyValueTests` | 2 |
-| Unicode and special characters (emoji, single quotes) | `UnicodeTests` | 2 |
-| Raw HTTP edge cases (invalid JSON, empty body, missing target, GET rejection) | `RawHttpTests` | 1 |
-| Health and metrics endpoints | `RawHttpTests` | 1 |
-| Capacity reporting (`ReturnConsumedCapacity`) | `CapacityThrottlingTests` | 12 |
-| Throttling behavior | `CapacityThrottlingTests` | 12 |
+| Empty value handling (empty strings, binary, sets) | `EmptyValueTests` | Required |
+| Unicode and special characters (emoji, single quotes) | `UnicodeTests` | Required |
+| Raw HTTP edge cases (invalid JSON, empty body, missing target, GET rejection) | `RawHttpTests` | Required |
+| Health and metrics endpoints | `RawHttpTests` | Required |
+| Capacity reporting (`ReturnConsumedCapacity`) | `CapacityThrottlingTests` | Fidelity |
+| Throttling behavior | `CapacityThrottlingTests` | Fidelity |
 
 ## 8. Out of Scope
 
 ### 8.1 PartiQL (Q-5, N-3)
 
-PartiQL is deferred to post-v1 (Phase 15+). It requires a separate parser and execution engine.
+PartiQL is deferred to post-v1. It requires a separate parser and execution
+engine.
 
 ### 8.2 CI Infrastructure (Q-4)
 

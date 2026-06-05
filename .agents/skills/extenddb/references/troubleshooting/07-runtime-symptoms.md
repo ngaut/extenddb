@@ -4,16 +4,16 @@ This file holds verbatim Cause and Fix entries for runtime performance and event
 
 ## Connection pool exhausted
 
-### HTTP 500 on all requests under heavy load
+### HTTP 503 on all requests under heavy load
 
 <a name="connection-pool-exhausted"></a>
 
 **Error text:**
 ```
-HTTP 500 on all requests under heavy load
+HTTP 503 on all requests under heavy load
 ```
 
-**Cause:** The active storage backend connection pool is exhausted. All connections are in use and new requests cannot acquire a connection within the timeout. extenddb currently returns HTTP 500 (Internal Server Error) instead of the more appropriate 503 (Service Unavailable).
+**Cause:** The storage backend connection pool is exhausted. All connections are in use and new requests cannot acquire a connection within the timeout. extenddb maps typed backend unavailability, SQL pool-acquire timeouts, and closed-pool acquisition errors to `ServiceUnavailable` / HTTP 503 instead of exposing internal storage details.
 
 **Fix:** Increase the pool size in `extenddb.toml`:
 ```toml
@@ -28,9 +28,7 @@ pool_size = 50
 
 For TiDB, each frontend opens strong-data, default-read-data, engine-catalog, and catalog-store/auth pools. If the problem persists, inspect TiDB sessions, slow queries, DDL jobs, and Resource Control throttling with TiDB's cluster diagnostics. PostgreSQL alternate deployments should inspect `pg_stat_activity`.
 
-**Known limitation:** The HTTP status code should be 503 with a `Retry-After` header. This is tracked as technical debt.
-
-**Source:** `docs/troubleshooting.md`, section "Connection Pool Exhaustion", last synced 2026-05-12.
+**Source:** `docs/troubleshooting.md`, section "Connection Pool Exhaustion", last synced 2026-06-06.
 
 ## Streams capture delay
 
@@ -58,9 +56,9 @@ Stream capture: failed to write record for <table>: <error>
 
 **Cause:** A stream record was constructed but could not be persisted to the `stream_records` table. The data write succeeded — only the stream record is missing.
 
-**Fix:** Check storage backend connectivity and disk space. For TiDB, inspect the data database `stream_records` table and TiDB slow/query diagnostics. PostgreSQL alternate deployments should also check for backend-specific unique constraint errors.
+**Fix:** Check storage backend connectivity and disk space. TiDB uses MVCC commit timestamps plus a per-transaction ordinal for stream sequence numbers, so duplicate stream sequence errors indicate a storage failure rather than same-millisecond application writes or multiple writes in one transaction.
 
-**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-05-12.
+**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-06-06.
 
 ### `Stream capture: failed to get sequence number: <error>`
 
@@ -71,9 +69,9 @@ Stream capture: failed to get sequence number: <error>
 
 **Cause:** extenddb could not generate a sequence number for a stream record. The data write succeeded — only the stream record is missing.
 
-**Fix:** Check PostgreSQL connectivity.
+**Fix:** Check storage backend connectivity.
 
-**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-05-12.
+**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-06-06.
 
 ### `Stream cleanup worker: <error>`
 
@@ -82,13 +80,13 @@ Stream capture: failed to get sequence number: <error>
 Stream cleanup worker: <error>
 ```
 
-**Cause:** The background worker that deletes stream records older than 24 hours encountered a database error. Expired records will accumulate until the worker succeeds.
+**Cause:** On backends without native stream-record TTL, the background worker that deletes stream records older than 24 hours encountered a database error. Expired records will accumulate until the worker succeeds.
 
-**Fix:** Check PostgreSQL connectivity. The worker retries every hour automatically.
+**Fix:** Check storage backend connectivity. The worker retries every hour automatically. TiDB does not run this worker; it uses native table TTL on `stream_records`, so TiDB stream-retention failures should be investigated through TiDB TTL job state and table DDL instead.
 
-**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-05-12.
+**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-06-06.
 
-## GSI propagation delay
+## PostgreSQL GSI async update behavior
 
 ### GSI query returns stale data after a write
 
@@ -99,8 +97,8 @@ Stream cleanup worker: <error>
 GSI query returns stale data after a write
 ```
 
-**Cause:** GSI updates are applied asynchronously with a configurable propagation delay (default 10ms). This matches real DynamoDB's eventually consistent GSI behavior. Each GSI can have its own `propagation_delay_ms` setting; the system-wide default is controlled by the `gsi_propagation_delay_ms` runtime setting.
+**Cause:** On the PostgreSQL backend, GSI updates can be applied asynchronously with a configurable propagation delay (default 10ms). TiDB does not use this path; TiDB maintains native secondary indexes from the base table row.
 
-**Fix:** This is expected behavior. For tests that query GSIs after writes, poll/retry the GSI query until the expected data appears. To make all GSIs synchronous for testing, set `extenddb settings set gsi_propagation_delay_ms 0`. For production-like testing, keep the default async delay.
+**Fix:** For PostgreSQL tests that query GSIs immediately after writes, poll/retry the GSI query or set `extenddb settings set gsi_propagation_delay_ms 0`. TiDB rejects that setting because native secondary-index writes are transactional.
 
-**Source:** `docs/troubleshooting.md`, section "GSI Async Update Behavior", last synced 2026-05-12.
+**Source:** `docs/troubleshooting.md`, section "PostgreSQL GSI Async Update Behavior", last synced 2026-06-06.

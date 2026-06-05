@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase 22 concurrency stress tests — 50 threads against extenddb.
+"""Concurrency stress tests — 50 threads against extenddb.
 
 Exercises parallel inserts, atomic counters (ADD), concurrent list_append,
 concurrent set union (ADD on SS), concurrent nested path writes, parallel
@@ -89,7 +89,7 @@ def _make_client():
     }
     if endpoint:
         kwargs["endpoint_url"] = endpoint
-        # D4: Self-signed certs from ``extenddb init`` — disable SSL verification.
+        # Self-signed certs from ``extenddb init``; disable SSL verification.
         if endpoint.startswith("https://"):
             kwargs["verify"] = False
     return boto3.client(**kwargs)

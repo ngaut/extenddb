@@ -6,7 +6,6 @@ dist/
 .venv/
 .idea/
 *.iml
-pdfs/
 docs/rendered/
 discussions/
 .DS_Store

@@ -16,6 +16,12 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
         "002_drop_continuous_backups.sql",
         include_str!("../../storage-postgres/migrations/002_drop_continuous_backups.sql"),
     ),
+    (
+        "003_drop_role_permissions_boundary_column.sql",
+        include_str!(
+            "../../storage-postgres/migrations/003_drop_role_permissions_boundary_column.sql"
+        ),
+    ),
 ];
 
 /// Run catalog migrations, skipping already-applied ones.
@@ -134,12 +140,26 @@ mod tests {
     use crate::CATALOG_VERSION;
 
     #[test]
-    fn latest_catalog_migration_drops_unsupported_pitr_state() {
-        let (filename, sql) = CATALOG_MIGRATIONS.last().expect("latest migration");
+    fn catalog_migration_drops_unsupported_pitr_state() {
+        let (filename, sql) = CATALOG_MIGRATIONS
+            .iter()
+            .find(|(filename, _)| *filename == "002_drop_continuous_backups.sql")
+            .expect("PITR state migration");
 
         assert_eq!(*filename, "002_drop_continuous_backups.sql");
         assert!(sql.contains("DROP TABLE IF EXISTS continuous_backups"));
         assert!(sql.contains("0.0.3"));
+    }
+
+    #[test]
+    fn latest_catalog_migration_drops_role_permissions_boundary_column() {
+        let (filename, sql) = CATALOG_MIGRATIONS.last().expect("latest migration");
+
+        assert_eq!(*filename, "003_drop_role_permissions_boundary_column.sql");
+        assert!(
+            sql.contains("ALTER TABLE iam_roles DROP COLUMN IF EXISTS permissions_boundary_arn")
+        );
+        assert!(sql.contains("0.0.4"));
     }
 
     #[test]
@@ -158,6 +178,7 @@ mod tests {
 
         assert_eq!(*filename, "001_schema.sql");
         assert!(!sql.contains("CREATE TABLE IF NOT EXISTS continuous_backups"));
+        assert!(!sql.contains("permissions_boundary_arn"));
         assert!(sql.contains(&format!(
             "INSERT INTO settings (key, value) VALUES ('catalog_version', '{}')",
             CATALOG_VERSION

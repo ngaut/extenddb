@@ -166,7 +166,6 @@ CREATE TABLE IF NOT EXISTS iam_roles (
     role_name TEXT NOT NULL,
     role_arn TEXT NOT NULL UNIQUE,
     trust_policy JSONB NOT NULL,
-    permissions_boundary_arn TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (account_id, role_name)
 );
@@ -295,7 +294,7 @@ SELECT setval('stream_seq', GREATEST(
 ));
 
 -- Seed settings.
-INSERT INTO settings (key, value) VALUES ('catalog_version', '0.0.3')
+INSERT INTO settings (key, value) VALUES ('catalog_version', '0.0.4')
 ON CONFLICT (key) DO NOTHING;
 INSERT INTO settings (key, value) VALUES ('control_plane_delay_seconds', '0.25')
 ON CONFLICT (key) DO NOTHING;

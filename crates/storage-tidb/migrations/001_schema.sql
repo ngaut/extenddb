@@ -155,7 +155,6 @@ CREATE TABLE IF NOT EXISTS iam_roles (
     role_name VARCHAR(255) NOT NULL,
     role_arn VARCHAR(512) NOT NULL UNIQUE,
     trust_policy JSON NOT NULL,
-    permissions_boundary_arn VARCHAR(512),
     created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     PRIMARY KEY (account_id, role_name) CLUSTERED
 ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
@@ -295,4 +294,4 @@ CREATE TABLE IF NOT EXISTS backup_tags (
 ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 -- Seed settings.
-INSERT IGNORE INTO settings (`key`, value) VALUES ('catalog_version', '0.0.28');
+INSERT IGNORE INTO settings (`key`, value) VALUES ('catalog_version', '0.0.29');

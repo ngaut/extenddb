@@ -352,7 +352,7 @@ python3 docs/build-docs.py --doc 4
 
 If you haven't set up the virtual environment yet, see the [Python Environment Setup](../../README.md#python-environment-setup) section in the README.
 
-Output goes to `pdfs/` (gitignored).
+Output goes to `docs/rendered/` (gitignored).
 
 ## Project Tenets
 

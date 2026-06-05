@@ -7,7 +7,7 @@
 #   1. Checks dependencies (Rust toolchain, TiDB/MySQL client, Python 3).
 #   2. Creates a Python venv and installs doc-build requirements.
 #   3. Builds extenddb in release mode.
-#   4. Builds PDF documentation.
+#   4. Builds rendered documentation.
 #   5. Prints post-install instructions.
 #
 # Usage: scripts/install-linux.sh
@@ -115,9 +115,9 @@ cargo build -j12 --release --manifest-path "$PROJECT_ROOT/Cargo.toml"
 info "Built target/release/extenddb"
 echo
 
-# ── Step 4: Build PDF documentation ─────────────────────────────────
+# ── Step 4: Build rendered documentation ────────────────────────────
 
-echo -e "${BOLD}Building PDF documentation...${RESET}"
+echo -e "${BOLD}Building rendered documentation...${RESET}"
 
 python3 "$PROJECT_ROOT/docs/build-docs.py"
 echo
@@ -125,7 +125,7 @@ echo
 # ── Step 5: Post-install instructions ────────────────────────────────
 
 BINARY="$PROJECT_ROOT/target/release/extenddb"
-PDF_DIR="$PROJECT_ROOT/pdfs"
+DOCS_DIR="$PROJECT_ROOT/docs/rendered"
 
 echo -e "${BOLD}=== Installation complete ===${RESET}"
 echo
@@ -135,8 +135,8 @@ echo
 echo "To add extenddb to your PATH:"
 echo "  export PATH=\"$PROJECT_ROOT/target/release:\$PATH\""
 echo
-echo "PDF documentation:"
-echo "  $PDF_DIR/"
+echo "Rendered documentation:"
+echo "  $DOCS_DIR/"
 echo
 echo "Next steps:"
 echo "  1. Ensure TiDB is reachable: mysql -h 127.0.0.1 -P 4000 -uroot -e 'SELECT VERSION();'"

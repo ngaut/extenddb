@@ -33,7 +33,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -44,7 +43,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MANUALS_DIR = ROOT / "docs" / "manuals"
 DOCS_DIR = ROOT / "docs"
-OUTPUT_DIR = ROOT / "pdfs"
 RENDERED_DIR = ROOT / "docs" / "rendered"
 
 # ---------------------------------------------------------------------------
@@ -383,7 +381,6 @@ def main() -> int:
         md_path = ROOT / src_rel
         html_path = RENDERED_DIR / f"{slug}.html"
         pdf_path_rendered = RENDERED_DIR / f"{slug}.pdf"
-        pdf_path_legacy = OUTPUT_DIR / f"extenddb-{num:02d}-{slug}.pdf"
 
         if not md_path.exists():
             print(f"  SKIP {num}. {title} — source not found: {md_path}")
@@ -407,10 +404,6 @@ def main() -> int:
             size_kb = pdf_path_rendered.stat().st_size / 1024
             print(f"OK ({size_kb:.0f} KB)")
             ok_pdf += 1
-            # Also write to legacy pdfs/ location for backward compat
-            if num <= 12:
-                pdf_path_legacy.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(pdf_path_rendered, pdf_path_legacy)
         else:
             print("FAILED")
             fail += 1

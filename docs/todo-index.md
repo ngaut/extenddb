@@ -16,7 +16,6 @@ Regenerated: v0.0.113 (P112)
 ## TODO(cleanup)
 
 - `crates/core/src/metrics/collector.rs:124` — `#[allow(dead_code)]` on field used when console adds table-scoped latency breakdown.
-- `crates/storage-postgres/migrations/003_auth.sql:71` — Dead column `permissions_boundary_arn`; boundaries use `iam_permissions_boundaries` table. Drop in a future migration.
 
 ---
 

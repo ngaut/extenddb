@@ -176,7 +176,6 @@ CREATE TABLE iam_roles (
     role_name TEXT NOT NULL,
     role_arn TEXT NOT NULL UNIQUE,
     trust_policy JSONB NOT NULL,
-    permissions_boundary_arn TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (account_id, role_name)
 );

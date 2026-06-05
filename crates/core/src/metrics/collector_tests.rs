@@ -79,7 +79,6 @@ fn record_and_query_segments() {
     let c = MetricsCollector::new();
     c.record_segments(
         "GetItem",
-        Some("T"),
         LatencySegments {
             auth_us: 100.0,
             authz_us: 200.0,
@@ -91,7 +90,6 @@ fn record_and_query_segments() {
     );
     c.record_segments(
         "GetItem",
-        Some("T"),
         LatencySegments {
             auth_us: 200.0,
             authz_us: 300.0,
@@ -120,7 +118,6 @@ fn prune_removes_old_segments() {
     let c = MetricsCollector::new();
     c.record_segments(
         "PutItem",
-        None,
         LatencySegments {
             auth_us: 10.0,
             authz_us: 20.0,
@@ -145,7 +142,6 @@ fn segments_multiple_operations() {
     let c = MetricsCollector::new();
     c.record_segments(
         "GetItem",
-        Some("T"),
         LatencySegments {
             auth_us: 100.0,
             authz_us: 200.0,
@@ -157,7 +153,6 @@ fn segments_multiple_operations() {
     );
     c.record_segments(
         "PutItem",
-        Some("T"),
         LatencySegments {
             auth_us: 120.0,
             authz_us: 220.0,

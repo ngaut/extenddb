@@ -121,8 +121,6 @@ pub struct MetricsCollector {
 #[derive(Debug, Clone)]
 pub(super) struct SegmentPoint {
     pub(super) operation: String,
-    #[allow(dead_code)] // TODO(cleanup): used when console adds table-scoped latency breakdown
-    pub(super) table_name: Option<String>,
     pub(super) segments: LatencySegments,
     pub(super) timestamp: Instant,
 }
@@ -381,15 +379,9 @@ impl MetricsCollector {
     }
 
     /// Record per-segment latency breakdown for a request.
-    pub fn record_segments(
-        &self,
-        operation: &str,
-        table_name: Option<&str>,
-        segments: LatencySegments,
-    ) {
+    pub fn record_segments(&self, operation: &str, segments: LatencySegments) {
         let point = SegmentPoint {
             operation: operation.to_owned(),
-            table_name: table_name.map(ToOwned::to_owned),
             segments,
             timestamp: Instant::now(),
         };

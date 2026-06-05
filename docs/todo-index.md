@@ -13,10 +13,6 @@ Regenerated: v0.0.113 (P112)
 
 - `crates/storage-postgres/src/stream_engine.rs:367` — Shard list per table requires an extra SQL round-trip.
 
-## TODO(cleanup)
-
-- `crates/core/src/metrics/collector.rs:124` — `#[allow(dead_code)]` on field used when console adds table-scoped latency breakdown.
-
 ---
 
 ## License

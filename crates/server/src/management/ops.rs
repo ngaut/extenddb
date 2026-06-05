@@ -22,8 +22,8 @@ pub enum OpError {
     NotFound(String),
     /// Cannot delete due to dependent entities.
     HasDependents(String),
-    /// Internal database error (message intentionally not exposed in HTTP responses).
-    Internal(#[allow(dead_code)] String),
+    /// Internal database error.
+    Internal,
 }
 
 /// Map an `OpError` to an HTTP response for the management API.
@@ -37,7 +37,7 @@ pub fn op_err_to_response(e: OpError) -> axum::response::Response {
         OpError::AlreadyExists(msg) => (StatusCode::CONFLICT, msg).into_response(),
         OpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
         OpError::HasDependents(msg) => (StatusCode::CONFLICT, msg).into_response(),
-        OpError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        OpError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -50,7 +50,7 @@ impl OpError {
             StorageOpError::AlreadyExists(msg) => Self::AlreadyExists(msg),
             StorageOpError::NotFound(msg) => Self::NotFound(msg),
             StorageOpError::HasDependents(msg) => Self::HasDependents(msg),
-            StorageOpError::Internal(msg) => Self::Internal(msg),
+            StorageOpError::Internal(_) => Self::Internal,
         }
     }
 }

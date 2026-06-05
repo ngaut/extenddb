@@ -4,7 +4,7 @@ Refreshed: v0.0.118 (P115)
 
 ## Fidelity Bugs
 
-- ⬜ **Key-vs-item size gap** — batch/transact delete/update WCU uses key size, not old item size. Minor fidelity gap.
+- No archive-blocking TiDB/DynamoDB-client fidelity bugs currently identified. Minor capacity-reporting boundaries are tracked below.
 
 ## Test Gaps
 
@@ -30,6 +30,7 @@ Refreshed: v0.0.118 (P115)
 
 ## Native Backend Boundaries
 
+- ✅ **Batch/transact delete/update WCU old-item-size boundary** — `ConsumedCapacity` currently reports key-size lower-bound WCU for batch deletes and transactional delete/update paths when the old item is not already available in the engine. This is a minor response-reporting fidelity gap, not a customer hot-path correctness or stability blocker. Do not fix it with engine-side pre-reads or by replaying UpdateExpression semantics in the engine; that adds latency and creates a second source of truth. If customer evidence makes this goal-critical, implement it as a storage-owned write outcome/metering contract so TiDB can use old/new row data it already locks or fetches inside the native write transaction.
 - ✅ **DynamoDB tag API TPS boundary** — ExtendDB does not emulate AWS control-plane tag API TPS quotas with a frontend token bucket. If customer evidence makes this goal-critical, implement it as a storage-owned TiDB counter, not process-local throttling. Until then, prefer documenting the AWS quota difference over adding a distributed rate-limit subsystem to the hot archive path.
 - ✅ **TiDB table-level PITR restore boundary** — ExtendDB does not implement DynamoDB `RestoreTableToPointInTime` by replaying historical rows into a live table. TiDB BR PITR restores into an empty or conflict-free recovery cluster, `FLASHBACK TABLE` covers dropped/truncated tables, and historical reads are read-only for this live-target restore shape. If TiDB adds a native set-based online restore into a new table, this can move back to the feature backlog.
 

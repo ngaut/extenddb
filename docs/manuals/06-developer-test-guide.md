@@ -197,6 +197,12 @@ devtools/tidb-acceptance --sdk-smoke
 
 # Run the full TiDB backend developer gate
 devtools/tidb-acceptance --full
+
+# Run the final archive/customer gate against a running TiDB-backed ExtendDB
+EXTENDDB_TEST_ENDPOINT=https://127.0.0.1:8000 \
+EXTENDDB_ADMIN_USER=admin \
+EXTENDDB_ADMIN_PASSWORD=<password-from-init> \
+devtools/tidb-acceptance --archive
 ```
 
 `--changed` maps touched files to shell, whitespace, live-smoke, Rust, and
@@ -207,6 +213,14 @@ clippy, `extenddb --features tidb` tests and clippy, the standalone Rust SDK
 integration test compile, and documentation build. Each run writes a single
 artifact under `discussions/`, so TiDB backend proof is not lost in terminal
 scrollback.
+
+Use `--archive` for the final TiDB branch evidence. It runs the same developer
+gate as `--full` plus the live customer SDK smoke. It fails before expensive
+checks when `EXTENDDB_TEST_ENDPOINT` is missing or when neither SDK credentials
+nor `EXTENDDB_ADMIN_PASSWORD` are available for credential provisioning.
+`--archive` does not start ExtendDB; start a TiDB-backed ExtendDB first. You
+can still pair it with `--with-playground` when the native SQL smoke should
+manage a local TiUP playground.
 
 Pass `--with-playground` to have the acceptance loop check the local TiDB SQL
 endpoint first, start `tiup playground` only when the endpoint is down, wait for

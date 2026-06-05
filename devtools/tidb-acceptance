@@ -11,6 +11,7 @@
 set -euo pipefail
 exec < /dev/null
 
+ORIGINAL_ARGS=("$@")
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
@@ -25,6 +26,7 @@ RUN_SHELL=false
 RUN_DIFF=true
 DRY_RUN=false
 MANAGE_PLAYGROUND=false
+RUN_ARCHIVE=false
 
 MYSQL_BIN="${EXTENDDB_TIDB_MYSQL:-}"
 TIDB_HOST="${EXTENDDB_TIDB_HOST:-}"
@@ -50,7 +52,9 @@ Modes:
   --sdk                      compile standalone Rust SDK integration tests
   --sdk-smoke                run live DynamoDB SDK smoke against ExtendDB
   --docs                     rebuild documentation artifacts
+  --shell                    run script syntax/help checks
   --full                     run shell, diff, smoke, rust, sdk, and docs checks
+  --archive                  run --full plus --sdk-smoke for final TiDB evidence
 
 Planning:
   --dry-run                  show selected checks without running them
@@ -78,6 +82,8 @@ Environment:
   --sdk-smoke also uses EXTENDDB_TEST_ENDPOINT, AWS_ACCESS_KEY_ID, and
   AWS_SECRET_ACCESS_KEY. If SDK credentials are missing and
   EXTENDDB_ADMIN_PASSWORD is set, devtools/tidb-sdk-smoke provisions them.
+  --archive requires the same SDK-smoke endpoint and credential inputs. It does
+  not start ExtendDB; pair it with an already running TiDB-backed ExtendDB.
 EOF
 }
 
@@ -94,11 +100,22 @@ while [[ $# -gt 0 ]]; do
         --sdk) RUN_SDK=true; shift ;;
         --sdk-smoke) RUN_SDK_SMOKE=true; shift ;;
         --docs) RUN_DOCS=true; shift ;;
+        --shell) RUN_SHELL=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --full)
             RUN_SMOKE=true
             RUN_RUST=true
             RUN_SDK=true
+            RUN_DOCS=true
+            RUN_SHELL=true
+            shift
+            ;;
+        --archive)
+            RUN_ARCHIVE=true
+            RUN_SMOKE=true
+            RUN_RUST=true
+            RUN_SDK=true
+            RUN_SDK_SMOKE=true
             RUN_DOCS=true
             RUN_SHELL=true
             shift
@@ -152,11 +169,22 @@ if ! $RUN_CHANGED && ! $RUN_SMOKE && ! $RUN_RUST && ! $RUN_SDK && ! $RUN_SDK_SMO
 fi
 
 mkdir -p discussions
-HASH="$(git rev-parse --short HEAD)"
-STAMP="$(date +%Y%m%d%H%M%S)"
-RUN_ID="${STAMP}-$$"
-ARTIFACT="discussions/tidb-acceptance-${HASH}-${RUN_ID}.txt"
-exec > >(tee "$ARTIFACT") 2>&1
+HASH="${EXTENDDB_TIDB_ACCEPTANCE_HASH:-$(git rev-parse --short HEAD)}"
+STAMP="${EXTENDDB_TIDB_ACCEPTANCE_STAMP:-$(date +%Y%m%d%H%M%S)}"
+RUN_ID="${EXTENDDB_TIDB_ACCEPTANCE_RUN_ID:-${STAMP}-$$}"
+ARTIFACT="${EXTENDDB_TIDB_ACCEPTANCE_ARTIFACT:-discussions/tidb-acceptance-${HASH}-${RUN_ID}.txt}"
+
+if [[ "${EXTENDDB_TIDB_ACCEPTANCE_TEE:-}" != "1" ]]; then
+    export EXTENDDB_TIDB_ACCEPTANCE_TEE=1
+    export EXTENDDB_TIDB_ACCEPTANCE_HASH="$HASH"
+    export EXTENDDB_TIDB_ACCEPTANCE_STAMP="$STAMP"
+    export EXTENDDB_TIDB_ACCEPTANCE_RUN_ID="$RUN_ID"
+    export EXTENDDB_TIDB_ACCEPTANCE_ARTIFACT="$ARTIFACT"
+    set +e
+    "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}" 2>&1 | tee "$ARTIFACT"
+    status="${PIPESTATUS[0]}"
+    exit "$status"
+fi
 
 changed_files() {
     {
@@ -420,9 +448,22 @@ run_sdk_smoke_check() {
     "$python_bin" devtools/tidb-sdk-smoke
 }
 
+preflight_sdk_smoke() {
+    if [[ -z "${EXTENDDB_TEST_ENDPOINT:-}" ]]; then
+        echo "error: --sdk-smoke requires EXTENDDB_TEST_ENDPOINT"
+        return 1
+    fi
+    if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]] \
+        && [[ -z "${EXTENDDB_ADMIN_PASSWORD:-}" ]]; then
+        echo "error: --sdk-smoke requires AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or EXTENDDB_ADMIN_PASSWORD for auto-provisioning"
+        return 1
+    fi
+}
+
 echo "=== TiDB acceptance ==="
 echo "  commit:   ${HASH}"
 echo "  artifact: ${ARTIFACT}"
+echo "  archive:  ${RUN_ARCHIVE}"
 echo "  shell:    ${RUN_SHELL}"
 echo "  diff:     ${RUN_DIFF}"
 echo "  smoke:    ${RUN_SMOKE}"
@@ -438,6 +479,15 @@ if $DRY_RUN; then
     echo "[ok] dry run complete; no checks executed"
     echo "artifact: ${ARTIFACT}"
     exit 0
+fi
+
+if $RUN_SDK_SMOKE; then
+    run_step "SDK smoke prerequisites" preflight_sdk_smoke
+    if ! $PASS; then
+        echo "=== TiDB acceptance failed ==="
+        echo "artifact: ${ARTIFACT}"
+        exit 1
+    fi
 fi
 
 if $RUN_SHELL; then

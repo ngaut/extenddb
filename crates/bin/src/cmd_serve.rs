@@ -464,8 +464,7 @@ async fn serve_inner(
 
     let tls_enabled = app_config.server.tls.enabled;
 
-    // P53: Resolve import and export path lists. Supports both the new
-    // [import]/[export] sections and the deprecated import_export_root.
+    // P53: Resolve import and export path lists.
     let resolve_paths = |raw_paths: &[String],
                          label: &str|
      -> anyhow::Result<Vec<Arc<std::path::PathBuf>>> {
@@ -485,28 +484,10 @@ async fn serve_inner(
         Ok(resolved)
     };
 
-    // Build effective path lists: new config takes precedence over deprecated.
-    let mut import_paths_raw = app_config.import_config.paths.clone();
-    let mut export_paths_raw = app_config.export_config.paths.clone();
-    if let Some(ref legacy) = app_config.import_export_root {
-        if import_paths_raw.is_empty() {
-            import_paths_raw.push(legacy.clone());
-        }
-        if export_paths_raw.is_empty() {
-            export_paths_raw.push(legacy.clone());
-        }
-        if !app_config.import_config.paths.is_empty() && !app_config.export_config.paths.is_empty()
-        {
-            tracing::warn!(
-                "Both import_export_root and [import]/[export] sections configured; import_export_root is ignored"
-            );
-        }
-    }
-
     let import_paths: Arc<[Arc<std::path::PathBuf>]> =
-        Arc::from(resolve_paths(&import_paths_raw, "import")?);
+        Arc::from(resolve_paths(&app_config.import_config.paths, "import")?);
     let export_paths: Arc<[Arc<std::path::PathBuf>]> =
-        Arc::from(resolve_paths(&export_paths_raw, "export")?);
+        Arc::from(resolve_paths(&app_config.export_config.paths, "export")?);
 
     if import_paths.is_empty() {
         tracing::info!("Import disabled (no [import] paths configured)");
@@ -547,13 +528,7 @@ async fn serve_inner(
         }
     });
 
-    let limits = Arc::new({
-        let mut limits = app_config.limits;
-        if let Some(max_bytes) = app_config.max_import_bytes {
-            limits.max_import_file_bytes = max_bytes;
-        }
-        limits
-    });
+    let limits = Arc::new(app_config.limits);
 
     let backend_native_capacity_control = app_config
         .storage

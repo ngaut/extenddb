@@ -182,8 +182,6 @@ key_path = "{tls_key}"
 
 # [export]
 # paths = []                     # Allowed directories for export operations
-
-# max_import_bytes = 10737418240 # Maximum import file size (10 GB)
 "#,
         backend_env = backend.to_uppercase(),
     );

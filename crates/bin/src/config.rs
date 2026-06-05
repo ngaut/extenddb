@@ -29,14 +29,8 @@ pub struct AppConfig {
     /// operations. If empty or absent, exports are denied (secure default).
     #[serde(default, rename = "export")]
     pub export_config: ImportExportPathConfig,
-    /// Maximum import file size in bytes. Defaults to 10 GB.
-    pub max_import_bytes: Option<u64>,
     /// Path to the rendered documentation directory (`/console/docs`).
     pub docs_dir: Option<String>,
-    /// Deprecated: single root for both import and export. Superseded by
-    /// `[import]` and `[export]` sections. If set and the new sections are
-    /// empty, this value is used for both import and export paths.
-    pub import_export_root: Option<String>,
 }
 
 /// Configuration for import or export allowed paths.
@@ -718,5 +712,21 @@ default_read_staleness_seconds = 5
                 .map(|(_, value)| value.as_str()),
             Some("5")
         );
+    }
+
+    #[test]
+    fn legacy_import_export_aliases_are_rejected() {
+        for field in [
+            r#"import_export_root = "/tmp/extenddb""#,
+            "max_import_bytes = 10737418240",
+        ] {
+            let err = toml::from_str::<AppConfig>(field)
+                .expect_err("legacy top-level import/export alias should be rejected");
+
+            assert!(
+                err.to_string().contains("unknown field"),
+                "unexpected error for {field}: {err}"
+            );
+        }
     }
 }

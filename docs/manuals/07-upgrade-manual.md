@@ -5,7 +5,7 @@
 ## Current Status
 
 ExtendDB 0.1.0 defaults to the TiDB backend and currently expects TiDB catalog
-version 0.0.27. Existing TiDB catalogs are upgraded in place by
+version 0.0.29. Existing TiDB catalogs are upgraded in place by
 `extenddb migrate`.
 
 ## How Catalog Upgrades Work
@@ -20,6 +20,8 @@ applied in filename order:
 ...
 026_simplify_control_plane_queue_index.sql
 027_stream_generations.sql
+028_control_plane_due_time_index.sql
+029_drop_role_permissions_boundary_column.sql
 ```
 
 TiDB data-plane migrations live separately in
@@ -48,7 +50,7 @@ A single row in the `settings` table stores the catalog version:
 
 ```sql
 SELECT value FROM settings WHERE key = 'catalog_version';
--- '0.0.27'
+-- '0.0.29'
 ```
 
 The binary embeds an expected catalog version (`CATALOG_VERSION` constant in `crates/storage-tidb/src/lib.rs`). At startup, the server compares the database value against the binary's expectation. If they don't match, the server refuses to start and directs the operator to run `extenddb migrate`.
@@ -70,7 +72,7 @@ When you need to change the catalog schema, here's the process:
 Add a new SQL file with the next sequence number:
 
 ```
-crates/storage-tidb/migrations/027_your_feature.sql
+crates/storage-tidb/migrations/030_your_feature.sql
 ```
 
 TiDB DDL auto-commits and cannot be rolled back as part of an explicit SQL
@@ -81,13 +83,13 @@ small, repeatable catalog DML. Do not wrap TiDB migration files in `BEGIN` /
 ```sql
 -- Copyright 2026 ExtendDB contributors
 -- SPDX-License-Identifier: Apache-2.0
--- Migration 027: Brief description of what this adds/changes.
+-- Migration 030: Brief description of what this adds/changes.
 
 -- Your online DDL here.
 ALTER TABLE tables ADD COLUMN IF NOT EXISTS new_column TEXT;
 
 -- Bump the catalog version after the DDL statements are in place.
-UPDATE settings SET value = '0.0.27' WHERE key = 'catalog_version';
+UPDATE settings SET value = '0.0.30' WHERE key = 'catalog_version';
 ```
 
 ### 2. Register it in the migration runner
@@ -101,12 +103,12 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../storage-tidb/migrations/001_schema.sql"),
     ),
     (
-        "026_simplify_control_plane_queue_index.sql",
-        include_str!("../../storage-tidb/migrations/026_simplify_control_plane_queue_index.sql"),
+        "029_drop_role_permissions_boundary_column.sql",
+        include_str!("../../storage-tidb/migrations/029_drop_role_permissions_boundary_column.sql"),
     ),
     (
-        "027_your_feature.sql",
-        include_str!("../../storage-tidb/migrations/027_your_feature.sql"),
+        "030_your_feature.sql",
+        include_str!("../../storage-tidb/migrations/030_your_feature.sql"),
     ),
 ];
 ```
@@ -116,7 +118,7 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
 In `crates/storage-tidb/src/lib.rs`:
 
 ```rust
-pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 27);
+pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 30);
 ```
 
 This must match the version written by your migration's `UPDATE settings` statement.
@@ -192,7 +194,13 @@ If an upgrade fails:
 
 ## Version History
 
-### TiDB Catalog 0.0.28 (Current)
+### TiDB Catalog 0.0.29 (Current)
+
+Drops the stale `iam_roles.permissions_boundary_arn` catalog column. Role
+permissions boundaries now live only in `iam_permissions_boundaries`, matching
+user permissions-boundary storage and the fresh catalog schema.
+
+### TiDB Catalog 0.0.28
 
 Changes the TiDB control-plane work index to due-time order so distributed
 pollers can read next-eligible table lifecycle work through TiDB's native

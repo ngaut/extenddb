@@ -22,7 +22,6 @@ use crate::data::{finalize_pending_stream_record_batch_for_shard, next_stream_se
 /// spread stream writes across TiDB Regions instead of concentrating under the
 /// table_id prefix.
 pub(crate) const SHARDS_PER_STREAM: u32 = 16;
-const LEGACY_TABLE_PREFIX_SHARDS_PER_STREAM: u32 = 4;
 
 pub(crate) struct StreamGenerationCatalog<'a> {
     pub account_id: &'a str,
@@ -35,14 +34,6 @@ pub(crate) struct StreamGenerationCatalog<'a> {
 
 pub(crate) fn stream_shard_id(table_id: &str, stream_label: &str, shard_index: u32) -> String {
     format!("shardId-{shard_index:012}-{stream_label}-{table_id}")
-}
-
-fn legacy_bucket_prefix_stream_shard_id(table_id: &str, shard_index: u32) -> String {
-    format!("shardId-{shard_index:012}-{table_id}")
-}
-
-fn legacy_table_prefix_stream_shard_id(table_id: &str, shard_index: u32) -> String {
-    format!("shardId-{table_id}-{shard_index:012}")
 }
 
 pub(crate) fn stream_shard_index(partition_key: &[u8]) -> u32 {
@@ -484,12 +475,7 @@ impl StreamEngine for TidbEngine {
             };
 
             let shard_belongs_to_stream = (0..SHARDS_PER_STREAM)
-                .any(|index| stream_shard_id(&table_id, &stream_label, index) == shard_id)
-                || (0..SHARDS_PER_STREAM).any(|index| {
-                    legacy_bucket_prefix_stream_shard_id(&table_id, index) == shard_id
-                })
-                || (0..LEGACY_TABLE_PREFIX_SHARDS_PER_STREAM)
-                    .any(|index| legacy_table_prefix_stream_shard_id(&table_id, index) == shard_id);
+                .any(|index| stream_shard_id(&table_id, &stream_label, index) == shard_id);
 
             if !shard_belongs_to_stream {
                 return Err(StorageError::TableNotFound(format!(
@@ -601,9 +587,7 @@ impl StreamEngine for TidbEngine {
 #[cfg(test)]
 mod tests {
     use super::{
-        SHARDS_PER_STREAM, legacy_bucket_prefix_stream_shard_id,
-        legacy_table_prefix_stream_shard_id, stream_shard_id, stream_shard_id_for_partition_key,
-        stream_shard_index,
+        SHARDS_PER_STREAM, stream_shard_id, stream_shard_id_for_partition_key, stream_shard_index,
     };
 
     #[test]
@@ -621,18 +605,6 @@ mod tests {
         let second_generation = stream_shard_id("table-1", "stream-b", 3);
 
         assert_ne!(first_generation, second_generation);
-        assert_eq!(
-            legacy_bucket_prefix_stream_shard_id("table-1", 3),
-            "shardId-000000000003-table-1"
-        );
-    }
-
-    #[test]
-    fn legacy_table_prefix_stream_shard_ids_remain_validatable() {
-        assert_eq!(
-            legacy_table_prefix_stream_shard_id("table-1", 3),
-            "shardId-table-1-000000000003"
-        );
     }
 
     #[test]

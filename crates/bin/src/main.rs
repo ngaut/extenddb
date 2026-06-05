@@ -98,7 +98,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Settings(args) => run_interactive(cmd_settings::run(args)),
-        Command::Manage(args) => run_interactive(cmd_manage::run(args)),
+        Command::Manage(args) => cmd_manage::run(args),
         Command::CatalogCheck(args) => run_interactive(cmd_catalog_check::run(args)),
         Command::Version => {
             print_version();

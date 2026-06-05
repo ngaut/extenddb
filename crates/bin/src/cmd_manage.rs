@@ -12,10 +12,7 @@
 use crate::manage_http::{basic_auth, dispatch, resolve_endpoint, resolve_password};
 pub use crate::manage_types::ManageArgs;
 
-// Caller (`run_interactive`) requires a Future; removing `async` would need a
-// manual `impl Future` wrapper for no benefit.
-#[allow(clippy::unused_async)]
-pub async fn run(args: ManageArgs) -> anyhow::Result<()> {
+pub fn run(args: ManageArgs) -> anyhow::Result<()> {
     let (host_port, use_tls, cert_path) = resolve_endpoint(args.endpoint.as_deref(), &args.config)?;
     let password = resolve_password(args.password)?;
     let auth = basic_auth(&args.user, &password);

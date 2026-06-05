@@ -795,9 +795,9 @@ If the health check fails, start extenddb. If it succeeds, check your `--endpoin
 
 ## Connection Pool Exhaustion
 
-### HTTP 500 on all requests under heavy load
+### HTTP 503 on all requests under heavy load
 
-**Cause:** The storage backend connection pool is exhausted. All connections are in use and new requests cannot acquire a connection within the timeout. extenddb currently returns HTTP 500 (Internal Server Error) instead of the more appropriate 503 (Service Unavailable).
+**Cause:** The storage backend connection pool is exhausted. All connections are in use and new requests cannot acquire a connection within the timeout. extenddb maps typed backend unavailability, SQL pool-acquire timeouts, and closed-pool acquisition errors to `ServiceUnavailable` / HTTP 503 instead of exposing internal storage details.
 
 **Fix:** Increase the pool size in `extenddb.toml`:
 ```toml
@@ -815,8 +815,6 @@ engine-catalog, and catalog-store/auth pools. Check TiDB session usage, slow
 queries, DDL jobs, and Resource Control throttling with TiDB's cluster
 diagnostics. For the PostgreSQL alternate backend, use PostgreSQL session
 inspection such as `pg_stat_activity`.
-
-**Known limitation:** The HTTP status code should be 503 with a `Retry-After` header. This is tracked as technical debt.
 
 ---
 

@@ -37,26 +37,49 @@ INCREMENTS_PER_THREAD = 100
 
 # Maximum retries for operations that hit pool exhaustion under single-row
 # contention.  50 threads all contending on one row can saturate a 20-connection
-# pool, causing transient InternalServerError from pool-acquire timeouts.
+# pool, causing transient ServiceUnavailable responses from pool-acquire timeouts.
 _MAX_RETRIES = 20
 _RETRY_BASE_SLEEP = 0.05
-def _retry_on_internal_error(fn, max_retries: int = _MAX_RETRIES):
-    """Call *fn*; retry on InternalServerError with exponential backoff + jitter."""
+
+
+def _retry_on_transient_service_error(fn, max_retries: int = _MAX_RETRIES):
+    """Call *fn*; retry transient storage saturation with exponential backoff + jitter."""
     for attempt in range(max_retries + 1):
         try:
             return fn()
         except ClientError as e:
             code = e.response.get("Error", {}).get("Code", "")
-            if code == "InternalServerError" and attempt < max_retries:
+            if code in {"ServiceUnavailable", "InternalServerError"} and attempt < max_retries:
                 sleep = _RETRY_BASE_SLEEP * (2 ** min(attempt, 6))
                 time.sleep(sleep + random.random() * sleep)
                 continue
             raise
+
+
+def test_retry_on_transient_service_error_retries_service_unavailable(monkeypatch):
+    """Pool saturation now returns ServiceUnavailable, so stress helpers retry it."""
+    attempts = {"count": 0}
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(random, "random", lambda: 0.0)
+
+    def call():
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise ClientError(
+                {"Error": {"Code": "ServiceUnavailable", "Message": "temporary"}},
+                "UpdateItem",
+            )
+        return "ok"
+
+    assert _retry_on_transient_service_error(call, max_retries=1) == "ok"
+    assert attempts["count"] == 2
+
+
 def _make_client():
     """Create a fresh boto3 DynamoDB client for the current thread.
 
     Retries are disabled at the SDK level — the test harness handles retries
-    via ``_retry_on_internal_error`` to avoid compounding pool pressure.
+    via ``_retry_on_transient_service_error`` to avoid compounding pool pressure.
     """
     endpoint = os.environ.get("EXTENDDB_TEST_ENDPOINT", "").strip()
     kwargs: dict = {
@@ -118,7 +141,7 @@ class TestParallelInserts:
             client = _make_client()
             count = 0
             for i in range(ITEMS_PER_THREAD):
-                _retry_on_internal_error(
+                _retry_on_transient_service_error(
                     lambda i=i: client.put_item(
                         TableName=table,
                         Item={
@@ -159,7 +182,7 @@ class TestAtomicCounter:
             c = _make_client()
             done = 0
             for _ in range(INCREMENTS_PER_THREAD):
-                _retry_on_internal_error(
+                _retry_on_transient_service_error(
                     lambda: c.update_item(
                         TableName=table,
                         Key={"pk": {"S": counter_key}},
@@ -199,7 +222,7 @@ class TestConcurrentListAppend:
 
         def _append(thread_id: int) -> int:
             c = _make_client()
-            _retry_on_internal_error(
+            _retry_on_transient_service_error(
                 lambda: c.update_item(
                     TableName=table,
                     Key={"pk": {"S": list_key}},
@@ -240,7 +263,7 @@ class TestConcurrentSetUnion:
         def _add_tags(thread_id: int) -> set[str]:
             c = _make_client()
             my_tags = {f"tag-{thread_id}-{i}" for i in range(3)}
-            _retry_on_internal_error(
+            _retry_on_transient_service_error(
                 lambda: c.update_item(
                     TableName=table,
                     Key={"pk": {"S": set_key}},
@@ -279,7 +302,7 @@ class TestConcurrentNestedPaths:
         def _write_path(thread_id: int) -> str:
             c = _make_client()
             path_name = f"thread_{thread_id}"
-            _retry_on_internal_error(
+            _retry_on_transient_service_error(
                 lambda: c.update_item(
                     TableName=table,
                     Key={"pk": {"S": nested_key}},

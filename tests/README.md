@@ -90,9 +90,11 @@ The customer-path SDK smoke uses `devtools/tidb-sdk-smoke`. Start ExtendDB with
 the TiDB backend first, then run `devtools/tidb-acceptance --sdk-smoke`. The
 smoke creates a no-index table, verifies PutItem/GetItem, BatchWriteItem,
 TransactWriteItems, idempotent transaction replay, idempotency mismatch
-rejection, and table cleanup. If `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
-are not set but `EXTENDDB_ADMIN_PASSWORD` is available, it provisions temporary
-test credentials through `devtools/provision-test-credentials`.
+rejection, and table cleanup. It prints per-step latency timings so acceptance
+artifacts show whether customer-path operations are getting slower. If
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are not set but
+`EXTENDDB_ADMIN_PASSWORD` is available, it provisions temporary test credentials
+through `devtools/provision-test-credentials`.
 
 ## Running against real DynamoDB
 

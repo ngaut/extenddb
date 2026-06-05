@@ -17,12 +17,32 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_REGION = "us-east-1"
+
+
+class StepTimings:
+    def __init__(self) -> None:
+        self._measurements: list[tuple[str, float]] = []
+
+    def run(self, label: str, action: Callable[[], Any]) -> Any:
+        started = time.perf_counter()
+        result = action()
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        self._measurements.append((label, elapsed_ms))
+        print(f"[ok] {label} ({elapsed_ms:.1f} ms)")
+        return result
+
+    def print_summary(self) -> None:
+        print("")
+        print("=== TiDB SDK latency summary ===")
+        for label, elapsed_ms in self._measurements:
+            print(f"  {label}: {elapsed_ms:.1f} ms")
 
 
 def parse_args() -> argparse.Namespace:
@@ -220,6 +240,7 @@ def run_smoke(client: Any, args: argparse.Namespace) -> None:
     table_name = f"{args.table_prefix}-{uuid.uuid4().hex[:12]}"
     created = False
     cleanup_error: Exception | None = None
+    timings = StepTimings()
 
     print("=== TiDB SDK Smoke ===")
     print(f"  endpoint: {args.endpoint}")
@@ -228,36 +249,62 @@ def run_smoke(client: Any, args: argparse.Namespace) -> None:
     print("")
 
     try:
-        client.create_table(
-            TableName=table_name,
-            AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
-            KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
-            BillingMode="PAY_PER_REQUEST",
-        )
-        created = True
-        wait_for_active(client, table_name, args.timeout)
-        print("[ok] no-index table reached ACTIVE")
+        def create_table() -> None:
+            nonlocal created
+            client.create_table(
+                TableName=table_name,
+                AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            created = True
+            wait_for_active(client, table_name, args.timeout)
 
-        client.put_item(
-            TableName=table_name,
-            Item={"pk": {"S": "p1"}, "v": {"S": "put"}},
-        )
-        assert_item_value(client, table_name, "p1", "put")
-        print("[ok] PutItem/GetItem round trip")
+        timings.run("CreateTable to ACTIVE", create_table)
 
-        response = client.batch_write_item(
-            RequestItems={
-                table_name: [
-                    {"PutRequest": {"Item": {"pk": {"S": "b1"}, "v": {"S": "batch-1"}}}},
-                    {"PutRequest": {"Item": {"pk": {"S": "b2"}, "v": {"S": "batch-2"}}}},
-                ]
-            }
+        timings.run(
+            "PutItem p1",
+            lambda: client.put_item(
+                TableName=table_name,
+                Item={"pk": {"S": "p1"}, "v": {"S": "put"}},
+            ),
         )
-        if response.get("UnprocessedItems"):
-            raise AssertionError(f"unexpected unprocessed writes: {response['UnprocessedItems']}")
-        assert_item_value(client, table_name, "b1", "batch-1")
-        assert_item_value(client, table_name, "b2", "batch-2")
-        print("[ok] BatchWriteItem round trip")
+        timings.run(
+            "GetItem p1",
+            lambda: assert_item_value(client, table_name, "p1", "put"),
+        )
+
+        def batch_write() -> None:
+            response = client.batch_write_item(
+                RequestItems={
+                    table_name: [
+                        {
+                            "PutRequest": {
+                                "Item": {"pk": {"S": "b1"}, "v": {"S": "batch-1"}}
+                            }
+                        },
+                        {
+                            "PutRequest": {
+                                "Item": {"pk": {"S": "b2"}, "v": {"S": "batch-2"}}
+                            }
+                        },
+                    ]
+                }
+            )
+            if response.get("UnprocessedItems"):
+                raise AssertionError(
+                    f"unexpected unprocessed writes: {response['UnprocessedItems']}"
+                )
+
+        timings.run("BatchWriteItem two puts", batch_write)
+        timings.run(
+            "GetItem b1",
+            lambda: assert_item_value(client, table_name, "b1", "batch-1"),
+        )
+        timings.run(
+            "GetItem b2",
+            lambda: assert_item_value(client, table_name, "b2", "batch-2"),
+        )
 
         token = uuid.uuid4().hex
         tx_items = [
@@ -268,46 +315,58 @@ def run_smoke(client: Any, args: argparse.Namespace) -> None:
                 }
             }
         ]
-        client.transact_write_items(
-            TransactItems=tx_items,
-            ClientRequestToken=token,
-        )
-        client.transact_write_items(
-            TransactItems=tx_items,
-            ClientRequestToken=token,
-        )
-        assert_item_value(client, table_name, "tx1", "transact")
-        print("[ok] TransactWriteItems idempotent replay")
-
-        try:
-            client.transact_write_items(
-                TransactItems=[
-                    {
-                        "Put": {
-                            "TableName": table_name,
-                            "Item": {
-                                "pk": {"S": "tx-mismatch"},
-                                "v": {"S": "different"},
-                            },
-                        }
-                    }
-                ],
+        timings.run(
+            "TransactWriteItems first claim",
+            lambda: client.transact_write_items(
+                TransactItems=tx_items,
                 ClientRequestToken=token,
-            )
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code")
-            if code != "IdempotentParameterMismatchException":
-                raise
-        else:
-            raise AssertionError("idempotency mismatch was accepted")
-        print("[ok] TransactWriteItems idempotency mismatch rejected")
+            ),
+        )
+        timings.run(
+            "TransactWriteItems idempotent replay",
+            lambda: client.transact_write_items(
+                TransactItems=tx_items,
+                ClientRequestToken=token,
+            ),
+        )
+        timings.run(
+            "GetItem tx1",
+            lambda: assert_item_value(client, table_name, "tx1", "transact"),
+        )
+
+        def reject_idempotency_mismatch() -> None:
+            try:
+                client.transact_write_items(
+                    TransactItems=[
+                        {
+                            "Put": {
+                                "TableName": table_name,
+                                "Item": {
+                                    "pk": {"S": "tx-mismatch"},
+                                    "v": {"S": "different"},
+                                },
+                            }
+                        }
+                    ],
+                    ClientRequestToken=token,
+                )
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code")
+                if code != "IdempotentParameterMismatchException":
+                    raise
+            else:
+                raise AssertionError("idempotency mismatch was accepted")
+
+        timings.run("TransactWriteItems idempotency mismatch reject", reject_idempotency_mismatch)
 
     finally:
         if created:
             try:
-                client.delete_table(TableName=table_name)
-                wait_for_deleted(client, table_name, args.timeout)
-                print("[ok] cleanup deleted table")
+                def delete_table() -> None:
+                    client.delete_table(TableName=table_name)
+                    wait_for_deleted(client, table_name, args.timeout)
+
+                timings.run("DeleteTable cleanup", delete_table)
             except Exception as exc:
                 cleanup_error = exc
                 print(f"[warn] cleanup failed for {table_name}: {exc}", file=sys.stderr)
@@ -315,6 +374,7 @@ def run_smoke(client: Any, args: argparse.Namespace) -> None:
     if cleanup_error is not None:
         raise RuntimeError(f"cleanup failed for {table_name}: {cleanup_error}")
 
+    timings.print_summary()
     print("")
     print("=== TiDB SDK smoke passed ===")
 

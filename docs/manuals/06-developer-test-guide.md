@@ -231,9 +231,10 @@ Use `--sdk-smoke` after starting ExtendDB with the TiDB backend to prove the
 customer path, not just native SQL behavior. This invokes
 `devtools/tidb-sdk-smoke`, which creates a no-index table through the DynamoDB
 SDK, verifies PutItem/GetItem, BatchWriteItem, TransactWriteItems, idempotent
-transaction replay, idempotency mismatch rejection, and table cleanup. If SDK
-credentials are not already exported but `EXTENDDB_ADMIN_PASSWORD` is set, the
-smoke provisions temporary test credentials with
+transaction replay, idempotency mismatch rejection, and table cleanup. It also
+prints per-step latency timings, so each acceptance artifact doubles as a quick
+customer-path performance check. If SDK credentials are not already exported but
+`EXTENDDB_ADMIN_PASSWORD` is set, the smoke provisions temporary test credentials with
 `devtools/provision-test-credentials`.
 
 ### Test Suites

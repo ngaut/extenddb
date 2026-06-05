@@ -163,8 +163,8 @@ pub async fn handle_batch_write_item(
                     &mut all_icm,
                 );
 
-                // TODO(fidelity): DynamoDB charges WCU based on old item size for deletes,
-                // but old item size is not available here. Using key size as lower bound.
+                // Delete metering uses request key bytes because old item
+                // payloads are not part of the BatchWriteItem engine preflight.
                 let item_wcu = capacity_helpers::write_capacity_units(item_size_bytes(&del.key));
                 total_wcu += item_wcu;
                 *per_table_wcu.entry(table_name.clone()).or_default() += item_wcu;

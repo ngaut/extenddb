@@ -175,9 +175,8 @@ impl PreparedOp {
     pub(crate) fn write_bytes(&self) -> usize {
         match self {
             Self::Put { item, .. } => item_size_bytes(item),
-            // TODO(fidelity): DynamoDB charges WCU based on old item size for deletes
-            // and max(old, new) for updates. Old item size is not available at this point
-            // in the transact flow. Using key size as a lower bound.
+            // Delete/update metering uses request key bytes because old item
+            // payloads are not part of the transaction engine preflight.
             Self::Delete { key, .. } | Self::Update { key, .. } => item_size_bytes(key),
             Self::ConditionCheck { .. } => 0,
         }

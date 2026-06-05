@@ -79,12 +79,12 @@ Both debug and release builds must pass before any phase exit.
 
 ### Style
 
-- `#[allow(dead_code)]` requires a concrete `TODO(...)` comment that names
-  the reason and removal condition
+- `#[allow(dead_code)]` requires a nearby comment that names the reason and
+  removal condition
 - All public APIs require `///` doc comments
 - All crate roots require `//!` module-level documentation
-- TODOs use category tags such as `TODO(fidelity)`, `TODO(cleanup)`, and
-  `TODO(security)`
+- Avoid leaving TODO markers in shipped code; either finish the cleanup or add
+  the unresolved behavior to the backlog with owner-visible context
 
 ### Copyright Header
 

@@ -1,7 +1,7 @@
 ---
 name: extenddb
 description: ExtendDB onboarding, configuration, sample walkthrough, and troubleshooting. Activates on any ExtendDB-related request including setup, build, init, serve, IAM, AWS CLI configuration, first CRUD, sample apps, streams, or any ExtendDB error message. Routes to the appropriate domain reference based on user intent.
-last_synced_with_docs: "2026-05-18"
+last_synced_with_docs: "2026-06-06"
 ---
 
 # ExtendDB

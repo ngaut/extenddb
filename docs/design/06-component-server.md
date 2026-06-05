@@ -1,9 +1,7 @@
 # extenddb — Component Design: HTTP Server
 
-**Version:** 1.0
-**Date:** 2026-04-03
-**Status:** Draft
-**Crate:** `dynamodb-server`
+**Status:** Implemented
+**Crate:** `extenddb-server`
 
 ## 1. Purpose
 
@@ -13,22 +11,18 @@ The `server` crate provides the HTTP server, request routing, middleware pipelin
 
 ```
 crates/server/src/
-├── lib.rs                # Server builder, startup, shutdown
-├── router.rs             # X-Amz-Target routing → operation dispatch
-├── request.rs            # Request parsing, header extraction
-├── response.rs           # Response formatting, CRC32, compression, error serialization
-├── middleware/
-│   ├── mod.rs
-│   ├── request_id.rs     # Assign x-amzn-RequestId
-│   ├── logging.rs        # Request/response logging
-│   ├── auth.rs           # Authentication + authorization layer
-│   ├── throttle_helpers.rs # Backend-aware frontend capacity tracking
-│   ├── rate_limit.rs     # Global and per-table rate limiting
-│   ├── metrics.rs        # Per-operation metrics collection
-│   ├── request_size.rs   # Request body size limit enforcement
-│   └── compression.rs    # Response gzip compression + CRC32
-├── health.rs             # /health and /metrics endpoints
-└── tls.rs                # TLS configuration (rustls)
+├── lib.rs                    # Server startup, routes, AppState, TLS acceptor
+├── handler.rs                # DynamoDB X-Amz-Target request handler
+├── authorization.rs          # IAM authorization helpers
+├── request_helpers.rs        # Request parsing helpers
+├── response.rs               # DynamoDB JSON/error response formatting
+├── metrics_endpoint.rs       # Prometheus metrics endpoint
+├── rate_limit.rs             # Local rate-limit helpers
+├── throttle_helpers.rs       # Backend-aware frontend capacity tracking
+├── authz_cache.rs            # Authorization cache wrapper
+├── key_info_cache.rs         # Table key-info cache wrapper
+├── management/               # Management API endpoints
+└── console/                  # Web console and rendered-docs UI
 ```
 
 ## 3. Server Startup

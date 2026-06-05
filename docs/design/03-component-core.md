@@ -18,41 +18,16 @@ The `core` crate contains all DynamoDB-specific business logic that is independe
 ```
 crates/core/src/
 ├── lib.rs
-├── types/
-│   ├── mod.rs
-│   ├── attribute_value.rs    # AttributeValue enum and serialization
-│   ├── key_schema.rs         # KeySchemaElement, KeyType
-│   ├── table.rs              # TableMetadata, TableStatus, BillingMode
-│   ├── index.rs              # GSI/LSI metadata, Projection types
-│   ├── stream.rs             # StreamSpecification, StreamViewType
-│   └── consumed_capacity.rs  # ConsumedCapacity, Capacity
-├── expression/
-│   ├── mod.rs
-│   ├── tokenizer.rs          # Lexer: string → tokens
-│   ├── parser.rs             # Condition/filter/key condition parser
-│   ├── update_parser.rs      # SET/REMOVE/ADD/DELETE parser
-│   ├── projection_parser.rs  # Projection expression parser
-│   ├── ast.rs                # Expression AST types
-│   ├── evaluator.rs          # Condition/filter evaluation against an item
-│   ├── update_evaluator.rs   # Apply update expression to an item
-│   ├── projection.rs         # Apply projection to an item
-│   ├── resolver.rs           # #name and :value resolution
-│   └── path.rs               # Nested document path parsing and traversal
-├── validation/
-│   ├── mod.rs
-│   ├── table_name.rs         # 3-255 chars, [a-zA-Z0-9_.-]
-│   ├── attribute.rs          # Attribute name length, key size
-│   ├── item.rs               # Item size calculation and validation
-│   ├── expression.rs         # Expression length, placeholder count
-│   └── request.rs            # Per-operation input validation
-├── capacity/
-│   ├── mod.rs
-│   └── calculator.rs         # Item size → RCU/WCU (pure math, no state)
-├── error/
-│   ├── mod.rs                # DynamoDbError enum
-│   └── messages.rs           # Error message constants
-└── limits/
-    └── mod.rs                # LimitsConfig with all configurable limits
+├── error/                    # DynamoDbError and canonical messages
+├── expression/               # Tokenizer, parsers, AST, evaluators, projection
+├── limits/                   # LimitsConfig with DynamoDB-compatible defaults
+├── metrics/                  # In-memory metric types, collector, query helpers
+├── types/                    # DynamoDB request, response, table, item, stream types
+├── validation/               # Table/item/expression/request validation
+├── provisioning.rs           # Provisioned-throughput metadata helpers
+├── serde_helpers.rs          # Wire-format serialization helpers
+├── throttle.rs               # Capacity token-bucket primitives
+└── version.rs                # Catalog version type
 ```
 
 ## 3. Type System

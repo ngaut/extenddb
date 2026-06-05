@@ -45,7 +45,7 @@ Stream capture: failed to assign shard for <table>: <error>
 
 **Fix:** Check storage backend connectivity and stream metadata. TiDB stores stream records in the shared data database table and uses native TTL for retention. PostgreSQL alternate deployments should also verify the table's stream shard metadata.
 
-**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-05-12.
+**Source:** `docs/troubleshooting.md`, section "DynamoDB Streams", last synced 2026-06-06.
 
 ### `Stream capture: failed to write record for <table>: <error>`
 

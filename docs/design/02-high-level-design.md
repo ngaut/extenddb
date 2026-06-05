@@ -53,85 +53,15 @@ extenddb/
 ├── docs/                         # Design documentation (this folder)
 │
 ├── crates/
-│   ├── core/                     # DynamoDB types, expressions, validation (pure sync, no async runtime)
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── types/            # AttributeValue, KeySchema, TableMetadata, etc.
-│   │       ├── expression/       # Parser, AST, evaluators (condition, filter, update, projection)
-│   │       ├── validation/       # Input validation (naming rules, size limits, type checks)
-│   │       ├── capacity/         # RCU/WCU calculation, throughput tracking, throttling
-│   │       ├── error/            # DynamoDbError enum, error messages, HTTP status mapping
-│   │       └── limits/           # Configurable limit definitions and enforcement
-│   │
-│   ├── engine/                   # Operation handlers — async, depends on core + storage
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs            # OperationContext, dispatch
-│   │       ├── put_item.rs
-│   │       ├── get_item.rs
-│   │       ├── update_item.rs
-│   │       ├── delete_item.rs
-│   │       ├── query.rs
-│   │       ├── scan.rs
-│   │       ├── batch_get.rs
-│   │       ├── batch_write.rs
-│   │       ├── transact_get.rs
-│   │       ├── transact_write.rs
-│   │       ├── create_table.rs
-│   │       ├── delete_table.rs
-│   │       ├── describe_table.rs
-│   │       ├── update_table.rs
-│   │       ├── list_tables.rs
-│   │       ├── tagging.rs
-│   │       ├── ttl.rs
-│   │       ├── describe_endpoints.rs
-│   │       ├── describe_limits.rs
-│   │       └── import_export.rs
-│   │
-│   ├── storage/                  # StorageEngine trait + shared types
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── trait.rs          # StorageEngine trait definition
-│   │       ├── types.rs          # Storage-specific types (QueryParams, ScanParams, etc.)
-│   │       └── error.rs          # StorageError type
-│   │
-│   ├── storage-tidb/             # Default TiDB backend implementation
-│   │   ├── migrations/           # Catalog SQL migrations
-│   │   ├── data_migrations/      # Data database SQL migrations
-│   │   └── src/                  # TiDB engines, native DDL, TTL, BR, workers
-│   │
-│   ├── storage-postgres/         # Explicit PostgreSQL alternate backend implementation
-│   │   ├── migrations/           # Catalog SQL migrations
-│   │   ├── data_migrations/      # Data database SQL migrations
-│   │   └── src/                  # PostgreSQL engines and workers
-│   │
-│   ├── auth/                     # AuthProvider trait + built-in SigV4 + policy engine
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── trait.rs          # AuthProvider trait definition
-│   │       ├── sigv4/            # SigV4 signature validation
-│   │       ├── policy/           # IAM policy evaluation engine
-│   │       ├── credential/       # Credential storage and caching
-│   │       └── identity.rs       # AuthIdentity type
-│   │
-│   ├── server/                   # HTTP server, middleware, routing
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── router.rs         # X-Amz-Target routing
-│   │       ├── middleware/        # Tower layers (auth, capacity, logging, metrics, etc.)
-│   │       ├── request.rs        # Request parsing and deserialization
-│   │       ├── response.rs       # Response formatting (CRC32, compression, headers)
-│   │       ├── health.rs         # /health and /metrics endpoints
-│   │       └── tls.rs            # TLS configuration
-│   │
-│   └── bin/                      # Thin binary that wires everything together
-│       ├── Cargo.toml
-│       └── src/
-│           └── main.rs           # CLI parsing, config loading, server startup
+│   ├── core/                     # Pure types, limits, validation, expressions, metrics
+│   ├── engine/                   # DynamoDB operation handlers and capacity helpers
+│   ├── storage/                  # Object-safe storage, management, diagnostics traits
+│   ├── storage-tidb/             # Default TiDB backend, native DDL, TTL, BR, workers
+│   ├── storage-postgres/         # Explicit PostgreSQL alternate backend
+│   ├── auth/                     # Built-in SigV4 provider and IAM policy evaluator
+│   ├── cache/                    # Shared stale-while-revalidate cache primitive
+│   ├── server/                   # Axum server, DynamoDB route, management API, console
+│   └── bin/                      # CLI, config parsing, daemon lifecycle
 ```
 
 ### 2.1 Crate Dependency Graph
@@ -372,7 +302,7 @@ The server runs on a tokio multi-thread runtime. Each incoming HTTP request is h
 
 ### 6.2 Storage Connection Pool
 
-All database access goes through the configured backend's sqlx connection pool. The pool size is configurable via the active storage section in `extenddb.toml` (default: 20). When all connections are in use, new requests queue at the pool level until a connection is returned or the acquire timeout expires. If the timeout expires, the request fails with an internal server error (HTTP 500).
+All database access goes through the configured backend's sqlx connection pool. The pool size is configurable via the active storage section in `extenddb.toml` (default: 20). When all connections are in use, new requests queue at the pool level until a connection is returned or the acquire timeout expires. If the timeout expires, ExtendDB maps the pool acquisition failure to `ServiceUnavailable` / HTTP 503.
 
 Total connection footprint is backend-specific:
 - PostgreSQL creates a primary data pool plus a catalog/authz pool; size backend limits for `pool_size + catalog_pool_size + worker overhead`.

@@ -7,7 +7,6 @@ Regenerated: v0.0.113 (P112)
 - `crates/storage-postgres/src/config.rs` — Add an optional PostgreSQL default-read topology if PostgreSQL deployments need a separate physical read path.
 - `crates/engine/src/batch_write_item.rs:166` — DynamoDB charges WCU based on old item size for deletes. Backlog classifies this as a minor native-boundary follow-up; implement only through storage-owned write outcomes, not engine pre-reads.
 - `crates/engine/src/transact_write_helpers.rs:178` — DynamoDB charges WCU based on old item size for deletes and max(old, new) for updates. Backlog classifies this as a minor native-boundary follow-up; implement only through storage-owned write outcomes, not engine update replay.
-- `crates/storage-postgres/src/table_helpers.rs:142` — Two queries not in a transaction under concurrent access.
 
 ## TODO(architecture)
 

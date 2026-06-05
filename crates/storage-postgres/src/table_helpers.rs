@@ -138,26 +138,29 @@ impl PostgresEngine {
         Ok(())
     }
 
-    // TODO(fidelity): These two queries are not in a transaction. Under concurrent
-    // UpdateTable (future phase), the table row and index rows could be read at
-    // different points in time, producing an inconsistent snapshot. Wrap in a
-    // transaction or use SELECT ... FOR SHARE when concurrent DDL is supported.
     pub(crate) async fn build_table_description(
         &self,
         account_id: &str,
         table_name: &str,
     ) -> Result<TableDescription, StorageError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+
         let row: Option<TableRow> = sqlx::query_as(
             r"SELECT table_name, key_schema, attribute_definitions, billing_mode,
                       provisioned_throughput, stream_specification, table_status,
                       EXTRACT(EPOCH FROM creation_date_time)::FLOAT8 as creation_epoch,
                       table_size_bytes, item_count, table_arn, table_id,
                       deletion_protection_enabled, stream_label
-               FROM tables WHERE account_id = $1 AND table_name = $2",
+               FROM tables WHERE account_id = $1 AND table_name = $2
+               FOR SHARE",
         )
         .bind(account_id)
         .bind(table_name)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
 
@@ -169,9 +172,13 @@ impl PostgresEngine {
                FROM indexes WHERE table_id = $1",
         )
         .bind(&row.table_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
 
         self.build_table_description_from_row(account_id, row, index_rows)
     }

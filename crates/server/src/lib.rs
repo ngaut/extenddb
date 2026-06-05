@@ -210,9 +210,9 @@ pub async fn start_server(
     let local_addr = listener.local_addr()?;
 
     if let Some(tls_cfg) = tls {
-        // P57 Bug 2 fix: rustls 0.23 requires an explicit CryptoProvider.
-        // Install aws-lc-rs as the default before creating any TLS config.
-        // Ignore the error if a provider was already installed (e.g., by sqlx).
+        // rustls 0.23 requires an explicit CryptoProvider. Install aws-lc-rs
+        // as the default before creating any TLS config. Ignore the error if a
+        // provider was already installed, such as by sqlx.
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
         tracing::info!("extenddb listening on {local_addr} (HTTPS)");
@@ -221,7 +221,7 @@ pub async fn start_server(
             &tls_cfg.key_path,
         )
         .await
-        // AI-3: The error intentionally does not include the file path to avoid
+        // The error intentionally does not include the file path to avoid
         // leaking filesystem structure in logs. See docs/troubleshooting.md for
         // the "Failed to load TLS certificates" entry.
         .map_err(|e| anyhow::anyhow!("Failed to load TLS certificates: {e}"))?;
@@ -232,19 +232,18 @@ pub async fn start_server(
         tokio::spawn(async move {
             shutdown_signal().await;
             shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
-            // P50: Log timeout but don't call std::process::exit — let the
-            // runtime shut down normally so destructors (including ZeroizeOnDrop) run.
+            // Log timeout but don't call std::process::exit: let the runtime
+            // shut down normally so destructors (including ZeroizeOnDrop) run.
             tokio::time::sleep(Duration::from_secs(10)).await;
             tracing::warn!("Graceful shutdown timed out, forcing PID file cleanup");
             cleanup_pid_file(shutdown_pid.as_deref());
         });
 
         let std_listener = listener.into_std()?;
-        // AI-2: Use a custom acceptor that peeks the first byte of each
-        // connection. If it's plain HTTP (not 0x16 TLS ClientHello), write
-        // a 301 redirect to HTTPS and reject the connection before the TLS
-        // handshake. This gives users a helpful redirect instead of a
-        // confusing TLS handshake failure.
+        // Use a custom acceptor that peeks the first byte of each connection.
+        // If it's plain HTTP (not 0x16 TLS ClientHello), write a 301 redirect
+        // to HTTPS and reject the connection before the TLS handshake. This
+        // gives users a helpful redirect instead of a confusing TLS failure.
         let redirect_acceptor = HttpsRedirectAcceptor { addr: local_addr };
         axum_server::from_tcp_rustls(std_listener, rustls_config)?
             .map(|tls| tls.acceptor(redirect_acceptor))
@@ -287,9 +286,9 @@ async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn graceful_shutdown(pid_file: Option<PathBuf>) {
     shutdown_signal().await;
-    // P50: Spawn a timeout task that cleans up the PID file if connections
-    // don't drain. Does NOT call std::process::exit — the runtime shuts down
-    // normally so destructors (including ZeroizeOnDrop) run.
+    // Spawn a timeout task that cleans up the PID file if connections don't
+    // drain. This does not call std::process::exit, so the runtime shuts down
+    // normally and destructors (including ZeroizeOnDrop) run.
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(5)).await;
         tracing::warn!("Graceful shutdown timed out after 5s, forcing PID file cleanup");
@@ -307,7 +306,7 @@ fn cleanup_pid_file(pid_file: Option<&std::path::Path>) {
     }
 }
 
-/// AI-2: Acceptor that detects plain HTTP connections on the TLS port.
+/// Acceptor that detects plain HTTP connections on the TLS port.
 ///
 /// Peeks the first byte of each connection. If it's `0x16` (TLS ClientHello),
 /// the connection passes through to the TLS acceptor. If it's a plain HTTP

@@ -181,7 +181,7 @@ async fn generate_and_store_session(
     request: &AssumeRoleRequest,
     caller_arn: &str,
 ) -> Response {
-    // P119: Use cached encryption key if available, fall back to DB query.
+    // Use cached encryption key if available; fall back to DB query.
     let enc_key_b64: String =
         if let Some(k) = extenddb_storage::CatalogStore::cached_encryption_key(store) {
             k

@@ -217,7 +217,7 @@ pub(crate) async fn handle_request(
         extenddb_engine::dispatch(&operation, input, &ctx, &state.server_addr).await;
     #[allow(clippy::cast_precision_loss)]
     let dispatch_us = dispatch_start.elapsed().as_micros() as f64;
-    // P120c: Record storage query metrics for the request's dispatch phase.
+    // Record storage query metrics for the request's dispatch phase.
     let category = match operation.as_str() {
         "CreateTable"
         | "DeleteTable"
@@ -326,7 +326,7 @@ pub(crate) async fn handle_request(
         },
     );
 
-    // P79: Request-level trace logging.
+    // Request-level trace logging.
     tracing::debug!(
         request_id = %request_id,
         operation = %operation,

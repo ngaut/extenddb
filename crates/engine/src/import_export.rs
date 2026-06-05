@@ -69,7 +69,7 @@ pub async fn handle_import_table(
     body: Value,
     ctx: &OperationContext,
 ) -> Result<Value, DynamoDbError> {
-    // P53: Deny import if no import paths are configured (secure default).
+    // Deny import if no import paths are configured (secure default).
     if ctx.import_paths.is_empty() {
         return Err(DynamoDbError::ValidationException(
             "Import is disabled. Configure [import] paths in extenddb.toml to enable.".to_owned(),
@@ -296,7 +296,7 @@ pub async fn handle_export_table(
     body: Value,
     ctx: &OperationContext,
 ) -> Result<Value, DynamoDbError> {
-    // P53: Deny export if no export paths are configured (secure default).
+    // Deny export if no export paths are configured (secure default).
     if ctx.export_paths.is_empty() {
         return Err(DynamoDbError::ValidationException(
             "Export is disabled. Configure [export] paths in extenddb.toml to enable.".to_owned(),

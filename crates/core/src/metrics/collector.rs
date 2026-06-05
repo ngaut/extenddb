@@ -284,12 +284,12 @@ impl MetricsCollector {
         );
     }
 
-    /// P120c: Record an HTTP request (dimensions: operation).
+    /// Record an HTTP request (dimensions: operation).
     pub fn record_request_count(&self, operation: &str) {
         self.record(MetricName::RequestCount, 1.0, None, None, Some(operation));
     }
 
-    /// P120c: Record a storage query execution (dimensions: source, category).
+    /// Record a storage query execution (dimensions: source, category).
     pub fn record_storage_query(
         &self,
         source: super::types::QuerySource,
@@ -316,7 +316,7 @@ impl MetricsCollector {
         );
     }
 
-    /// P120d: Record pool connection gauge values.
+    /// Record pool connection gauge values.
     pub fn record_pool_state(&self, active: u32, idle: u32) {
         #[allow(clippy::cast_precision_loss)]
         {
@@ -337,12 +337,12 @@ impl MetricsCollector {
         }
     }
 
-    /// P120d: Record pool acquire latency in microseconds.
+    /// Record pool acquire latency in microseconds.
     pub fn record_pool_acquire_latency(&self, latency_us: f64) {
         self.record(MetricName::PoolAcquireLatency, latency_us, None, None, None);
     }
 
-    /// P120e: Record a worker's last successful cycle timestamp.
+    /// Record a worker's last successful cycle timestamp.
     #[allow(clippy::cast_precision_loss)]
     pub fn record_worker_success(&self, source: super::types::QuerySource, latency_us: f64) {
         let worker_str = source.to_string();
@@ -366,7 +366,7 @@ impl MetricsCollector {
         );
     }
 
-    /// P120e: Record a worker error.
+    /// Record a worker error.
     pub fn record_worker_error(&self, source: super::types::QuerySource) {
         let worker_str = source.to_string();
         self.record(

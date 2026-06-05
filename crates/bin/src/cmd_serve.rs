@@ -63,9 +63,9 @@ fn frontend_throttle_manager(
 /// Binding before forking ensures port conflicts are reported to stderr
 /// before the parent process exits (D-4).
 pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
-    // P50: Check config file permissions before loading. The config file may
-    // contain the encryption key (via `extenddb init`). Reject if more permissive
-    // than 0600 (owner read/write only).
+    // Check config file permissions before loading. The config file may contain
+    // the encryption key from `extenddb init`; reject modes more permissive than
+    // 0600 (owner read/write only).
     if !std::path::Path::new(&args.config).exists() {
         anyhow::bail!(
             "Config file '{}' not found. Run 'extenddb init' to create one, \
@@ -108,8 +108,8 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to set listener non-blocking: {e}"))?;
 
     // D-2: Print startup banner before daemonizing so the user gets
-    // confirmation the server is starting. P57 Bug 4 fix: say "starting" not
-    // "listening" — the server isn't actually accepting connections yet.
+    // confirmation the server is starting. Say "starting" rather than
+    // "listening" because the server is not accepting connections yet.
     //
     // In daemon mode the banner goes to stdout (the user invoking `extenddb
     // serve` reads it before the parent exits). In foreground mode we route
@@ -144,9 +144,9 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to create run directory {run_dir}: {e}"))?;
     let pid_file = pid_file_path(&run_dir, port);
 
-    // P57 Bug 7 fix: Use execute() instead of start() so the parent can
-    // verify the daemon child is healthy before exiting. start() exits the
-    // parent immediately after fork, hiding child startup failures.
+    // Use execute() instead of start() so the parent can verify the daemon
+    // child is healthy before exiting. start() exits the parent immediately
+    // after fork, hiding child startup failures.
     //
     // When --foreground is set, skip daemonization entirely so the process
     // can be supervised by Docker, Kubernetes, systemd Type=simple, etc.
@@ -173,9 +173,9 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
             }
         }
 
-        // P57 Bug 3 fix: After daemonize, stderr is /dev/null. Install a panic
-        // hook that writes to syslog so panics are visible. Without this, the
-        // child process silently disappears on panic.
+        // After daemonize, stderr is /dev/null. Install a panic hook that
+        // writes to syslog so panics are visible. Without this, the child
+        // process silently disappears on panic.
         std::panic::set_hook(Box::new(|info| {
             // Best-effort syslog write. We can't use tracing here because the
             // subscriber may not be initialized yet (it's set up in serve_inner).
@@ -238,11 +238,10 @@ async fn serve(
     let result = serve_inner(app_config, std_listener, port, run_dir, backend, foreground).await;
     if let Err(ref e) = result {
         let _ = std::fs::remove_file(&pid_path);
-        // P57 Bug 7: Log fatal errors to syslog. After daemonize, stderr is
-        // /dev/null so anyhow's error display is lost. Use tracing if
-        // available, fall back to raw syslog if tracing isn't initialized yet.
-        // In foreground mode, also echo to stderr since the supervisor
-        // captures stderr rather than syslog.
+        // Log fatal errors to syslog. After daemonize, stderr is /dev/null so
+        // anyhow's error display is lost. Use tracing if available, fall back
+        // to raw syslog if tracing isn't initialized yet. In foreground mode,
+        // also echo to stderr since the supervisor captures stderr.
         tracing::error!("extenddb fatal: {e:#}");
         if foreground {
             eprintln!("extenddb fatal: {e:#}");
@@ -459,12 +458,12 @@ async fn serve_inner(
     // Convert pre-bound std listener to tokio (D-4: bind before fork).
     let listener = tokio::net::TcpListener::from_std(std_listener)?;
 
-    // P120e: Create metrics collector early so workers can record health.
+    // Create metrics collector early so workers can record health.
     let metrics = Arc::new(extenddb_core::metrics::MetricsCollector::new());
 
     let tls_enabled = app_config.server.tls.enabled;
 
-    // P53: Resolve import and export path lists.
+    // Resolve import and export path lists.
     let resolve_paths = |raw_paths: &[String],
                          label: &str|
      -> anyhow::Result<Vec<Arc<std::path::PathBuf>>> {
@@ -512,7 +511,7 @@ async fn serve_inner(
             app_config.storage.as_trait(),
         );
 
-    // AI-1: Load runtime documentation from docs_dir if configured.
+    // Load runtime documentation from docs_dir if configured.
     let docs_store = app_config.docs_dir.as_ref().and_then(|raw| {
         let expanded = config::expand_tilde(raw);
         let path = std::path::PathBuf::from(&expanded);

@@ -213,7 +213,7 @@ impl PostgresEngine {
             _ => pool.clone(),
         };
 
-        // P119: Read initial GSI propagation delay from settings table.
+        // Read initial GSI propagation delay from settings table.
         let initial_gsi_delay: u64 = sqlx::query_as::<_, (String,)>(
             "SELECT value FROM settings WHERE key = 'gsi_propagation_delay_ms'",
         )

@@ -253,7 +253,7 @@ pub async fn run(args: InitArgs) -> anyhow::Result<u8> {
     // Include the server bind address as a SAN so the cert matches the URL.
     generate_tls_cert_if_needed(&bind_addr)?;
 
-    // AI-1: Discover rendered docs directory for the config file.
+    // Discover rendered docs directory for the config file.
     let docs_dir = discover_docs_dir();
     if let Some(ref d) = docs_dir {
         println!("--- Documentation found: {d}");

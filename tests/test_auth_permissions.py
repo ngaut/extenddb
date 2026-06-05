@@ -1,7 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""P90: Comprehensive auth/permissions test suite.
+"""Comprehensive auth/permissions test suite.
 
 Covers IAM user/group/role CRUD, access key management, policy management,
 permissions boundaries, authorization enforcement, cross-account isolation,

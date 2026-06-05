@@ -27,23 +27,23 @@ pub enum MetricName {
     TimeToLiveDeletedItemCount,
     /// Seconds between TTL expiry and actual deletion (staleness).
     TtlDeletionStaleness,
-    /// P120c: HTTP request count (dimensions: operation).
+    /// HTTP request count (dimensions: operation).
     RequestCount,
-    /// P120c: Storage query count (dimensions: source, category).
+    /// Storage query count (dimensions: source, category).
     StorageQueryCount,
-    /// P120c: Storage query latency in microseconds (dimensions: source, category).
+    /// Storage query latency in microseconds (dimensions: source, category).
     StorageQueryLatency,
-    /// P120d: Current active connections in the pool (gauge).
+    /// Current active connections in the pool (gauge).
     PoolActiveConnections,
-    /// P120d: Current idle connections in the pool (gauge).
+    /// Current idle connections in the pool (gauge).
     PoolIdleConnections,
-    /// P120d: Pool acquire latency in microseconds.
+    /// Pool acquire latency in microseconds.
     PoolAcquireLatency,
-    /// P120e: Unix timestamp of last successful worker cycle (gauge).
+    /// Unix timestamp of last successful worker cycle (gauge).
     WorkerLastSuccess,
-    /// P120e: Worker cycle latency in microseconds.
+    /// Worker cycle latency in microseconds.
     WorkerCycleLatency,
-    /// P120e: Worker error count.
+    /// Worker error count.
     WorkerErrorCount,
 }
 

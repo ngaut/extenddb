@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use crate::config;
 
-/// P57 Bug 7: Best-effort raw syslog write for fatal errors. Used when the
-/// tracing subscriber may not be initialized (e.g., errors during early
-/// startup before syslog tracing is configured).
+/// Best-effort raw syslog write for fatal errors. Used when the tracing
+/// subscriber may not be initialized, such as during early startup before
+/// syslog tracing is configured.
 pub fn log_to_syslog_raw(msg: &str) {
     // SAFETY: openlog/syslog are POSIX-standard C functions. The ident
     // string is a static C string literal with 'static lifetime.
@@ -35,10 +35,10 @@ fn syslog_hint() -> &'static str {
     }
 }
 
-/// P57 Bug 7: After daemonizing, the parent waits for the PID file to appear
-/// and then verifies the daemon process is still alive. This catches early
-/// startup failures (bad config, missing catalog tables, TLS cert errors)
-/// that would otherwise be invisible because stderr is /dev/null after fork.
+/// After daemonizing, the parent waits for the PID file to appear and then
+/// verifies the daemon process is still alive. This catches early startup
+/// failures that would otherwise be invisible because stderr is /dev/null
+/// after fork.
 pub fn verify_daemon_started(pid_file: &PathBuf, bind_addr: &str) -> anyhow::Result<()> {
     let hint = syslog_hint();
 

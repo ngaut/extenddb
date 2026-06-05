@@ -21,8 +21,8 @@ use sqlx::PgPool;
 /// and shared (via `Arc`) across management API handlers and background workers.
 pub struct PostgresCatalogStore {
     pool: PgPool,
-    /// P119: Cached encryption key (immutable after bootstrap). Avoids
-    /// per-request DB query on access key and assume-role operations.
+    /// Cached encryption key (immutable after bootstrap). Avoids per-request
+    /// DB query on access key and assume-role operations.
     encryption_key: Option<Arc<str>>,
 }
 

@@ -173,10 +173,10 @@ impl CredentialStore for CachedCredentialStore {
         access_key_id: &str,
     ) -> Result<Option<StoredCredential>, DynamoDbError> {
         let result = self.cache.get(access_key_id.to_owned()).await?;
-        // CB-12 (cache-hit path): the storage layer enforces session expiry on
-        // load, but a cached session credential survives until `ttl_seconds`
-        // even if its `expires_at` has passed. Re-validate on every hit so
-        // the cache cannot extend a session past its issued lifetime.
+        // The storage layer enforces session expiry on load, but a cached
+        // session credential survives until `ttl_seconds` even if its
+        // `expires_at` has passed. Re-validate on every hit so the cache cannot
+        // extend a session past its issued lifetime.
         // Mirror the storage-layer error so the cache is transparent to the
         // auth provider.
         if let Some(ref cred) = result
@@ -395,10 +395,10 @@ mod tests {
         assert_eq!(r3.principal_name, "bob");
     }
 
-    /// CB-12 (cache-hit path): a cached session credential whose `expires_at`
-    /// has passed must NOT authenticate, even when the cache TTL hasn't
-    /// elapsed yet. Without the cache-hit expiry check, a session could
-    /// keep working for up to `auth.cache.ttl_seconds` past its expiry.
+    /// A cached session credential whose `expires_at` has passed must not
+    /// authenticate, even when the cache TTL has not elapsed yet. Without the
+    /// cache-hit expiry check, a session could keep working for up to
+    /// `auth.cache.ttl_seconds` past its expiry.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn cached_session_past_expires_at_returns_expired_token() {
         let inner = Arc::new(CountingCredStore::new());

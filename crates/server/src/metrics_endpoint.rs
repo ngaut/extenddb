@@ -18,8 +18,8 @@ use crate::AppState;
 
 /// GET /metrics — JSON metrics endpoint.
 ///
-/// S-1: `MetricsCollector::query()` holds `std::sync::RwLock` and iterates the
-/// full map, so we run it on a blocking thread to avoid stalling the async runtime.
+/// `MetricsCollector::query()` holds `std::sync::RwLock` and iterates the full
+/// map, so we run it on a blocking thread to avoid stalling the async runtime.
 pub(crate) async fn metrics_endpoint(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<extenddb_core::metrics::MetricsQuery>,

@@ -155,8 +155,7 @@ def substitute_placeholders(text: str, variables: dict[str, str]) -> str:
     """Replace {{KEY}} placeholders with values."""
     for key, value in variables.items():
         text = text.replace("{{" + key + "}}", value)
-    # AI-3: Replace relative NOTICE.md links with inline text. The relative
-    # link works in the repo filesystem but breaks in rendered PDFs.
+    # Relative NOTICE.md links work in the repo but break in rendered PDFs.
     text = re.sub(
         r'See \[NOTICE\]\(\.\./NOTICE\.md\) for important disclaimers\.',
         'See the NOTICE file in the project root for important disclaimers.',

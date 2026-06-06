@@ -116,7 +116,7 @@ use extenddb_storage::error::StorageError;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
-/// Expected catalog version — compiled into the binary (REQ-CAT-006, D-9).
+/// Expected catalog version, compiled into the binary (REQ-CAT-006).
 ///
 /// The tuple is the single source of truth. Use `CATALOG_VERSION.to_string()`
 /// wherever a string representation is needed.
@@ -236,7 +236,7 @@ impl PostgresEngine {
         })
     }
 
-    /// Start the async GSI worker tasks (D-4).
+    /// Start the async GSI worker tasks.
     ///
     /// Must be called after construction, before serving requests.
     /// Returns `&Self` for chaining.
@@ -246,7 +246,7 @@ impl PostgresEngine {
     }
 
     /// Returns a handle to the control plane notify, for use by the
-    /// background poller task (F-3).
+    /// background poller task.
     pub fn control_plane_notify(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.control_plane_notify)
     }
@@ -266,7 +266,7 @@ impl PostgresEngine {
         Ok(())
     }
 
-    /// Validate catalog version matches the compiled-in expectation (REQ-CAT-007, D-10).
+    /// Validate catalog version matches the compiled-in expectation (REQ-CAT-007).
     ///
     /// Reads the version string from the `settings` table and parses it
     /// strictly into a `CatalogVersion`. Rejects malformed strings.

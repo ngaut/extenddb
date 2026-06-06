@@ -281,7 +281,7 @@ pub(super) async fn write_stream_record_in_tx(
     let idx = (hash as usize) % shards.len();
     let shard_id = &shards[idx].0;
 
-    // Generate monotonic sequence number within the transaction (CB-21).
+    // Generate monotonic sequence number within the transaction.
     let (seq_val,): (i64,) = sqlx::query_as("SELECT nextval('stream_seq')")
         .fetch_one(&mut **tx)
         .await

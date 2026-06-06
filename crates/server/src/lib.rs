@@ -157,7 +157,7 @@ pub async fn start_server(
         // separate bind via firewall/proxy. Returns aggregate metrics
         // only; per-request data is in the management API.
         .route("/metrics", get(metrics_endpoint::metrics_endpoint))
-        // S-6: Explicit small body limit for non-DynamoDB endpoints.
+        // Explicit small body limit for non-DynamoDB endpoints.
         .layer(DefaultBodyLimit::max(1024))
         .with_state(shared.clone());
 

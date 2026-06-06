@@ -67,7 +67,7 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         }
     };
 
-    // Check 2: Catalog version (D-10: strict parsing).
+    // Check 2: Catalog version.
     println!("--- Checking catalog version...");
     match store.get_setting("catalog_version").await {
         Ok(Some(v)) => {

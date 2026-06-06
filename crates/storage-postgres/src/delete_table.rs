@@ -122,8 +122,8 @@ impl PostgresEngine {
                 .await
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-            // F-3: Wake the control plane poller so it processes the DELETING →
-            // removed transition without waiting for the idle timeout.
+            // Wake the control plane poller so it processes the DELETING → removed
+            // transition without waiting for the idle timeout.
             self.control_plane_notify.notify_one();
         }
 

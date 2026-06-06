@@ -128,7 +128,7 @@ fn print_version() {
 }
 
 /// Run an async subcommand with a single-threaded tokio runtime and stderr logging.
-/// All non-serve subcommands are interactive (D-24).
+/// All non-serve subcommands are interactive.
 fn run_interactive<T>(
     future: impl std::future::Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {

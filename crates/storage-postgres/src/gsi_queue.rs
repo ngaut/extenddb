@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Async GSI update queue (D-4, D-5, D-6).
+//! Async GSI update queue.
 //!
 //! Base table writes commit independently. For GSIs with a non-zero
 //! propagation delay, index updates are enqueued here and applied after a
@@ -162,10 +162,10 @@ async fn worker(partition_id: usize, part: Arc<Partition>, pool: PgPool) {
             }
 
             if let Err(e) = apply_gsi_update(&pool, &update).await {
-                // D-4: Table deletion races with async GSI propagation.
-                // When the target relation no longer exists, this is a
-                // normal condition — not an error. Match on PostgreSQL
-                // SQLSTATE 42P01 (undefined_table).
+                // Table deletion races with async GSI propagation. When the
+                // target relation no longer exists, this is a normal condition,
+                // not an error. Match on PostgreSQL SQLSTATE 42P01
+                // (undefined_table).
                 if is_undefined_table(&e) {
                     tracing::debug!(
                         "GSI worker {partition_id}: skipping update for deleted table {}.{}: {e}",

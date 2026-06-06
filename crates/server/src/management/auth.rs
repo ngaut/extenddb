@@ -54,7 +54,7 @@ pub async fn authenticate(
                 .into_response()
         })?;
 
-    // S-2: Cap Authorization header length to prevent heap abuse.
+    // Cap Authorization header length to prevent heap abuse.
     if header.len() > MAX_AUTH_HEADER_LEN {
         return Err((
             StatusCode::UNAUTHORIZED,

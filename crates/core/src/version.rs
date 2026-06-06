@@ -5,7 +5,7 @@
 //!
 //! The `CatalogVersion` struct is the single source of truth for catalog
 //! schema versions. The tuple `(major, minor, patch)` is authoritative;
-//! the string representation is derived via `Display` (REQ-CAT-006, D-9).
+//! the string representation is derived via `Display` (REQ-CAT-006).
 
 use std::fmt;
 use std::str::FromStr;
@@ -14,7 +14,7 @@ use std::str::FromStr;
 ///
 /// Construct from a tuple via `CatalogVersion::new` or parse from a string
 /// via `FromStr`. The string form is derived from the tuple — never
-/// hand-maintained (D-9).
+/// hand-maintained.
 ///
 /// # Examples
 ///
@@ -76,7 +76,7 @@ impl std::error::Error for ParseCatalogVersionError {}
 impl FromStr for CatalogVersion {
     type Err = ParseCatalogVersionError;
 
-    /// Parse a catalog version string with strict validation (D-10).
+    /// Parse a catalog version string with strict validation.
     ///
     /// Accepts exactly `MAJOR.MINOR.PATCH` where each component is a
     /// decimal `u32` with no leading zeros (except `"0"` itself),

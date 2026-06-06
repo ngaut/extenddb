@@ -32,9 +32,9 @@ pub struct ParsedAuthorization {
 /// Parse a SigV4 `Authorization` header value.
 ///
 /// Returns `IncompleteSignature` if the header is malformed.
-/// S-2: Rejects headers exceeding 8 KB to prevent heap abuse.
+/// Rejects headers exceeding 8 KB to prevent heap abuse.
 pub fn parse_authorization(header: &str) -> Result<ParsedAuthorization, DynamoDbError> {
-    // S-2: Cap Authorization header length to prevent heap abuse from oversized headers.
+    // Cap Authorization header length to prevent heap abuse from oversized headers.
     const MAX_AUTH_HEADER_LEN: usize = 8 * 1024;
     if header.len() > MAX_AUTH_HEADER_LEN {
         return Err(incomplete(
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn reject_oversized_header() {
-        // S-2: Headers exceeding 8 KB must be rejected.
+        // Headers exceeding 8 KB must be rejected.
         let header = "A".repeat(8 * 1024 + 1);
         assert!(parse_authorization(&header).is_err());
     }

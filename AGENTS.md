@@ -218,9 +218,11 @@ The script requires:
 
 The script automatically provisions test credentials, configures runtime settings, and writes artifacts to `discussions/test-*-<hash>.txt`.
 
-### External Java Tests
+### External Test Suites
 
-Java tests live in `tests/external/java/` and require Java 17+ and Maven 3.6+.
+External suites are registered by path in `external-suites.toml`; they are not
+copied into this repository. Maven and Gradle suites require Java 17+ and Maven
+3.6+ or a compatible Gradle wrapper.
 
 ```bash
 devtools/run-external-tests --endpoint https://127.0.0.1:8000

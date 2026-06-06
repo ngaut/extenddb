@@ -322,7 +322,7 @@ class TestTtlExpiry:
                 "Expected a REMOVE stream record for TTL-expired item 'ttl-stream-test'"
             )
 
-            # F-15: Verify userIdentity on TTL-originated stream records.
+            # Verify userIdentity on TTL-originated stream records.
             identity = ttl_remove_record.get("userIdentity")
             assert identity is not None, (
                 "TTL REMOVE stream record must include userIdentity"

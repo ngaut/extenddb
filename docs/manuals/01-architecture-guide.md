@@ -195,7 +195,7 @@ Auth providers implement the `AuthProvider` trait using `#[async_trait]` for obj
 
 ### Authentication
 
-SigV4 signature verification follows the AWS specification. Credentials are stored encrypted (AES-256-GCM) in the catalog database. Access key prefixes distinguish long-term (`VDAK`) from temporary (`VDSK`) credentials.
+SigV4 signature verification follows the AWS specification. Credentials are stored encrypted (AES-256-GCM) in the catalog database. Access key prefixes distinguish long-term (`AKIAEXTENDDB`) from temporary (`ASIAEXTENDDB`) credentials.
 
 ### Authorization
 

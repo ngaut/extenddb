@@ -32,7 +32,7 @@ impl PostgresEngine {
     /// to recover in-flight operations from a previous server instance.
     ///
     /// Returns a list of `(table_name, transition)` pairs describing what
-    /// changed, so the caller can log meaningful state-change messages (D-4).
+    /// changed, so the caller can log meaningful state-change messages.
     ///
     /// # Errors
     ///

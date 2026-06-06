@@ -60,7 +60,7 @@ def parse_toml_simple(path: Path) -> list[dict[str, Any]]:
     """Parse the suite registry TOML file.
 
     Uses tomllib (Python 3.11+) when available, falling back to a minimal
-    hand-rolled parser for Python 3.9/3.10 compatibility. The fallback
+    hand-rolled parser for Python 3.10 compatibility. The fallback
     handles [[suite]] arrays with string, bool, and [suite.env] sub-tables.
     """
     try:

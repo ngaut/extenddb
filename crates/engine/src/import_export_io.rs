@@ -138,7 +138,7 @@ fn read_csv(
     Ok(items)
 }
 
-/// Split a CSV line by delimiter with RFC 4180 quoting support (CB-24).
+/// Split a CSV line by delimiter with RFC 4180 quoting support.
 fn split_csv_line(line: &str, delim: u8) -> Vec<String> {
     let mut fields = Vec::new();
     let mut current = String::new();

@@ -38,15 +38,15 @@ pub fn verify_signature(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<(), DynamoDbError> {
-    // CB-5: Validate credential-scope service is "dynamodb".
+    // Validate credential-scope service is "dynamodb".
     if parsed.service != "dynamodb" {
-        // N-2: Trailing space matches real DynamoDB's exact error message.
+        // Trailing space matches real DynamoDB's exact error message.
         return Err(DynamoDbError::InvalidSignatureException(
             "Credential should be scoped to correct service: 'dynamodb'. ".to_owned(),
         ));
     }
 
-    // CB-5: Validate credential-scope date matches X-Amz-Date[..8].
+    // Validate credential-scope date matches X-Amz-Date[..8].
     let timestamp = extract_timestamp(headers)?;
     if timestamp.len() < 8 || parsed.date != timestamp[..8] {
         return Err(DynamoDbError::InvalidSignatureException(
@@ -54,7 +54,7 @@ pub fn verify_signature(
         ));
     }
 
-    // CB-6: Require "host" in SignedHeaders.
+    // Require "host" in SignedHeaders.
     let signed_lower = parsed.signed_headers.to_ascii_lowercase();
     if !signed_lower.split(';').any(|h| h == "host") {
         return Err(DynamoDbError::InvalidSignatureException(
@@ -255,7 +255,7 @@ mod tests {
         h
     }
 
-    /// CB-5: Reject credential scope with wrong service.
+    /// Reject credential scope with wrong service.
     #[test]
     fn reject_wrong_service_in_scope() {
         let parsed = make_parsed("s3", "20260415", "content-type;host;x-amz-date");
@@ -269,7 +269,7 @@ mod tests {
         }
     }
 
-    /// CB-5: Reject credential scope date mismatch with X-Amz-Date.
+    /// Reject credential scope date mismatch with X-Amz-Date.
     #[test]
     fn reject_scope_date_mismatch() {
         let parsed = make_parsed("dynamodb", "20260414", "content-type;host;x-amz-date");
@@ -286,7 +286,7 @@ mod tests {
         }
     }
 
-    /// CB-6: Reject SignedHeaders missing "host".
+    /// Reject SignedHeaders missing "host".
     #[test]
     fn reject_missing_host_in_signed_headers() {
         let parsed = make_parsed("dynamodb", "20260415", "content-type;x-amz-date");

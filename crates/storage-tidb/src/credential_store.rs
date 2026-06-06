@@ -14,8 +14,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Decrypt a secret key from `nonce || ciphertext` using the base64-encoded encryption key.
 ///
-/// `aad` must match the value used during encryption (CB-11). Falls back to
-/// decryption without AAD for secrets encrypted before the CB-11 fix.
+/// `aad` must match the value used during encryption. Falls back to decryption
+/// without AAD for secrets encrypted before access-key AAD binding.
 fn decrypt_secret(encrypted: &[u8], key_b64: &str, aad: &str) -> Result<String, String> {
     use aes_gcm::Aes256Gcm;
     use aes_gcm::KeyInit;
@@ -37,7 +37,7 @@ fn decrypt_secret(encrypted: &[u8], key_b64: &str, aad: &str) -> Result<String, 
     let cipher = Aes256Gcm::new(key);
     let nonce = aes_gcm::Nonce::from_slice(&encrypted[..12]);
 
-    // Try with AAD first (CB-11 format).
+    // Try with AAD first.
     let payload_with_aad = Payload {
         msg: &encrypted[12..],
         aad: aad.as_bytes(),
@@ -47,8 +47,8 @@ fn decrypt_secret(encrypted: &[u8], key_b64: &str, aad: &str) -> Result<String, 
             .map_err(|e| format!("decrypted secret is not valid UTF-8: {e}"));
     }
 
-    // Fall back to without AAD (pre-CB-11 format).
-    tracing::debug!("Decrypting secret without AAD (pre-CB-11 format) for {aad}");
+    // Fall back to the pre-AAD format.
+    tracing::debug!("Decrypting secret without AAD (pre-AAD format) for {aad}");
     let plaintext_bytes = cipher
         .decrypt(nonce, &encrypted[12..])
         .map_err(|e| format!("decrypt: {e}"))?;
@@ -96,7 +96,7 @@ impl CredentialStore for DbCredentialStore {
             return self.lookup_session_credential(access_key_id).await;
         }
 
-        // S-4: Normalize error for all unrecognized access key prefixes.
+        // Normalize error for all unrecognized access key prefixes.
         Ok(None)
     }
 }
@@ -171,7 +171,7 @@ impl DbCredentialStore {
             return Ok(None);
         };
 
-        // CB-12: Fail-closed on expired sessions.
+        // Fail closed on expired sessions.
         if expires_at < time::OffsetDateTime::now_utc() {
             return Err(DynamoDbError::ExpiredTokenException(
                 "The security token included in the request is expired".to_owned(),

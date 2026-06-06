@@ -30,7 +30,7 @@ pub fn canonical_request(
     signed_headers: &str,
     body: &[u8],
 ) -> String {
-    // CB-7: Normalize signed header names to lowercase per SigV4 spec.
+    // Normalize signed header names to lowercase per SigV4 spec.
     let signed_lower = signed_headers.to_ascii_lowercase();
     let canonical_headers = build_canonical_headers(headers, &signed_lower);
     // SigV4 spec: if the client sends x-amz-content-sha256, use that value
@@ -65,14 +65,14 @@ pub fn string_to_sign(timestamp: &str, scope: &str, canonical_request: &str) -> 
 ///
 /// Per the `SigV4` spec, header names are lowercased, values are trimmed,
 /// and headers are sorted alphabetically. Each line ends with `\n`.
-/// CB-7: Header names are explicitly lowercased to handle clients that
-/// send mixed-case `SignedHeaders` values.
+/// Header names are explicitly lowercased to handle clients that send
+/// mixed-case `SignedHeaders` values.
 fn build_canonical_headers(headers: &HeaderMap, signed_headers: &str) -> String {
     let mut result = String::new();
     // signed_headers is already sorted and semicolon-delimited.
-    // N-1: The caller (`canonical_request`) already lowercases `signed_headers`,
-    // but we lowercase again here as defense-in-depth — this function's contract
-    // does not require pre-lowercased input.
+    // The caller (`canonical_request`) already lowercases `signed_headers`, but
+    // we lowercase again here as defense-in-depth. This function's contract does
+    // not require pre-lowercased input.
     for name in signed_headers.split(';') {
         let lower = name.to_ascii_lowercase();
         let value = headers
@@ -154,7 +154,7 @@ mod tests {
         );
     }
 
-    /// CB-7: Mixed-case SignedHeaders are lowercased in canonical output.
+    /// Mixed-case SignedHeaders are lowercased in canonical output.
     #[test]
     fn canonical_request_lowercases_signed_headers() {
         let mut headers = HeaderMap::new();

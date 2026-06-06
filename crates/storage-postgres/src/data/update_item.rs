@@ -45,7 +45,7 @@ impl PostgresEngine {
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        // Fetch indexes for GSI/LSI updates (D-4: sync + async split).
+        // Fetch indexes for GSI/LSI sync and async updates.
         let indexes = fetch_indexes_for_table(&key_info.table_id, &self.pool).await?;
         let sys_delay = if indexes.is_empty() {
             0
@@ -203,7 +203,7 @@ impl PostgresEngine {
             }
         }
 
-        // Sync GSI/LSI update within transaction (D-4).
+        // Sync GSI/LSI update within transaction.
         if !indexes.is_empty() {
             sync_indexes(
                 &mut tx,
@@ -233,7 +233,7 @@ impl PostgresEngine {
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        // Enqueue async GSI updates after commit (D-4).
+        // Enqueue async GSI updates after commit.
         if let Some(ref q) = self.gsi_queue {
             enqueue_async_indexes(
                 q,

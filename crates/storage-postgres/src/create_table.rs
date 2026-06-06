@@ -100,9 +100,9 @@ impl PostgresEngine {
         })?;
 
         // Insert GSI metadata
-        // F-1: Store full ProvisionedThroughputDescription (not the input
-        // ProvisionedThroughput) so DescribeTable can deserialize it without
-        // failing on the missing NumberOfDecreasesToday field.
+        // Store full ProvisionedThroughputDescription, not the input
+        // ProvisionedThroughput, so DescribeTable can deserialize it without
+        // missing NumberOfDecreasesToday.
         let mut gsi_index_ids: Vec<String> = Vec::new();
         if let Some(gsis) = &input.global_secondary_indexes {
             for gsi in gsis {

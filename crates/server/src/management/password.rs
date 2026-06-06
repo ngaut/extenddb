@@ -7,8 +7,8 @@
 //! directly from an async task blocks the tokio runtime. These helpers use
 //! `spawn_blocking` to move the work to a dedicated thread pool.
 //!
-//! CB-8: A global semaphore limits concurrent bcrypt operations to prevent
-//! denial-of-service via flooding the blocking thread pool (shared with sqlx).
+//! A global semaphore limits concurrent bcrypt operations to prevent
+//! denial-of-service via flooding the blocking thread pool shared with sqlx.
 
 use tokio::sync::Semaphore;
 
@@ -25,7 +25,7 @@ static BCRYPT_SEMAPHORE: Semaphore = Semaphore::const_new(4);
 ///
 /// Returns `bcrypt::BcryptError` if hashing fails or the blocking task panics.
 pub async fn hash_password(password: String) -> Result<String, bcrypt::BcryptError> {
-    // CB-8: Acquire semaphore permit before spawning blocking work.
+    // Acquire semaphore permit before spawning blocking work.
     // `const_new` semaphore is never closed, so `acquire` cannot fail in practice.
     let Ok(_permit) = BCRYPT_SEMAPHORE.acquire().await else {
         tracing::error!("bcrypt semaphore closed unexpectedly");

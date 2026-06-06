@@ -56,7 +56,7 @@ impl PostgresEngine {
     /// Backfill existing items from the base table into a newly created GSI.
     ///
     /// Uses batched reads with OFFSET/LIMIT to avoid loading all items into
-    /// memory at once (CB-19).
+    /// memory at once.
     // S2: Parameters mirror the SQL schema dimensions (account, table, index,
     // key schemas, attribute defs, projection). A wrapper struct would obscure
     // the call site without adding clarity.

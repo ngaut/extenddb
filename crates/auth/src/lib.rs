@@ -150,7 +150,7 @@ impl<C: CredentialStore + 'static> AuthProvider for BuiltinAuthProvider<C> {
                 )
             })?;
 
-        // S-5: Track inactive status but do NOT return early. Continue through
+        // Track inactive status but do not return early. Continue through
         // timestamp validation and signature verification to ensure constant-time
         // failure paths — no timing difference between inactive, invalid, and
         // absent keys.
@@ -160,7 +160,7 @@ impl<C: CredentialStore + 'static> AuthProvider for BuiltinAuthProvider<C> {
         sigv4::verify::validate_timestamp(headers)?;
 
         // For session credentials, verify X-Amz-Security-Token matches the stored token.
-        // CB-12: Session expiration is enforced at the credential store layer (fail-closed).
+        // Session expiration is enforced at the credential store layer.
         // Expired sessions are never returned — the storage layer returns
         // ExpiredTokenException on the cache-miss path, and CachedCredentialStore
         // re-validates `expires_at` on every cache hit before returning so cached
@@ -184,7 +184,7 @@ impl<C: CredentialStore + 'static> AuthProvider for BuiltinAuthProvider<C> {
             }
         }
 
-        // Verify SigV4 signature — always, even for inactive keys (S-5).
+        // Verify SigV4 signature, always, even for inactive keys.
         sigv4::verify::verify_signature(
             &parsed,
             &credential.secret_key,
@@ -195,8 +195,8 @@ impl<C: CredentialStore + 'static> AuthProvider for BuiltinAuthProvider<C> {
             body,
         )?;
 
-        // S-5: Reject inactive keys only after full signature verification
-        // to prevent timing side-channels.
+        // Reject inactive keys only after full signature verification to prevent
+        // timing side-channels.
         if is_inactive {
             return Err(DynamoDbError::UnrecognizedClientException(
                 "The security token included in the request is invalid.".to_owned(),
@@ -289,8 +289,8 @@ mod tests {
 
     #[tokio::test]
     async fn expired_session_returns_expired_token_exception() {
-        // CB-12: The credential store returns ExpiredTokenException directly
-        // for expired sessions (fail-closed). The auth layer propagates it.
+        // The credential store returns ExpiredTokenException directly for
+        // expired sessions. The auth layer propagates it.
         let store = MockCredentialStore {
             credential: None,
             error: Some("The security token included in the request is expired"),

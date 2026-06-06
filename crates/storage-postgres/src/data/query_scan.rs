@@ -250,9 +250,8 @@ impl PostgresEngine {
         let mut conditions: Vec<String> = Vec::new();
         let param_idx: u32 = 1;
 
-        // Parallel scan: hash-based segment assignment.
-        // CB-20 / SP-SCN-002: use bigint bitmask instead of abs() to avoid
-        // SQL error 22003 on the one-in-4-billion hashtext() == i32::MIN case.
+        // Parallel scan: use a bigint bitmask instead of abs() to avoid SQL
+        // error 22003 on the one-in-4-billion hashtext() == i32::MIN case.
         if let (Some(seg), Some(total)) = (segment, total_segments) {
             conditions.push(format!(
                 "(hashtext(pk)::bigint & 2147483647) % {total} = {seg}"

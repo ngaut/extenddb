@@ -154,7 +154,7 @@ def create_and_cleanup_table(dynamodb_client, unique_table_name):
         defaults.update(kwargs)
         result = dynamodb_client.create_table(**defaults)
         created_tables.append(name)
-        # D-2: Always wait for ACTIVE — matches real DynamoDB behavior.
+        # Always wait for ACTIVE to match real DynamoDB behavior.
         wait_for_active(dynamodb_client, name)
         return result
 

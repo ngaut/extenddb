@@ -47,7 +47,7 @@ def wait_for_active(client, table_name: str, timeout: float = 60.0) -> None:
 def writer_thread() -> None:
     client = make_client()
 
-    # Phase 1: Insert items
+    # Insert items.
     for i in range(1, ITEM_COUNT + 1):
         client.put_item(
             TableName=TABLE_NAME,
@@ -62,7 +62,7 @@ def writer_thread() -> None:
 
     time.sleep(1)
 
-    # Phase 2: Update items
+    # Update items.
     for i in range(1, ITEM_COUNT + 1):
         client.update_item(
             TableName=TABLE_NAME,
@@ -79,7 +79,7 @@ def writer_thread() -> None:
 
     time.sleep(1)
 
-    # Phase 3: Delete items
+    # Delete items.
     for i in range(1, ITEM_COUNT + 1):
         client.delete_item(
             TableName=TABLE_NAME,

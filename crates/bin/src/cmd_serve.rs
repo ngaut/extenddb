@@ -61,7 +61,7 @@ fn frontend_throttle_manager(
 
 /// Bind the listening socket, daemonize, then start the tokio runtime.
 /// Binding before forking ensures port conflicts are reported to stderr
-/// before the parent process exits (D-4).
+/// before the parent process exits.
 pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
     // Check config file permissions before loading. The config file may contain
     // the encryption key from `extenddb init`; reject modes more permissive than
@@ -107,9 +107,9 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
         .set_nonblocking(true)
         .map_err(|e| anyhow::anyhow!("Failed to set listener non-blocking: {e}"))?;
 
-    // D-2: Print startup banner before daemonizing so the user gets
-    // confirmation the server is starting. Say "starting" rather than
-    // "listening" because the server is not accepting connections yet.
+    // Print startup banner before daemonizing so the user gets confirmation the
+    // server is starting. Say "starting" rather than "listening" because the
+    // server is not accepting connections yet.
     //
     // In daemon mode the banner goes to stdout (the user invoking `extenddb
     // serve` reads it before the parent exits). In foreground mode we route
@@ -138,7 +138,7 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
         println!("{banner_line2}");
     }
 
-    // D-3: Write PID file so `extenddb status` can report the daemon PID.
+    // Write PID file so `extenddb status` can report the daemon PID.
     let run_dir = config::expand_tilde(&app_config.server.run_dir);
     std::fs::create_dir_all(&run_dir)
         .map_err(|e| anyhow::anyhow!("Failed to create run directory {run_dir}: {e}"))?;
@@ -230,9 +230,9 @@ async fn serve(
     run_dir: String,
     foreground: bool,
 ) -> anyhow::Result<()> {
-    // CB-27: Clean up PID file if serve() fails before reaching the HTTP
-    // server (for example, storage connection failure). The PID file was
-    // already written by Daemonize in run().
+    // Clean up the PID file if serve() fails before reaching the HTTP server
+    // (for example, storage connection failure). The PID file was already
+    // written by Daemonize in run().
     let pid_path = pid_file_path(&run_dir, port);
     let backend = app_config.storage._backend.clone();
     let result = serve_inner(app_config, std_listener, port, run_dir, backend, foreground).await;
@@ -278,8 +278,8 @@ async fn serve_inner(
 
     // Init logging (REQ-LOG-003, REQ-LOG-006) — syslog in daemon mode, stderr
     // in foreground mode so a container/process supervisor can capture logs.
-    // D-3: sqlx messages are controlled by an independent `sqlx_log_level`
-    // runtime setting (default: warn). Both extenddb and sqlx messages use the
+    // sqlx messages are controlled by an independent `sqlx_log_level` runtime
+    // setting (default: warn). Both extenddb and sqlx messages use the
     // `extenddb` syslog identifier (POSIX syslog supports only one identity per
     // process). sqlx messages are identifiable by their `sqlx::query` target.
     // Filter with: `journalctl -t extenddb | grep -v sqlx` (exclude) or
@@ -288,9 +288,9 @@ async fn serve_inner(
     // The EnvFilter encodes both levels: `{app_level},sqlx={sqlx_level}`.
     // The poll_log_level worker reloads the filter when either setting changes.
     let filter_str = format!("{},sqlx=warn", &app_config.logging.level);
-    // CB-29: Always use the config file log level, never RUST_LOG. The runtime
-    // settings poller handles dynamic level changes. RUST_LOG silently
-    // overriding the config is an operational surprise.
+    // Always use the config file log level, never RUST_LOG. The runtime settings
+    // poller handles dynamic level changes. RUST_LOG silently overriding the
+    // config is an operational surprise.
     let filter = EnvFilter::new(&filter_str);
     let (filter_layer, reload_handle) = reload::Layer::new(filter);
 
@@ -455,7 +455,7 @@ async fn serve_inner(
         app_config.logging.level,
     );
 
-    // Convert pre-bound std listener to tokio (D-4: bind before fork).
+    // Convert the pre-bound std listener to tokio.
     let listener = tokio::net::TcpListener::from_std(std_listener)?;
 
     // Create metrics collector early so workers can record health.
@@ -583,7 +583,7 @@ async fn serve_inner(
         runtime_hooks: runtime_hooks.clone(),
     };
 
-    // D-22: Spawn background task to poll log_level from settings table.
+    // Spawn background task to poll log_level from settings table.
     tokio::spawn(workers::poll_log_level(
         catalog_store.clone(),
         reload_handle.clone(),

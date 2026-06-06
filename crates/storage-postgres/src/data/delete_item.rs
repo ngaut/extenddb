@@ -34,7 +34,7 @@ impl PostgresEngine {
             .ok_or_else(|| StorageError::Internal("missing partition key".to_owned()))?;
         let pk_text = pk_to_text(pk_value)?;
 
-        // Fetch indexes for GSI/LSI updates (D-4: sync + async split).
+        // Fetch indexes for GSI/LSI sync and async updates.
         let indexes = fetch_indexes_for_table(&key_info.table_id, &self.pool).await?;
         let sys_delay = if indexes.is_empty() {
             0
@@ -118,7 +118,7 @@ impl PostgresEngine {
                 }
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-                // Sync GSI/LSI update within transaction (D-4).
+                // Sync GSI/LSI update within transaction.
                 let old_item_for_idx = if !indexes.is_empty() {
                     let oi = old
                         .as_ref()
@@ -159,7 +159,7 @@ impl PostgresEngine {
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-                // Enqueue async GSI updates after commit (D-4).
+                // Enqueue async GSI updates after commit.
                 if let Some(ref q) = self.gsi_queue {
                     enqueue_async_indexes(
                         q,
@@ -256,7 +256,7 @@ impl PostgresEngine {
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-                // Sync GSI/LSI update within transaction (D-4).
+                // Sync GSI/LSI update within transaction.
                 let old_item_for_idx = if !indexes.is_empty() {
                     let oi = old
                         .as_ref()
@@ -297,7 +297,7 @@ impl PostgresEngine {
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-                // Enqueue async GSI updates after commit (D-4).
+                // Enqueue async GSI updates after commit.
                 if let Some(ref q) = self.gsi_queue {
                     enqueue_async_indexes(
                         q,

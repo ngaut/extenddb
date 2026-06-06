@@ -33,7 +33,7 @@
 #   --parallel[=N]    run pytest in parallel (default: 1/3 of CPU cores)
 #   --config PATH     config file path (default: extenddb.toml in repo root)
 #
-# REQ-TEST-001, D-1, D-2, D-3, D-4, D-5
+# REQ-TEST-001
 
 set -euo pipefail
 

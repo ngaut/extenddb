@@ -39,7 +39,7 @@ pub fn run(args: &StatusArgs) {
     // so no explicit timeout is needed for the common case.
     let addr = format!("127.0.0.1:{port}");
     if TcpStream::connect(&addr).is_ok() {
-        // D-3: Include PID from the PID file when available.
+        // Include PID from the PID file when available.
         // Validate the PID is alive to avoid reporting stale PIDs after unclean shutdown.
         // Try config-based run_dir first, fall back to default.
         let pid_file = config::load(&args.config).map_or_else(

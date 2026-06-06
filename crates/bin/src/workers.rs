@@ -18,7 +18,7 @@ use extenddb_storage::management_store::{MetricsStore, SettingsStore};
 use tracing_subscriber::{EnvFilter, reload};
 
 /// Poll the `log_level` and `sqlx_log_level` settings from the database
-/// and reload the tracing filter when either changes (D-22, D-3).
+/// and reload the tracing filter when either changes.
 /// The combined filter is `{log_level},sqlx={sqlx_log_level}`.
 /// Falls back to `config_level` when `log_level` is absent from the DB.
 /// Runs until the process exits.
@@ -63,7 +63,7 @@ pub(crate) async fn poll_log_level(
             continue;
         }
 
-        // D-3: Combined filter encodes both levels.
+        // Combined filter encodes both levels.
         let filter_str = format!("{new_level},sqlx={new_sqlx_level}");
 
         match EnvFilter::try_new(&filter_str) {

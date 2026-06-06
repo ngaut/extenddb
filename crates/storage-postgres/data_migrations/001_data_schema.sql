@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS stream_reader_leases (
 CREATE INDEX IF NOT EXISTS idx_stream_reader_leases_expires
     ON stream_reader_leases (expires_at);
 
--- Monotonic sequence for stream record ordering (CB-21).
+-- Monotonic sequence for stream record ordering.
 -- Note: the idempotency check in run_data_migrations uses stream_shards
 -- existence to decide whether to skip this entire migration. If stream_shards
 -- is created manually without the sequence, stream_seq will not exist.

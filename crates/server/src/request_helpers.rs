@@ -18,9 +18,9 @@ pub(crate) fn extract_operation(headers: &HeaderMap) -> Result<String, DynamoDbE
         .get("x-amz-target")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
-            // S-7: Real DynamoDB returns MissingAuthenticationToken only when auth
-            // headers are also absent. When auth headers are present but X-Amz-Target
-            // is missing, it returns UnknownOperationException.
+            // Real DynamoDB returns MissingAuthenticationToken only when auth headers
+            // are also absent. When auth headers are present but X-Amz-Target is
+            // missing, it returns UnknownOperationException.
             if headers.contains_key("authorization") {
                 DynamoDbError::UnknownOperationException(String::new())
             } else {
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn missing_target_no_auth_returns_missing_auth_token() {
-        // S-7: No Authorization header + no X-Amz-Target → MissingAuthenticationToken
+        // No Authorization header + no X-Amz-Target → MissingAuthenticationToken.
         let headers = HeaderMap::new();
         let err = extract_operation(&headers).unwrap_err();
         assert!(
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn missing_target_with_auth_returns_unknown_operation() {
-        // S-7: Authorization header present but no X-Amz-Target → UnknownOperationException
+        // Authorization header present but no X-Amz-Target → UnknownOperationException.
         use axum::http::HeaderValue;
         let mut headers = HeaderMap::new();
         headers.insert("authorization", HeaderValue::from_static("AWS4-HMAC-SHA256 Credential=AKID/20260415/us-east-1/dynamodb/aws4_request, SignedHeaders=host, Signature=abc"));

@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `extenddb settings` — read and write runtime settings (D-23).
+//! `extenddb settings` — read and write runtime settings.
 //!
 //! This is an infrastructure command for direct DB access when the server is
 //! down. Validation logic is shared with the management API via

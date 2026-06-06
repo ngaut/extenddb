@@ -25,7 +25,7 @@ pub fn generate_secret_key() -> String {
 ///
 /// `aad` is Associated Authenticated Data (e.g., the access key ID) that binds
 /// the ciphertext to its context, preventing ciphertext from being moved between
-/// records (CB-11).
+/// records.
 ///
 /// Returns `nonce || ciphertext` as a single byte vector.
 pub fn encrypt_secret(plaintext: &str, key_b64: &str, aad: &str) -> Result<Vec<u8>, String> {

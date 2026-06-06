@@ -423,9 +423,8 @@ impl BackupEngine for PostgresEngine {
             let ddb_table = data_table_name(new_table_id);
             let ddb_table_unquoted = ddb_table.trim_matches('"');
 
-            // Do NOT force ACTIVE — let the control plane handle the transition
-            // (steering rule D-2: tests run with control_plane_delay_seconds > 0).
-            // The table starts in CREATING and transitions to ACTIVE after the delay.
+            // Do not force ACTIVE. Let the control plane handle the transition:
+            // the table starts in CREATING and transitions to ACTIVE after the delay.
 
             let has_sk: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM information_schema.columns \

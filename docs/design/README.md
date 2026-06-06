@@ -14,7 +14,7 @@ This directory contains the authoritative design documents for ExtendDB (extendd
 | 06 | [Server](06-component-server.md) | HTTP server, routing, middleware pipeline, response formatting, TLS, rate limiting, throughput tracking (`extenddb-server` crate) |
 | 07 | [Streams](07-component-streams.md) | DynamoDB Streams design space — capture mechanism, shard management, retention (high-level; detailed design deferred) |
 | 08 | [Configuration](08-component-config.md) | TOML config, env vars, CLI, logging, metrics, health checks, deployment (VM, Kubernetes, Docker) |
-| 09 | [Testing](09-testing.md) | Test strategy, reference suites, golden files, multi-language test suites, coverage tracking |
+| 09 | [Testing](09-testing.md) | Current test surfaces, external suite registry, TiDB acceptance gate, and required verification gates |
 | 10 | [Licenses](10-dependency-licenses.md) | Licensing summary for third-party dependencies |
 | 11 | [Scaling](11-high-availability.md) | DRAFT document on scaling ExtendDB |
 | 12 | [Auth / Authz Cache](12-auth-authz-cache.md) | Implemented IAM and table-key cache design, invalidation rules, metrics, and deferred multi-instance fanout |

@@ -22,7 +22,7 @@
 #   --rust            Rust unit tests
 #   --rust-integration Rust integration tests (tests/rust/, requires running server)
 #   --pytest          Python integration tests
-#   --external        External Java test suite
+#   --external        Registered external test suites
 #   --comprehensive   Comprehensive Python suite
 #   --all             all of the above
 #   --catalog-check   post-test catalog integrity check
@@ -121,7 +121,7 @@ Suites (at least one required):
   --rust            Rust unit tests
   --rust-integration Rust integration tests (tests/rust/)
   --pytest          Python integration tests
-  --external        External Java test suite
+  --external        Registered external test suites
   --comprehensive   Comprehensive Python suite
   --all             all suites
   --catalog-check   post-test catalog integrity check
@@ -328,7 +328,7 @@ if $NEEDS_INTEGRATION && [[ "$TARGET" != "real-dynamodb" ]]; then
         fi
     fi
 
-    # Java truststore for HTTPS
+    # JVM truststore for HTTPS Maven/Gradle suites.
     if [[ "$EXTENDDB_TEST_ENDPOINT" == https://* ]]; then
         CERT_PATH="$HOME/.${TARGET}/tls/cert.pem"
         if [[ -f "$CERT_PATH" ]] && command -v keytool >/dev/null 2>&1; then

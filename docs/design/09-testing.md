@@ -1,324 +1,221 @@
-# extenddb — Test Strategy Design
+# ExtendDB Test Strategy
 
-**Version:** 1.0
-**Date:** 2026-04-06
-**Status:** Draft
+**Version:** 2.0
+**Date:** 2026-06-06
+**Status:** Implemented
 
 ## 1. Purpose
 
-This document defines extenddb's test strategy: how tests are organized, what reference suites inform coverage, how golden files work, and how multi-language test suites validate SDK compatibility. It is the authoritative reference for anyone writing or running extenddb tests.
+This document describes the current ExtendDB test architecture: which suites
+exist in the repository, which external suites can be registered, and which
+acceptance gates prove a change is ready. The test suite treats DynamoDB
+compatibility as product behavior, not as an implementation detail.
 
-## 2. Tenets (for testing)
+## 2. Principles
 
-1. **Real DynamoDB is the oracle** — every expected behavior is captured by running against real DynamoDB, never assumed or copied from reference suites.
-2. **Reference suites tell us what to test, not how to answer** — we extract scenario names and API coverage from reference suites; we independently discover correct responses via golden files.
-3. **Python carries the fidelity burden** — the Python suite is the primary test suite with full golden file coverage. Other languages validate SDK integration.
-4. **Coverage grows with the code** — test coverage and coverage maps expand incrementally as phases progress, never front-loaded as prerequisites that gate implementation.
-5. **Same code, two targets** — every test runs against both real DynamoDB and extenddb with zero code changes, controlled by environment variables.
-6. **Standard operations only** — the test suite validates fidelity mode exclusively. Preview extensions have their own tests and never appear in the fidelity test suite.
+1. **Real DynamoDB remains the oracle.** When expected behavior is uncertain,
+   validate against real DynamoDB and then encode the behavior in a clean-room
+   ExtendDB test.
+2. **One test, two targets.** Integration tests run against ExtendDB when
+   `EXTENDDB_TEST_ENDPOINT` is set and against real DynamoDB when it is unset.
+3. **No target-specific assertions.** A behavioral difference is either an
+   ExtendDB bug, a test bug, or an explicitly documented native-backend
+   boundary.
+4. **SDKs are part of the contract.** boto3 and the Rust AWS SDK both exercise
+   the wire protocol through normal customer clients. Additional external
+   suites can be registered without copying them into this repository.
+5. **Acceptance evidence is durable.** Long-running gates write artifacts under
+   `discussions/` with the current commit hash.
 
-## 3. Reference Suites
-
-### 3.1 Reference Strategy
-
-extenddb uses test suites as a coverage map — a source of *what to test*, not *how to implement*. The test suites are not included here.
-
-### 3.2 Arm's-Length Boundary (MF-1)
-
-The boundary between safe reference and proprietary content is defined by a single rule:
-
-> Reference suites tell us **what behavior to test**. Real DynamoDB tells us **what the correct answer is**.
-
-Concretely:
-
-**Safe to reference:**
-- Test class names and method names (they describe what is tested)
-- The DynamoDB API operation exercised
-- The category of behavior (error path, edge case, limit, expression type)
-- The test organization structure (how tests are grouped)
-
-**Never referenced:**
-- Specific assertion values, expected error messages, or HTTP status codes from any suite
-- Internal DynamoDB implementation details revealed by test setup
-- Test infrastructure code (base classes, helpers, utilities)
-- Any code referencing internal-only APIs or features
-
-**Example:** A method named `testCreateTableWith6GSIsFails_LimitExceeded` tells us to test "GSI count limit enforcement on CreateTable." We independently discover the exact error type, message, and HTTP status by running the scenario against real DynamoDB and capturing the golden file.
-
-### 3.3 Tracking Upstream Changes
-
-The reference suite's analyzed git hash is stored in `tests/reference/`:
-
-```
-tests/reference/
-├── suite-hash.txt           # e.g. 1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d1a2b3c4d
-├── check-upstream.sh        # Diff script
-└── coverage-map.md          # Test scenario inventory
-```
-
-`check-upstream.sh` compares the stored hash against current HEAD of the reference repo, diffs the file list, and reports new/modified/deleted test files. New files are flagged as high-priority (likely test behaviors extenddb must support).
-
-When new tests appear upstream, a developer reviews them for new scenarios to add to the coverage map. This is a manual review process, not automated ingestion.
-
-### 3.4 Coverage Map (MF-2)
-
-The coverage map (`tests/reference/coverage-map.md`) tracks which reference suite scenarios have corresponding extenddb tests. Every test method maps to an extenddb test scenario at per-method granularity.
-
-The coverage map is a living document, not a prerequisite; it is updated
-alongside development and does not block implementation.
-
-## 4. Multi-Language Test Suites
-
-### 4.1 Why Multiple Languages
-
-Different SDKs serialize requests differently (field ordering, default values, header formatting), handle error responses differently (some parse `__type`, some parse `Code`), and implement SigV4 with subtle variations. If extenddb only passes Python tests, it may fail with the Java SDK. Real DynamoDB users use all four SDKs — extenddb must work with all of them.
-
-### 4.2 Language Roles (SF-1)
-
-| Language | SDK | Role | When |
-|----------|-----|------|------|
-| Python | boto3 | Primary test suite. Full fidelity: golden files, error message matching, edge cases. | Always |
-| Java | aws-sdk-java-v2 | Elevated integration. Covers more scenarios than Rust/C++ because the PostgreSQL extension suite (our primary reference) is Java. Tests scenarios that have a direct PostgreSQL extension suite counterpart. | Required for matching reference-suite scenarios |
-| Rust | aws-sdk-rust | SDK integration validation. Core smoke tests proving the Rust SDK works against extenddb. | Smoke and customer-path coverage |
-| C/C++ | aws-sdk-cpp | SDK integration validation. Exercises a fundamentally different SDK architecture. | Deferred pending demand |
-
-**Coverage criteria:**
-- Python tests: mandatory
-- Java tests: mandatory for scenarios with a direct PostgreSQL extension suite counterpart
-- Rust/C++ tests: best-effort, tracked but non-blocking
-
-### 4.3 What Non-Python Suites Cover
-
-The Python suite carries the full fidelity burden. Rust, Java, and C++ suites cover:
-
-1. A core smoke test (CRUD + Query + Scan) proving the SDK works
-2. SDK-specific serialization edge cases (e.g., Java's handling of empty strings, C++'s handling of binary data)
-3. SigV4 signing differences across SDKs
-
-Java additionally covers scenarios that map directly to the PostgreSQL extension suite's test methods, since that suite uses the same SDK.
-
-### 4.4 Directory Structure (N-1)
+## 3. Repository Test Surfaces
 
 ```
 tests/
-├── golden/                    # Shared golden files (all languages read, Python captures)
-├── comparison_rules/          # Shared comparison rules (all languages read)
-├── python/                    # Primary test suite (pytest + boto3)
-│   ├── conftest.py           # Shared fixtures, endpoint config, capture workflow
-│   ├── test_phase01_table_crud.py
-│   ├── test_phase02_put_get.py
-│   └── ...
-├── rust/                      # Rust SDK integration tests
-│   ├── Cargo.toml            # Separate crate, depends on aws-sdk-dynamodb
-│   ├── src/
-│   │   └── lib.rs            # Shared helpers
-│   └── tests/                # Integration tests (idiomatic Rust layout)
-│       ├── smoke_crud.rs
-│       └── ...
-├── java/                      # Java SDK integration tests
-│   ├── pom.xml               # Maven project, depends on aws-sdk-java-v2
-│   └── src/test/java/
-├── cpp/                       # C++ SDK integration tests
-│   ├── CMakeLists.txt
-│   └── src/
-├── reference/                 # Coverage tracking
-│   ├── suite-hash.txt
-│   ├── check-upstream.sh
-│   └── coverage-map.md
-└── README.md                 # How to run tests, add tests, capture golden files
+├── *.py                 # Primary boto3 integration suite
+├── python/              # Comprehensive clean-room compatibility suite
+├── rust/                # Standalone Rust AWS SDK integration crate
+├── cli/                 # Shell-level CLI and docs consistency checks
+├── shared/              # Shared test notes and reusable data area
+├── conftest.py          # Main pytest fixtures
+└── management_helpers.py
+
+devtools/
+├── run-tests            # Unified suite runner
+├── tidb-acceptance      # TiDB-focused acceptance selector/gate
+├── tidb-sdk-smoke       # Live customer-path DynamoDB SDK smoke
+├── tidb-native-read-smoke
+├── run-external-tests   # Registry-based external suite runner
+└── provision-test-credentials
 ```
 
-## 5. Golden Files
+### 3.1 Rust Unit Tests
 
-### 5.1 Format (SF-2)
+`cargo test -j12 --workspace` is the default in-repo correctness gate. These
+tests cover pure types, expression parsing/evaluation, operation handlers,
+auth, server helpers, storage metadata, and backend SQL generation.
 
-Golden files are shared across all language suites and live in a top-level shared directory (`tests/golden/`), not under any language-specific directory. The Python suite owns the capture workflow (via `CAPTURE_GOLDEN=1` in conftest.py), but the output goes to the shared location so all languages read from the same source. The format is language-agnostic: raw HTTP response bodies (JSON) plus HTTP status codes and relevant headers.
+Crate-level tests should stay close to the code they protect. Prefer focused
+tests for parser, validator, and query-shape changes, then run the workspace
+gate before commit.
 
-```
-tests/golden/
-├── create_table/
-│   ├── basic.json
-│   ├── with_gsi.json
-│   └── duplicate_table_error.json
-├── put_item/
-│   ├── basic.json
-│   └── item_too_large_error.json
-└── ...
-```
+### 3.2 Primary Python Integration Suite
 
-Each golden file contains:
+Top-level `tests/*.py` files exercise ExtendDB through boto3 and requests.
+They cover auth, IAM, cross-account behavior, item/table operations, query/scan,
+batch operations, transactions, streams, TTL, metrics, console integration, and
+import/export.
 
-```json
-{
-  "request": {
-    "operation": "CreateTable",
-    "headers": { "Authorization": "REDACTED", "X-Amz-Security-Token": "REDACTED" },
-    "body": { "TableName": "...", "KeySchema": [...], ... }
-  },
-  "response": {
-    "status": 200,
-    "headers": {
-      "x-amzn-RequestId": "example-uuid",
-      "x-amz-crc32": "12345"
-    },
-    "body": { "TableDescription": { ... } }
-  }
-}
+The suite is target-selectable:
+
+- Set `EXTENDDB_TEST_ENDPOINT` plus test credentials to run against ExtendDB.
+- Leave `EXTENDDB_TEST_ENDPOINT` unset to validate behavior against real
+  DynamoDB where the test is intended to be portable.
+
+All tests must clean up resources they create. Fixture-level cleanup is
+preferred so failures do not leave tables behind.
+
+### 3.3 Comprehensive Python Suite
+
+`tests/python/` is the broader clean-room compatibility suite. It keeps
+operation-focused coverage separate from the main pytest files and is run via:
+
+```bash
+devtools/run-tests --extenddb --comprehensive
 ```
 
-The `request` is included so the test harness can replay it. The `response` is the expected result. Each language's test harness deserializes the golden file and compares against its SDK's parsed response. Note: headers like `x-amzn-RequestId` are captured for completeness but are not meaningful for exact comparison — they are validated by format only (see §5.3).
+This suite should remain backend-agnostic and use the same endpoint/credential
+model as the primary Python suite.
 
-### 5.2 Capturing Golden Files (N-2)
+### 3.4 Rust AWS SDK Suite
 
-To capture a new golden file:
+`tests/rust/` is a standalone Rust SDK integration crate. It is not part of the
+workspace build; the runner compiles or runs it when the selected gate includes
+Rust SDK coverage.
 
-1. Write the test scenario in Python against real DynamoDB (`us-east-1`)
-2. Run with `CAPTURE_GOLDEN=1` to record the raw HTTP response
-3. Strip credentials from the captured request before saving:
-   - `Authorization` header (SigV4 signature and credential scope)
-   - `X-Amz-Security-Token` header (session token)
-   - Any `Credential=` or `Signature=` values in query strings
-   - Lowercase variants (`x-amz-credential`, `x-amz-signature`)
-   - Replace stripped values with `"REDACTED"`
-4. Save to `tests/golden/<operation>/<scenario>.json`
-5. Verify the captured response is deterministic (run twice, diff)
-6. Commit the golden file — it must never contain real credentials
+Use it for SDK serialization, SigV4, and customer-path scenarios that are more
+valuable through the real Rust AWS SDK than through internal unit tests.
 
-The `tests/README.md` documents this workflow.
+### 3.5 CLI and Documentation Checks
 
-### 5.3 Field Comparison Rules
+`tests/cli/` covers shell-level lifecycle and documentation consistency checks.
+CLI lifecycle tests may require backend-specific environment, such as
+`EXTENDDB_TEST_PG_CONNECTION_STRING` for PostgreSQL lifecycle coverage.
 
-Not all fields can be compared exactly between AWS and extenddb. Per-operation YAML files in `tests/comparison_rules/` specify field handling:
+Documentation builds are part of the test architecture because manuals and
+embedded console docs are generated artifacts. Use:
 
-```yaml
-# comparison_rules/create_table.yaml
-exact:
-  - TableDescription.TableName
-  - TableDescription.KeySchema
-  - TableDescription.AttributeDefinitions
-  - TableDescription.BillingModeSummary.BillingMode
-  - TableDescription.DeletionProtectionEnabled
-  - TableDescription.TableSizeBytes
-  - TableDescription.ItemCount
-format_only:
-  - x-amzn-RequestId    # UUID regex
-  - x-amz-crc32         # valid integer
-ignore:
-  - TableDescription.CreationDateTime
-  - TableDescription.TableArn        # account ID differs
-  - TableDescription.TableId         # UUID differs
-  - TableDescription.TableStatus     # CREATING vs ACTIVE
-normalize:
-  - TableDescription.ProvisionedThroughput.LastIncreaseDateTime
-  - TableDescription.ProvisionedThroughput.LastDecreaseDateTime
-  - TableDescription.BillingModeSummary.LastUpdateToPayPerRequestDateTime
-partial:
-  - TableDescription.ProvisionedThroughput  # extenddb may omit NumberOfDecreasesToday initially
+```bash
+.venv/bin/python docs/build-docs.py
 ```
 
-Five comparison categories:
+when the project virtualenv is available.
 
-| Category | Behavior |
-|----------|----------|
-| `exact` | Field must match the golden file value exactly |
-| `format_only` | Field must be present and match a format (e.g., UUID regex) but the value is not compared |
-| `ignore` | Field is skipped entirely during comparison |
-| `normalize` | Field is transformed before comparison (e.g., timestamps normalized to epoch) |
-| `partial` | extenddb's response for this object is a strict subset of the golden file. Fields present in the golden file but absent from extenddb are allowed (extenddb is incomplete). Fields present in extenddb but absent from the golden file are test failures (extenddb must not return data that real DynamoDB does not). Fields present in both are compared according to their own comparison category. This is a transitional mode: as extenddb matures, fields move from `partial` to `exact`. |
+## 4. External Suite Registry
 
-The comparison rules live in a top-level shared directory (`tests/comparison_rules/`) so all language suites can read them. The Python test harness reads these rules and applies them during comparison. Other language suites use the same YAML files.
+External suites are referenced by configuration, not copied into the repo.
+`external-suites.sample.toml` documents the registry shape; copy it to
+`external-suites.toml` and point entries at local or organization-specific test
+suites.
 
-## 6. Test Harness Design
+Supported runner types are:
 
-Each language's test harness:
+- `maven`
+- `gradle`
+- `pytest`
+- `cargo`
 
-- Reads endpoint configuration from environment variables (`AWS_ENDPOINT_URL_DYNAMODB`, `AWS_REGION`, etc.)
-- Runs against both real DynamoDB and extenddb with zero code changes
-- Handles table creation wait times — both real DynamoDB and extenddb use async control plane transitions. The harness polls `DescribeTable` until `ACTIVE`
-- Cleans up test tables using the `EXTENDDB_TABLE_PREFIX` convention — deletes all matching tables at the start of each run (idempotent cleanup)
-- Reports results in JUnit XML format for CI integration
+Run registered suites with:
 
-### 6.1 Test Infrastructure Pattern (Q-7)
+```bash
+devtools/run-tests --extenddb --external
+```
 
-All language suites adopt the same architectural pattern independently (not copied from reference suites):
+or directly:
 
-- A base class/fixture with table setup and teardown
-- Assertion helpers for item comparison and attribute value comparison
-- Endpoint configuration from environment variables
-- Table name prefix (`EXTENDDB_TABLE_PREFIX`, defaults to `extenddb_test_`) for cleanup isolation — configurable to support parallel test runs
+```bash
+devtools/run-external-tests --verbose
+```
 
-This pattern is standard for DynamoDB test suites and proven by the PostgreSQL extension suite's architecture.
+The external runner writes structured and text artifacts under `discussions/`.
 
-### 6.2 Environment Variables
+## 5. Unified Runner
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `AWS_ENDPOINT_URL_DYNAMODB` | extenddb endpoint override | (none — uses real DynamoDB) |
-| `AWS_REGION` | Region for requests | `us-east-1` |
-| `AWS_ACCESS_KEY_ID` | Credentials | (from AWS config) |
-| `AWS_SECRET_ACCESS_KEY` | Credentials | (from AWS config) |
-| `CAPTURE_GOLDEN` | Enable golden file capture mode | `0` |
-| `EXTENDDB_TABLE_PREFIX` | Table name prefix for test isolation and cleanup | `extenddb_test_` |
+`devtools/run-tests` owns the normal integration workflow. It provisions test
+credentials, performs a health check, configures runtime settings for fast
+tests, sets import/export paths, prepares JVM trust material when a registered
+external suite needs it, and writes per-suite artifacts.
 
-## 7. Phase Integration
+Typical commands:
 
-### 7.1 Test Scope Per Phase
+```bash
+devtools/run-tests --extenddb --rust
+devtools/run-tests --extenddb --pytest
+devtools/run-tests --extenddb --comprehensive
+devtools/run-tests --extenddb --rust-integration
+devtools/run-tests --extenddb --external
+devtools/run-tests --extenddb --all
+```
 
-| Phase | Python | Java | Rust | C++ |
-|-------|--------|------|------|-----|
-| 1 (Server + table CRUD) | Full: table lifecycle, error paths, raw HTTP edge cases, health/metrics | — | — | — |
-| 2 (PutItem + GetItem) | Full: all attribute types, size limits, ReturnValues | Smoke: basic put/get | Smoke: basic put/get | — |
-| 3 (SigV4) | Full: valid/invalid credentials, clock skew, missing headers | Smoke: SigV4 with Java SDK | Smoke: SigV4 with Rust SDK | — |
-| 4 (Policy engine) | Full: policy enforcement, ABAC, management API | — | — | — |
-| 5 (DeleteItem + UpdateItem) | Full: CRUD + expressions | Java scenarios from PostgreSQL ext suite | — | — |
-| 6 (Full expressions) | Full: all operators, functions, Expected | — | — | — |
-| 7 (Query + Scan) | Full: key conditions, pagination, 1MB limit | Java scenarios from PostgreSQL ext suite | Smoke: basic query/scan | Smoke: basic CRUD + query |
-| 8+ | Python mandatory, Java for PostgreSQL ext counterparts, Rust/C++ extended smoke | | | |
+Use `--filter` for focused iteration and `--release` when validating the
+release binary path.
 
-### 7.2 Health and Metrics Endpoints (Q-6)
+## 6. TiDB Acceptance Gate
 
-`/health` and `/metrics` are part of the baseline operational surface. They are
-trivial to implement, useful for validation from day one, and tested by the
-PostgreSQL extension suite's `RawHttpTests`.
+TiDB is the default backend, so TiDB changes use `devtools/tidb-acceptance`.
+The gate maps changed files to the smallest useful check set, while still
+offering full and archive modes for final proof.
 
-### 7.3 New Test Categories from PostgreSQL Extension Suite
+```bash
+devtools/tidb-acceptance --changed --dry-run
+devtools/tidb-acceptance --changed
+devtools/tidb-acceptance --changed --with-playground
+devtools/tidb-acceptance --full
+devtools/tidb-acceptance --archive
+```
 
-The PostgreSQL extension suite identified test categories the original implementation plan did not enumerate:
+The selector can run shell checks, whitespace checks, TiDB native SQL smoke,
+`storage-tidb` tests and clippy, `extenddb --features tidb` tests and clippy,
+Rust SDK compile checks, live customer SDK smoke, and docs builds.
 
-| Category | Source | Priority |
-|----------|--------|-------|
-| Empty value handling (empty strings, binary, sets) | `EmptyValueTests` | Required |
-| Unicode and special characters (emoji, single quotes) | `UnicodeTests` | Required |
-| Raw HTTP edge cases (invalid JSON, empty body, missing target, GET rejection) | `RawHttpTests` | Required |
-| Health and metrics endpoints | `RawHttpTests` | Required |
-| Capacity reporting (`ReturnConsumedCapacity`) | `CapacityThrottlingTests` | Fidelity |
-| Throttling behavior | `CapacityThrottlingTests` | Fidelity |
+Use `--archive` for final branch evidence. It runs the full developer gate plus
+the live customer SDK smoke and fails fast when endpoint or credential
+prerequisites are missing.
 
-## 8. Out of Scope
+## 7. Adding Coverage
 
-### 8.1 PartiQL (Q-5, N-3)
+Add the narrowest test that proves the behavior:
 
-PartiQL is deferred to post-v1. It requires a separate parser and execution
-engine.
+- Pure parsing, validation, conversion, and error mapping: Rust unit test in
+  the owning crate.
+- Operation behavior over the DynamoDB API: top-level pytest.
+- Broad compatibility scenario: `tests/python/`.
+- SDK serialization or customer-path proof: `tests/rust/` or a registered
+  external suite.
+- CLI lifecycle behavior: `tests/cli/`.
+- TiDB-native behavior: `storage-tidb` unit test plus `tidb-acceptance` when
+  the behavior depends on live TiDB.
 
-### 8.2 CI Infrastructure (Q-4)
+For bug fixes, encode the failing case directly. Do not add broad conditional
+checks where a better data shape can eliminate the edge case.
 
-CI design is deferred to a separate discussion. This document defines *what* runs; CI defines *where* and *when*. The test strategy is not blocked on CI decisions.
+## 8. Required Gates by Change Type
 
-## 9. Phase Exit Criteria (Testing Addendum)
+| Change type | Minimum local gate |
+|-------------|--------------------|
+| Rust source | `cargo fmt --all -- --check`, focused test, `cargo test -j12 --workspace`, `cargo clippy -j12 --all-targets -- -D warnings` |
+| Docs only | `.venv/bin/python docs/build-docs.py`, `git diff --check` |
+| TiDB backend | `devtools/tidb-acceptance --changed`; add `--with-playground` or `--full` when live TiDB behavior changed |
+| SDK/customer path | `devtools/tidb-acceptance --sdk-smoke` or a registered external suite |
+| Final TiDB archive proof | `devtools/tidb-acceptance --archive` |
 
-Phase exit criteria are defined in the implementation plan. This document adds the following testing requirements:
+The acceptance gate may run more than the minimum when the touched files imply
+broader risk.
 
-1. For phases with PostgreSQL extension suite counterparts: all mandatory Java tests pass
-2. Rust and C++ test failures are tracked but do not block phase completion
+## 9. License
 
----
-
-## License
-
-Copyright 2026 ExtendDB contributors. Licensed under the Apache License, Version 2.0.
-See [LICENSE](../../LICENSE) for the full text.
+Copyright 2026 ExtendDB contributors. Licensed under the Apache License,
+Version 2.0. See [LICENSE](../../LICENSE) for the full text.
 
 This software is provided "as is" without warranty of any kind. ExtendDB is not
-affiliated with, endorsed by, or sponsored by Amazon Web Services. "DynamoDB" is a trademark
-of Amazon.com, Inc.
+affiliated with, endorsed by, or sponsored by Amazon Web Services. "DynamoDB" is
+a trademark of Amazon.com, Inc.

@@ -1,7 +1,7 @@
 # Backlog
 
-This file tracks open work only. Completed phase history lives in Git history,
-release notes, and the PR ledger.
+This file tracks open work only. Completed work lives in Git history, release
+notes, and the PR ledger.
 
 ## Fidelity
 
@@ -37,8 +37,9 @@ release notes, and the PR ledger.
   coordination design before shared-catalog multi-frontend deployment.
 - PostgreSQL default-read topology can be added if deployments need a separate
   physical read path.
-- C/C++ SDK test coverage remains unconfirmed; Rust, Python, and Java suites are
-  already active.
+- C/C++ SDK test coverage remains unconfirmed; Python and Rust suites are
+  active in this repo, and JVM coverage can be attached through the external
+  suite registry.
 
 ## Native Backend Boundaries
 

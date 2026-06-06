@@ -395,17 +395,22 @@ gauges/counters under `/metrics`; until then, scrape the JSON endpoint.
 - Concurrent reads + occasional writes never observe a stale value beyond `ttl_seconds`.
 - Concurrent invalidation + reads always observe the post-invalidation value on the next call.
 
-## 14. Phased rollout
+## 14. Implementation state
 
-| Phase | Scope | Risk |
-|-------|-------|------|
-| 1 | `SwrCache<K, V>` primitive + `moka` dep | low — pure library code, no behavior change |
-| 2 | `CachedCredentialStore` + invalidation hooks for access-key mutations | medium — touches auth path |
-| 3 | `CachedAuthorizationStore` (with parsed `PolicyDocument` cache) + invalidation hooks for IAM mutations | medium — touches authorization path |
-| 4 | `CachedTableKeyInfoStore` + invalidation hooks on `CreateTable`/`UpdateTable`/`DeleteTable` | low |
-| 5 | Documentation, config sample, `init` template, admin guide, metrics console row | trivial |
+The cache architecture described above is implemented:
 
-Each phase is a separate PR. After each phase the test suite runs green and the system is shippable. Phases 2/3/4 each independently improve hot-path performance.
+- `extenddb-cache` provides the shared `SwrCache<K, V>` primitive.
+- `CachedCredentialStore` caches access-key lookups and session credentials.
+- `CachedAuthzStore` caches authorization inputs, including parsed policy
+  documents and principal/resource tag data.
+- `CachedTableKeyInfoStore` caches table key metadata for data-plane handlers.
+- Management and console mutations invalidate affected cache entries through
+  `AuthCacheRegistry`.
+- Cache metrics are exposed through the management API and console metrics view.
+
+The remaining deferred boundary is cross-instance invalidation for direct
+catalog mutations or multi-frontend deployments; Appendix B documents the
+future storage-backed fanout shape.
 
 ## 15. Operator guide (excerpt for admin manual)
 

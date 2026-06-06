@@ -515,7 +515,8 @@ The `bin` crate will discover your backend at startup and select it by name from
 
 Use the test suite as your specification:
 - **Python integration tests** (`tests/`) exercise the DynamoDB wire protocol end-to-end. They are backend-agnostic.
-- **External Java SDK test suite** (`run-external-tests`) runs real AWS SDK integration tests.
+- **External suite registry** (`run-external-tests`) runs registered SDK or
+  compatibility suites against the backend.
 - If your backend passes the same tests, it is correct.
 
 ## Design Constraints for New Backends

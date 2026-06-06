@@ -47,7 +47,7 @@ cargo clippy -- -W clippy::pedantic
 cargo fmt
 ```
 
-Both debug and release builds must pass before any phase exit.
+Both debug and release builds must pass before branch acceptance.
 
 ## Rust Conventions
 
@@ -160,7 +160,8 @@ devtools/run-tests --extenddb --pytest --filter test_put_item
 The `run-tests` script automatically:
 - Performs health check on the target endpoint
 - Provisions test credentials via `devtools/provision-test-credentials`
-- Creates a Java truststore for external tests (self-signed TLS cert)
+- Creates JVM trust material for registered Maven/Gradle external suites when
+  the target uses a self-signed TLS cert
 - Sets `control_plane_delay_seconds` to 0.05 for backends that use a simulated control-plane delay; TiDB does not expose this setting and relies on native online DDL
 - Configures backend-specific test settings for immediate control-plane visibility
 - Enables throttling for production-like behavior
@@ -255,13 +256,14 @@ customer-path performance check. If SDK credentials are not already exported but
 
 ### Test Suites
 
-| Suite | Count | Description |
-|-------|-------|-------------|
-| Rust unit tests | 317 | Expression engine, type system, validation, error codes |
-| Pytest (standard) | 180 + 118 skipped | DynamoDB API tests via boto3 |
-| Comprehensive (Python) | 296 | Clean-room gap analysis tests |
-| External (Java) | 346 | Third-party functional test suite |
-| CLI lifecycle | 9 | Binary lifecycle tests for the selected backend |
+| Suite | Description |
+|-------|-------------|
+| Rust unit tests | Workspace crate tests for expression engine, type system, validation, storage SQL generation, auth, server helpers, and error mapping |
+| Pytest (standard) | DynamoDB API tests via boto3 and requests |
+| Comprehensive (Python) | Clean-room compatibility gap analysis tests under `tests/python/` |
+| Rust SDK integration | Standalone AWS SDK integration crate under `tests/rust/` |
+| External registry | Optional organization-specific suites registered in `external-suites.toml` |
+| CLI lifecycle | Binary lifecycle tests for the selected backend |
 
 ### Python Integration Tests
 
@@ -299,7 +301,7 @@ devtools/run-tests --extenddb --comprehensive
 
 ### External Test Suites
 
-External test suites (Java) are registered in `external-suites.toml` and run via:
+External test suites are registered in `external-suites.toml` and run via:
 
 ```bash
 # Via run-tests script (recommended)
@@ -311,7 +313,9 @@ python3 devtools/run-external-tests --suite "Suite Name"
 python3 devtools/run-external-tests --dry-run
 ```
 
-The external test runner parses Maven surefire XML reports as a fallback when `mvn -q` suppresses stdout summary lines.
+The registry supports Maven, Gradle, pytest, and cargo runners. For Maven
+suites, the external test runner parses surefire XML reports as a fallback when
+quiet output suppresses stdout summary lines.
 
 ### Rust Unit Tests
 

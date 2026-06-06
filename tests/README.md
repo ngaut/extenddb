@@ -13,7 +13,7 @@ a server configured with TLS and valid credentials.
 
 ```bash
 # 1. Build and initialize (first time only)
-cargo build --release
+cargo build -j12 --release
 ./target/release/extenddb init --config extenddb.toml
 # Save the admin password printed during init!
 
@@ -37,7 +37,9 @@ export EXTENDDB_ADMIN_PASSWORD=<password-from-init>
 devtools/run-tests --extenddb --all
 ```
 
-The test runner script automatically provisions test credentials and configures the Java truststore for external tests.
+The test runner script automatically provisions test credentials and prepares
+trust material for registered external suites when the target uses a self-signed
+TLS certificate.
 
 ### TiDB acceptance loop
 
@@ -148,8 +150,9 @@ handles this automatically:
 
 - **Python tests:** `verify=False` is set on all boto3 and requests clients
   when the endpoint starts with `https://`.
-- **Java tests:** The test runner script creates a temporary Java truststore
-  from the self-signed cert and passes it via `JAVA_TOOL_OPTIONS`.
+- **External JVM suites:** The test runner script creates a temporary Java
+  truststore from the self-signed cert and passes it via `JAVA_TOOL_OPTIONS`
+  when registered Maven/Gradle suites are run.
 - **curl:** Health checks use `curl -sk` to accept self-signed certs.
 
 ## Design
@@ -161,49 +164,21 @@ handles this automatically:
 - Auth tests use `management_helpers.py` to provision identities via the management API
 - Auth tests are skipped when env vars are not set (safe for CI without auth infra)
 
-## External Java Test Suite
+## External Test Suites
 
-The external Java test suite lives in `tests/external/java/` and requires Java 17+ and Maven 3.6+.
-
-### Installing Java and Maven
-
-**Amazon Linux / RHEL / CentOS:**
-
-```bash
-# Java 17 (Amazon Corretto)
-sudo yum install -y --disablerepo='pgdg*' java-17-amazon-corretto-devel
-
-# Maven 3.9.6 (system Maven is often too old)
-curl -sL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | sudo tar xz -C /opt
-sudo ln -sf /opt/apache-maven-3.9.6/bin/mvn /usr/local/bin/mvn
-
-# Verify
-java -version   # should show 17.x
-mvn --version   # should show 3.9.6
-```
-
-**Ubuntu / Debian:**
+External suites are registered by path in `external-suites.toml`; they are not
+copied into this repository. Start ExtendDB, copy
+`external-suites.sample.toml` to `external-suites.toml`, add suite entries, and
+run:
 
 ```bash
-sudo apt-get install -y openjdk-17-jdk maven
+devtools/run-tests --extenddb --external
 ```
 
-**macOS (Homebrew):**
+The direct runner is useful for iteration:
 
 ```bash
-brew install openjdk@17 maven
+devtools/run-external-tests --endpoint https://127.0.0.1:8000 --verbose
 ```
 
-### Running the external Java tests
-
-```bash
-# Start extenddb first, then:
-devtools/run-external-tests --endpoint https://127.0.0.1:8000
-```
-
-Or manually:
-
-```bash
-cd tests/external/java
-mvn test -Dextenddb.endpoint=https://localhost:8000 2>&1 | tail -20
-```
+Supported runner types are Maven, Gradle, pytest, and cargo.

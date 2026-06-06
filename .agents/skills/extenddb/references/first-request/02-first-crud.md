@@ -2,7 +2,9 @@
 
 ## 1. Purpose
 
-Run three operations in sequence to prove the end-to-end round trip: create a table, write an item, read it back. Success on all three closes the setup phase.
+Run three operations in sequence to prove the end-to-end round trip: create a
+table, write an item, read it back. Success on all three completes setup
+validation.
 
 ## 2. Prerequisites
 

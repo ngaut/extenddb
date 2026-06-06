@@ -10,8 +10,7 @@ and extenddb — failures always fail the suite.
 ```
 tests/
   python/          ← Primary suite (boto3 + pytest)
-  java/            ← Targeted Java coverage (JUnit 5 + Maven)
-  rust/            ← Targeted Rust coverage (tokio::test)
+  rust/            ← Targeted Rust AWS SDK coverage
   shared/          ← Shared test data and configuration
 ```
 

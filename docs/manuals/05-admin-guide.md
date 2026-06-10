@@ -65,21 +65,12 @@ These settings require a server restart to take effect.
 | `bind_addr` | `127.0.0.1` | Network interface to bind |
 | `port` | `8000` | HTTP port |
 | `region` | `us-east-1` | AWS region for ARN generation |
-| `throttling_enabled` | unset / `false` | PostgreSQL frontend token buckets for local capacity fidelity. TiDB rejects this runtime setting; use TiDB Resource Control/resource groups for distributed capacity governance. |
 
 #### [storage]
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `backend` | `tidb` | Storage backend (`tidb` or `postgres`; TiDB is the default) |
-
-#### [storage.postgres]
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `connection_string` | `postgresql://extenddb:extenddb-local-dev@localhost:5432/extenddb_catalog` | Catalog database connection string |
-| `pool_size` | `20` | Maximum concurrent database connections (minimum: 10) |
-| `catalog_pool_size` | (= `pool_size`) | Maximum connections for management/authz pool (minimum: 10) |
+| `backend` | `tidb` | Storage backend |
 
 #### [storage.tidb]
 
@@ -197,7 +188,6 @@ Any config key can be overridden via environment variables using the `EXTENDDB__
 
 ```bash
 EXTENDDB__SERVER__PORT=9000
-EXTENDDB__STORAGE__POSTGRES__CONNECTION_STRING="postgresql://..."
 EXTENDDB__STORAGE__TIDB__CONNECTION_STRING="mysql://..."
 EXTENDDB__AUTH__PROVIDER=builtin
 ```
@@ -211,7 +201,6 @@ Managed via `extenddb settings set`. Changes take effect within 30 seconds witho
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `log_level` | `info` | Log level: trace, debug, info, warn, error |
-| `control_plane_delay_seconds` | `5` | PostgreSQL delay for table status transitions (0 = instant). TiDB rejects this runtime setting and uses native online DDL reconciliation |
 | `allow_credential_import` | `true` | Whether `import-access-key` is allowed |
 
 ```bash
@@ -531,8 +520,7 @@ curl --cacert ~/.extenddb/tls/cert.pem https://127.0.0.1:8000/health
 ```
 
 For TiDB, this probes the engine catalog, catalog-store/auth, strong-data, and
-default-read data pools. For PostgreSQL, it probes the catalog metadata,
-catalog-store/auth, and data pools.
+default-read data pools.
 
 ## Troubleshooting
 
@@ -580,7 +568,7 @@ The IAM policy does not allow the operation. Check attached policies with `list-
 
 **Slow queries:**
 
-Check the configured storage backend's query plan tools (`EXPLAIN ANALYZE` for PostgreSQL or TiDB). Ensure indexes exist on key columns.
+Check TiDB query plans with `EXPLAIN ANALYZE`. Ensure indexes exist on key columns.
 
 **High connection count:**
 
@@ -588,21 +576,7 @@ Increase `pool_size` in `extenddb.toml` or check for connection leaks.
 
 ### Data Recovery
 
-Use the configured storage backend's native backup and recovery path.
-
-For PostgreSQL, use standard PostgreSQL tools:
-
-```bash
-# Backup
-pg_dump extenddb_catalog > catalog_backup.sql
-pg_dump extenddb_catalog_data > data_backup.sql
-
-# Restore
-psql -f catalog_backup.sql extenddb_catalog
-psql -f data_backup.sql extenddb_catalog_data
-```
-
-For TiDB, configure `[storage.tidb.backup]` and use DynamoDB-compatible backup APIs backed by native TiDB BR, or operate BR directly at the cluster level for full-cluster recovery. Table-level restore from an on-demand backup publishes catalog metadata only after TiDB finishes the physical restore path. Point-in-time table restore is intentionally not emulated with frontend row replay; use TiDB cluster-level PITR into a recovery cluster for that recovery model.
+Configure `[storage.tidb.backup]` and use DynamoDB-compatible backup APIs backed by native TiDB BR, or operate BR directly at the cluster level for full-cluster recovery. Table-level restore from an on-demand backup publishes catalog metadata only after TiDB finishes the physical restore path. Point-in-time table restore is intentionally not emulated with frontend row replay; use TiDB cluster-level PITR into a recovery cluster for that recovery model.
 
 ---
 

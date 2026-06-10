@@ -9,9 +9,9 @@
 extenddb uses a catalog/data database topology per deployment:
 
 - **Catalog database** (e.g., `extenddb_catalog`): All metadata — table definitions, indexes, accounts, IAM entities, settings, stream metadata, and schema history.
-- **Data database** (e.g., `extenddb_catalog_data`): User item data plus backend-specific secondary-index state. PostgreSQL stores base and secondary-index data in physical companion tables. TiDB stores item rows once and uses generated columns plus native secondary indexes.
+- **Data database** (e.g., `extenddb_catalog_data`): User item data plus native secondary-index state. TiDB stores item rows once and uses generated columns plus native secondary indexes.
 
-The data database connection string is stored in the catalog's `settings` table under the key `data_database_connection_string`. PostgreSQL deployments may place the catalog and data databases on different PostgreSQL instances. TiDB deployments must keep both databases in the same TiDB cluster so snapshot timestamps, online DDL, native TTL, and BR backup/restore all refer to one global timeline. At startup, the TiDB backend compares `information_schema.cluster_info` from the catalog and data pools when TiDB exposes that native topology table. On TiDB editions that hide cluster topology metadata, ExtendDB accepts the split only when both databases use the same SQL endpoint and user; separate endpoints or users require visible TiDB topology metadata so the backend can prove they belong to one cluster.
+The data database connection string is stored in the catalog's `settings` table under the key `data_database_connection_string`. Catalog and data databases must stay in the same TiDB cluster so snapshot timestamps, online DDL, native TTL, and BR backup/restore all refer to one global timeline. At startup, the TiDB backend compares `information_schema.cluster_info` from the catalog and data pools when TiDB exposes that native topology table. On TiDB editions that hide cluster topology metadata, ExtendDB accepts the split only when both databases use the same SQL endpoint and user; separate endpoints or users require visible TiDB topology metadata so the backend can prove they belong to one cluster.
 
 ### Catalog Tables
 
@@ -46,17 +46,14 @@ the data database. The logical shape is a partition-key slot, an optional
 sort-key slot, the complete item document, and a backend-native primary key over
 the key slots. Physical column types are backend-specific:
 
-- PostgreSQL stores key slots in PostgreSQL-typed columns and the complete item
-  in `item_data JSONB`.
 - TiDB stores the hash-key slot as raw `VARBINARY(2048)`, sort-key slots as
   typed `VARBINARY(1024)` or `DECIMAL(65, 30)` columns, and the complete item in
   `item_data JSON`. Fresh TiDB data tables are `PARTITION BY KEY(pk)` so TiDB
   distributes rows by the DynamoDB HASH key while preserving the raw key bytes
   used for point reads, Query, transaction locks, and stream shard assignment.
 
-PostgreSQL companion index tables are named `_ddb_<index_id>` and store the
-index key columns plus projected attributes. TiDB represents every DynamoDB
-secondary index definition as generated key columns plus a native secondary
+TiDB represents every DynamoDB secondary index definition as generated key
+columns plus a native secondary
 index on the base data table; GSI versus LSI is API metadata, not a separate
 TiDB physical path. The native index contains the DynamoDB index key columns
 only because TiDB already carries the clustered row handle in secondary-index
@@ -215,11 +212,10 @@ extenddb calculates consumed capacity matching real DynamoDB:
 
 Item size includes attribute names and values, matching DynamoDB's size calculation rules.
 
-Capacity enforcement is backend-aware. PostgreSQL can use ExtendDB's
-process-local token buckets for local fidelity tests. TiDB disables those
-frontend buckets and relies on TiDB Resource Control/resource groups for
-distributed flow control and scheduling, so multiple ExtendDB frontends share
-one storage-owned quota instead of each admitting its own local burst.
+Capacity enforcement is TiDB-native. ExtendDB relies on TiDB Resource
+Control/resource groups for distributed flow control and scheduling, so multiple
+ExtendDB frontends share one storage-owned quota instead of each admitting its
+own local burst.
 
 ## Caching Design
 
@@ -231,7 +227,6 @@ extenddb caches a small set of operational settings in memory to avoid per-reque
 |---------|-----------|---------|---------------|
 | `encryption_key` | `Arc<str>` loaded at startup | Never (immutable after `extenddb init`) | Decryption key for access key secrets; generated once, never changes |
 | `log_level` / `log_destination` | Tracing filter reload | Background poller every 30s | Observability tuning; stale value only delays log level changes |
-| `throttling_enabled` | `AtomicBool` | Background poller every 30s | PostgreSQL frontend capacity toggle; rejected by TiDB because capacity control is storage-native |
 
 All cached values are operational tuning knobs where a briefly-stale value does not affect correctness.
 

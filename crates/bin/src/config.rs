@@ -6,12 +6,11 @@
 use extenddb_core::limits::LimitsConfig;
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppConfig {
     #[serde(default)]
     pub server: ServerConfig,
-    #[serde(default)]
     pub storage: StorageConfig,
     /// Auth provider configuration. `provider = "builtin"` for `SigV4` with
     /// local credential store. The server refuses to start with `provider = "none"`.
@@ -221,6 +220,13 @@ impl extenddb_storage::config::StorageConfig for RuntimeStorageConfig<'_> {
             limits: self.limits.clone(),
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any
+    where
+        Self: 'static,
+    {
+        self
+    }
 }
 
 impl extenddb_storage::config::StorageConfig for OwnedRuntimeStorageConfig {
@@ -269,6 +275,13 @@ impl extenddb_storage::config::StorageConfig for OwnedRuntimeStorageConfig {
             base: self.base.clone_box(),
             limits: self.limits.clone(),
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any
+    where
+        Self: 'static,
+    {
+        self
     }
 }
 
@@ -670,14 +683,12 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tidb")]
     fn tidb_is_the_implicit_backend_when_available() {
         assert_eq!(default_backend(), "tidb");
         assert_eq!(StorageConfig::default()._backend, "tidb");
     }
 
     #[test]
-    #[cfg(feature = "tidb")]
     fn tidb_default_read_staleness_survives_runtime_config_wrappers() {
         let cfg: AppConfig = toml::from_str(
             r#"

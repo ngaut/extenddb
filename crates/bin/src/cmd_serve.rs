@@ -86,16 +86,9 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
     // Auth is mandatory. Only "builtin" is supported.
     validate_auth_provider(&app_config.auth.provider)?;
 
-    // Check backend is supported by this build.
+    // Validate backend support and get catalog version before binding the port.
     let backend = &app_config.storage._backend;
-    let available_backends = extenddb_storage::operations::list_operations_backends();
-    if !available_backends.iter().any(|b| b == backend) {
-        anyhow::bail!(
-            "Unknown backend '{}'. This build supports: {}.",
-            backend,
-            available_backends.join(", ")
-        );
-    }
+    let catalog_version = extenddb_storage::operations::catalog_version(backend)?;
 
     let port = args.port.unwrap_or(app_config.server.port);
     let bind_addr = format!("{}:{}", app_config.server.bind_addr, port);
@@ -116,9 +109,6 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
     // it to stderr so a process supervisor receives banner and tracing logs
     // on the same stream — mixing stdout and stderr makes container log
     // capture noisier than necessary.
-    let backend = &app_config.storage._backend;
-    let catalog_version = extenddb_storage::operations::catalog_version(backend)
-        .unwrap_or_else(|_| "unknown".to_string());
     let banner_line1 = format!(
         "extenddb {} (catalog {}) starting on {}",
         env!("CARGO_PKG_VERSION"),

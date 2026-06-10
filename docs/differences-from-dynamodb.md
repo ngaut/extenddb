@@ -8,7 +8,7 @@ adaptation when switching between ExtendDB and the real service.
 
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
-| Storage backend | Proprietary distributed storage | TiDB is the default storage backend. PostgreSQL remains available when explicitly built and selected. |
+| Storage backend | Proprietary distributed storage | TiDB |
 | Global Tables | CreateGlobalTable, replication | Not implemented (returns UnknownOperationException) |
 | DAX (Accelerator) | In-memory caching layer | Not applicable |
 | PartiQL | ExecuteStatement, BatchExecuteStatement | Not implemented (returns UnknownOperationException) |
@@ -33,13 +33,13 @@ adaptation when switching between ExtendDB and the real service.
 | Import formats | CSV, DYNAMODB_JSON, ION | CSV, DYNAMODB_JSON, ION |
 | Export formats | DYNAMODB_JSON, ION | DYNAMODB_JSON, ION |
 | Import execution | Asynchronous (background job) | Synchronous (completes before returning) |
-| Export execution | Point-in-time snapshot | Synchronous storage-owned snapshot. TiDB honors `ExportTime` with native `AS OF TIMESTAMP`; PostgreSQL exports the current snapshot and rejects `ExportTime` |
+| Export execution | Point-in-time snapshot | Synchronous storage-owned snapshot. ExtendDB honors `ExportTime` with TiDB native `AS OF TIMESTAMP` |
 
 ## Control Plane
 
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
-| Table creation delay | Returns `CREATING` immediately; transitions to `ACTIVE` typically within seconds. Same behavior for on-demand and provisioned | PostgreSQL can simulate a configurable delay with `control_plane_delay_seconds`; TiDB does not expose that frontend simulation setting and reconciles through native online DDL |
+| Table creation delay | Returns `CREATING` immediately; transitions to `ACTIVE` typically within seconds. Same behavior for on-demand and provisioned | ExtendDB reconciles through TiDB native online DDL and does not expose a frontend delay simulator |
 | DeletionProtectionEnabled | Enforced | Enforced (accepted and stored, DeleteTable rejects when enabled) |
 
 ## Time to Live (TTL)
@@ -47,9 +47,9 @@ adaptation when switching between ExtendDB and the real service.
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
 | TTL attribute name | Any UTF-8 string (1–255 bytes) | Same 1–255 UTF-8 byte bound for ordinary names, including spaces, quotes, punctuation, and non-ASCII names. ExtendDB rejects the null character because backend SQL metadata cannot represent it reliably. |
-| TTL deletion | Background process, items deleted within 48 hours of expiry | Backend-specific. PostgreSQL uses an indexed sweep. TiDB uses native table TTL for all user tables. |
+| TTL deletion | Background process, items deleted within 48 hours of expiry | TiDB native table TTL |
 | TTL transition states | `ENABLING`, `ENABLED`, `DISABLING`, `DISABLED` | Same API states. TiDB stores these states explicitly in the catalog so distributed startup repair can complete native TTL enable/disable DDL after a crash. |
-| TTL stream records | REMOVE events with `userIdentity: {type: "Service", principalId: "dynamodb.amazonaws.com"}` | PostgreSQL emits TTL REMOVE stream records. TiDB delegates deletion to native TTL, so ExtendDB does not synthesize TTL service REMOVE records for TiDB streams. |
+| TTL stream records | REMOVE events with `userIdentity: {type: "Service", principalId: "dynamodb.amazonaws.com"}` | ExtendDB delegates deletion to TiDB native TTL and does not synthesize TTL service REMOVE records |
 | TTL modification cooldown | Enforces a cooldown period between enable/disable changes ("Time to live has been modified multiple times within a fixed interval") | No cooldown — TTL can be enabled and disabled immediately. Intentional divergence for faster local development. |
 
 ## Tagging
@@ -62,16 +62,16 @@ adaptation when switching between ExtendDB and the real service.
 
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
-| GSI update propagation | Eventually consistent (milliseconds to seconds) | Backend-specific. PostgreSQL can simulate asynchronous propagation via `gsi_propagation_delay_ms`; TiDB uses native secondary indexes maintained from the base table write. |
+| GSI update propagation | Eventually consistent (milliseconds to seconds) | TiDB native secondary indexes are maintained from the base table write |
 | Multi-part base table keys | Not supported | Preview extension. Standard single/composite keys work identically. TiDB accepts multi-HASH shapes that fit its raw 2048-byte hash slot, and rejects multi-RANGE shapes because native TiDB indexes must stay within the 3072-byte key limit. |
 
 ## Capacity and Throttling
 
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
-| Provisioned throughput | Token bucket per table/partition | PostgreSQL can use frontend token buckets for local fidelity tests. TiDB uses TiDB Resource Control/resource groups instead of process-local buckets; `storage.tidb.resource_group` can bind runtime sessions to the selected group. |
-| On-demand capacity | Automatic scaling | PostgreSQL token buckets use fixed initial burst capacity when enabled. TiDB delegates cluster capacity and scheduling to TiDB. |
-| Throttling | Always on; throttles requests that exceed provisioned/burst capacity. No setting to disable | PostgreSQL frontend throttling is configurable via `throttling_enabled` and disabled by default. TiDB does not expose frontend throttling; use TiDB-native Resource Control/resource groups. |
+| Provisioned throughput | Token bucket per table/partition | ExtendDB delegates distributed capacity governance to TiDB Resource Control/resource groups; `storage.tidb.resource_group` can bind runtime sessions to the selected group |
+| On-demand capacity | Automatic scaling | ExtendDB delegates cluster capacity and scheduling to TiDB |
+| Throttling | Always on; throttles requests that exceed provisioned/burst capacity. No setting to disable | ExtendDB does not expose frontend throttling; use TiDB native Resource Control/resource groups |
 
 ## Operations Not Implemented
 
@@ -90,9 +90,6 @@ ExtendDB exposes runtime settings that have no DynamoDB equivalent:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `control_plane_delay_seconds` | 5 | PostgreSQL-only simulated delay for table create/delete transitions. TiDB rejects this setting because TiDB native online DDL owns schema scheduling. |
-| `gsi_propagation_delay_ms` | 10 | PostgreSQL-only backend default GSI propagation delay (milliseconds). TiDB rejects this setting because native secondary-index writes are transactional. |
-| `throttling_enabled` | `false` | PostgreSQL-only frontend token bucket. TiDB rejects this setting because per-frontend buckets are not distributed; use TiDB Resource Control/resource groups for TiDB. |
 | `log_level` | `info` | Runtime log level (trace, debug, info, warn, error) |
 | `sqlx_log_level` | `warn` | Separate log level for sqlx query traces |
 | `allow_credential_import` | `true` | Allow importing credentials via the management API |

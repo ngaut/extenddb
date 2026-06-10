@@ -8,8 +8,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::PathElement;
-use extenddb_core::expression::{ExpressionMaps, parse_key_condition, parse_projection};
+use extenddb_core::expression::{ExpressionKind, ExpressionMaps, PathElement, parse_key_condition};
 use extenddb_core::types::{
     IndexType, KeyType, QueryInput, QueryOutput, Select, TableKeyInfo, combined_lek_key_schema,
     item_size_bytes,
@@ -19,7 +18,8 @@ use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
 use crate::expression_helpers::{
-    build_checked_expression_maps, parse_optional_filter, tokenize_typed_expression,
+    build_checked_expression_maps, parse_optional_filter, parse_projection_expr,
+    tokenize_typed_expression,
 };
 use crate::index_helpers::{
     index_projection_for_read, validate_gsi_projection_request, validate_query_exclusive_start_key,
@@ -79,6 +79,7 @@ pub async fn handle_query(
             account_id: key_info.account_id.clone(),
             table_id: key_info.table_id.clone(),
             key_schema: idx.key_schema.clone(),
+            base_key_schema: key_info.key_schema.clone(),
             attribute_definitions: key_info.attribute_definitions.clone(),
             secondary_index_key_schemas: key_info.secondary_index_key_schemas.clone(),
             has_lsi: key_info.has_lsi,
@@ -133,12 +134,37 @@ pub async fn handle_query(
         &ctx.limits,
     )?;
 
+    // Reject EAN/EAV supplied with no expression that references them. Legacy
+    // KeyConditions does not count as an expression. Query emits no values suffix.
+    let has_kce = input
+        .key_condition_expression
+        .as_ref()
+        .is_some_and(|s| !s.is_empty());
+    let has_filter_expr = input
+        .filter_expression
+        .as_ref()
+        .is_some_and(|s| !s.is_empty());
+    let has_proj_expr = input
+        .projection_expression
+        .as_ref()
+        .is_some_and(|s| !s.is_empty());
+    extenddb_core::expression::validate_expression_param_usage(
+        input.expression_attribute_names.as_ref(),
+        has_kce || has_filter_expr || has_proj_expr,
+        input.expression_attribute_values.as_ref(),
+        has_kce || has_filter_expr,
+        &[],
+    )?;
+
     // Parse KeyConditionExpression or desugar legacy KeyConditions
     let (mut key_condition, legacy_kc_maps) = if let Some(kce_str) =
         input.key_condition_expression.as_deref()
     {
-        let tokens = tokenize_typed_expression(kce_str, &ctx.limits, "KeyConditionExpression")?;
-        (parse_key_condition(&tokens)?, None)
+        let tokens = tokenize_typed_expression(kce_str, &ctx.limits, ExpressionKind::KeyCondition)?;
+        let parsed = parse_key_condition(&tokens).map_err(|e| {
+            crate::expression_helpers::prefix_expression_error(e, ExpressionKind::KeyCondition)
+        })?;
+        (parsed, None)
     } else if let Some(ref kc) = input.key_conditions {
         let key_schema_pairs: Vec<(String, bool)> = query_key_info
             .key_schema
@@ -231,7 +257,7 @@ pub async fn handle_query(
     // Validate #name references in filter are defined in ExpressionAttributeNames
     if let Some(ref filter_expr) = filter {
         let names = input.expression_attribute_names.as_ref();
-        validate_name_refs_in_expr(filter_expr, names, "FilterExpression")?;
+        validate_name_refs_in_expr(filter_expr, names, ExpressionKind::Filter)?;
     }
 
     // Parse ProjectionExpression or desugar legacy AttributesToGet
@@ -254,8 +280,7 @@ pub async fn handle_query(
     };
 
     let projection = if let Some(ref proj_str) = effective_projection_str {
-        let proj_tokens = tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
-        Some(parse_projection(&proj_tokens)?)
+        Some(parse_projection_expr(proj_str, &ctx.limits)?)
     } else {
         None
     };
@@ -299,7 +324,7 @@ pub async fn handle_query(
         && index_info.is_none()
     {
         return Err(DynamoDbError::ValidationException(
-            "ALL_PROJECTED_ATTRIBUTES can be used only when querying an index".to_owned(),
+            "ALL_PROJECTED_ATTRIBUTES can be used only when Querying using an IndexName".to_owned(),
         ));
     }
     if let Some(Select::Count) = input.select
@@ -351,7 +376,7 @@ pub async fn handle_query(
     // Validate begins_with operand types upfront (before any rows are read).
     if let Some(ref f) = filter {
         extenddb_core::expression::validate_begins_with_operands(f, &combined_maps).map_err(
-            |e| crate::expression_helpers::prefix_expression_error(e, "FilterExpression"),
+            |e| crate::expression_helpers::prefix_expression_error(e, ExpressionKind::Filter),
         )?;
     }
 
@@ -454,7 +479,7 @@ fn resolve_path_attr_name(
 fn validate_name_refs_in_expr(
     expr: &extenddb_core::expression::Expr,
     names: Option<&HashMap<String, String>>,
-    expr_type: &str,
+    expr_type: ExpressionKind,
 ) -> Result<(), DynamoDbError> {
     use extenddb_core::expression::Expr;
     match expr {

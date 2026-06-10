@@ -56,7 +56,7 @@ pub fn validate_table_name_chars(name: &str) -> Result<(), DynamoDbError> {
 /// Validate an index name per `DynamoDB` rules: 3–255 chars, `[a-zA-Z0-9_.-]+`.
 ///
 /// Same character rules as table names. Defense-in-depth: prevents SQL injection
-/// via index names that are interpolated into DDL identifiers in storage-postgres.
+/// via index names that are interpolated into backend DDL identifiers.
 ///
 /// # Errors
 ///
@@ -1322,6 +1322,7 @@ mod tests {
             tags: None,
             deletion_protection_enabled: None,
             table_class: None,
+            on_demand_throughput: None,
         }
     }
 

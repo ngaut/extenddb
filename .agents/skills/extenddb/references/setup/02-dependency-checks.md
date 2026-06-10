@@ -11,7 +11,6 @@ This file lists the dependency checks the `extenddb-setup` skill runs before pro
 | Rust toolchain | `cargo --version` and `rustc --version` | 1.88 | extenddb is a Rust workspace; older toolchains fail `cargo build -j12 --release`. |
 | TiDB/MySQL client | `mysql --version` | n/a | Confirms the operator can check the TiDB SQL endpoint before init. |
 | TiDB SQL readiness | `mysql -h 127.0.0.1 -P 4000 -uroot -e "SELECT VERSION();"` | TiDB 8.5.4+ | Confirms the default backend is reachable before `extenddb init`. |
-| PostgreSQL client | `psql --version` | 14 | Required only when explicitly building and selecting the PostgreSQL backend. |
 | Python 3 | `python3 --version` | 3.10 | Required by the sample apps and the docs build pipeline. |
 
 ## Per-dependency check logic
@@ -100,7 +99,7 @@ version from `SELECT VERSION()` as the authoritative backend version.
 mysql -h 127.0.0.1 -P 4000 -uroot -e "SELECT VERSION();"
 ```
 
-Compare Rust against 1.88, TiDB against 8.5.4+, and PostgreSQL against 14 only when the PostgreSQL backend is selected. Split dotted versions on `.` and compare numerically.
+Compare Rust against 1.88 and TiDB against 8.5.4+. Split dotted versions on `.` and compare numerically.
 
 ## Rust version upgrade path
 

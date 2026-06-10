@@ -289,7 +289,6 @@ This file is a human-controlled policy input and must not be modified by agents.
 | sqlx-macros | 0.8.6 | MIT OR Apache-2.0 | Yes |
 | sqlx-macros-core | 0.8.6 | MIT OR Apache-2.0 | Yes |
 | sqlx-mysql | 0.8.6 | MIT OR Apache-2.0 | Yes |
-| sqlx-postgres | 0.8.6 | MIT OR Apache-2.0 | Yes |
 | sqlx-sqlite | 0.8.6 | MIT OR Apache-2.0 | Yes |
 | stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 | Yes |
 | stringprep | 0.1.5 | MIT/Apache-2.0 | Yes |

@@ -6,13 +6,13 @@
 
 ## 1. Overview
 
-extenddb (ExtendDB) is a standalone, stateless Rust application that provides a DynamoDB-compatible API backed by pluggable storage engines. Any AWS SDK client (Java, Python, Go, Node.js, Rust, .NET, etc.) connects directly with zero code changes. The standard product path uses TiDB as the default backend so ExtendDB can rely on TiDB-native transactions, online DDL, secondary indexes, TTL, follower reads, Resource Control, and BR.
+extenddb (ExtendDB) is a standalone, stateless Rust application that provides a DynamoDB-compatible API backed by TiDB. Any AWS SDK client (Java, Python, Go, Node.js, Rust, .NET, etc.) connects directly with zero code changes. The product uses TiDB-native transactions, online DDL, secondary indexes, TTL, follower reads, Resource Control, and BR.
 
 ### 1.1 Goals
 
 - **Full DynamoDB API compatibility** — byte-for-byte compatible wire protocol, error responses, and SDK behavior
 - **TiDB-first storage** — use TiDB native capabilities instead of frontend coordination whenever TiDB provides the distributed primitive
-- **Pluggable storage** — clean trait-based abstraction with TiDB as the default backend and PostgreSQL as an explicit alternate backend
+- **Clean storage boundary** — keep database driver details behind storage traits while shipping one TiDB implementation
 - **Built-in authentication** — local SigV4 and IAM-style authorization, with provider traits available for future auth integrations
 - **Standalone & stateless** — single async Rust binary, no embedded database, horizontally scalable
 - **Production-ready** — TLS, observability, graceful shutdown, configurable limits, VM and Kubernetes deployment
@@ -390,7 +390,7 @@ All limits must be enforced by default with DynamoDB-compatible values. All limi
 - REQ-CAP-002: Calculate Read Capacity Units: 1 RCU = one strongly consistent read up to 4 KB; 0.5 RCU for eventually consistent; 2 RCU for transactional
 - REQ-CAP-003: Calculate Write Capacity Units: 1 WCU = one write up to 1 KB; 2 WCU for transactional
 - REQ-CAP-004: Calculate per-partition throughput usage (default DynamoDB reference: 3,000 RCU/s, 1,000 WCU/s) and enforce it through the selected backend's capacity-control model
-- REQ-CAP-005: Enforce per-table provisioned throughput limits for PROVISIONED billing mode when the selected backend exposes a distributed capacity-control mechanism; PostgreSQL's frontend token bucket is single-frontend only, while TiDB uses native Resource Control/resource groups
+- REQ-CAP-005: Enforce per-table provisioned throughput limits for PROVISIONED billing mode through TiDB native Resource Control/resource groups when configured
 - REQ-CAP-006: Return `ConsumedCapacity` in responses when `ReturnConsumedCapacity` is TOTAL or INDEXES
 - REQ-CAP-007: Return per-table and per-index capacity breakdown when `ReturnConsumedCapacity` is INDEXES
 - REQ-CAP-008: Return `ProvisionedThroughputExceededException` when throughput limits are exceeded
@@ -423,18 +423,18 @@ The catalog database stores extenddb metadata: table definitions, indexes, tags,
 - REQ-CAT-013: `extenddb verify` — subcommand that validates a deployment: connects to catalog, checks version, enumerates all tables and indexes in catalog, connects to data database, verifies corresponding storage structures exist. Reports healthy/missing/inconsistent. Documented in `docs/`
 - REQ-CAT-014: `extenddb migrate` — subcommand that applies schema migrations to an existing catalog: reads current version, determines required migrations, shows plan, requires `--yes` to confirm, runs migrations, updates catalog version. Documented in `docs/`
 
-## 8. Storage Backend Requirements
+## 8. Storage Requirements
 
-### 8.1 Pluggable Storage Trait
+### 8.1 Storage Trait Boundary
 
 - REQ-STOR-001: All data access must go through a `StorageEngine` trait (async, `Send + Sync`)
 - REQ-STOR-002: The trait must cover: table CRUD, item CRUD, query/scan, batch operations, transaction operations, metadata, stream events, import/export job tracking
 - REQ-STOR-003: The trait must support transactions with serializable isolation for TransactWriteItems/TransactGetItems
 - REQ-STOR-004: The trait must not leak backend-specific types — all inputs and outputs use core DynamoDB types
-- REQ-STOR-005: Adding a new backend must not require changes to any existing crate
-- REQ-STOR-006: Read methods must receive the DynamoDB `ConsistentRead` flag so each backend can map strong and default reads to its native consistency paths without leaking topology into the engine layer
+- REQ-STOR-005: The TiDB implementation must remain isolated from engine and server crates
+- REQ-STOR-006: Read methods must receive the DynamoDB `ConsistentRead` flag so TiDB can map strong and default reads to native consistency paths without leaking topology into the engine layer
 
-### 8.2 TiDB Backend (Default Implementation)
+### 8.2 TiDB Backend
 
 - REQ-TIDB-001: Use TiDB's MySQL-compatible SQL endpoint through the sqlx MySQL driver
 - REQ-TIDB-002: Use TiDB transactions for global consistency across base rows, secondary indexes, streams, and catalog updates
@@ -448,17 +448,6 @@ The catalog database stores extenddb metadata: table definitions, indexes, tags,
 - REQ-TIDB-010: Run `ExportTableToPointInTime` through TiDB native `AS OF TIMESTAMP` snapshot reads; do not emulate point-in-time export with engine-level paginated scans
 - REQ-TIDB-011: Use TiDB Resource Control/resource groups for distributed capacity governance; do not use per-frontend token buckets for TiDB
 - REQ-TIDB-012: Keep catalog and data databases in the same TiDB cluster and validate that topology at startup
-
-### 8.3 PostgreSQL Backend (Explicit Alternate)
-
-- REQ-PG-001: Use async PostgreSQL driver (sqlx with tokio runtime)
-- REQ-PG-002: Connection pooling with configurable pool size
-- REQ-PG-003: Each DynamoDB table maps to PostgreSQL data structures owned by the PostgreSQL backend
-- REQ-PG-004: PostgreSQL-specific GSI and TTL machinery must remain isolated in `storage-postgres`
-- REQ-PG-005: Use parameterized queries for all read operations to prevent SQL injection
-- REQ-PG-006: Schema migrations managed via embedded migration files
-- REQ-PG-007: Support PostgreSQL 14+ only for explicitly selected PostgreSQL deployments
-- REQ-PG-008: Honor the storage trait read-consistency contract. The current PostgreSQL backend uses its configured primary data pool for both strong and default reads until a PostgreSQL topology configuration is implemented.
 
 ## 9. Expression Engine Requirements
 

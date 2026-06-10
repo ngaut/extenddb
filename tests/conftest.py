@@ -49,11 +49,11 @@ def _storage_backend_from_config(config_path: str) -> str:
                         )
     except OSError:
         pass
-    return "postgres"
+    return "tidb"
 
 
 def extenddb_storage_backend() -> str:
-    """Return the active test backend: real-dynamodb, postgres, or tidb."""
+    """Return the active test backend: real-dynamodb or tidb."""
     if not os.environ.get("EXTENDDB_TEST_ENDPOINT", "").strip():
         return "real-dynamodb"
 

@@ -16,7 +16,6 @@ Determine what the user needs and load the appropriate reference domain:
 |---|---|---|
 | Install, build, init, serve, first IAM user | **setup** | Start at state detection below |
 | TiDB not ready, MySQL client cannot connect to port 4000 | **tidb** | `references/tidb/01-readiness-checks.md` |
-| Explicit PostgreSQL backend issue | **postgres** | `references/postgres/01-readiness-checks.md` |
 | Configure AWS CLI or SDK, first CRUD round trip | **first-request** | `references/first-request/01-aws-cli-config.md` |
 | Run sample_app.py or stream_consumer.py | **samples** | `references/samples/01-venv-setup.md` |
 | Error message, stack trace, unexpected behavior | **troubleshooting** | `references/troubleshooting/01-symptom-index.md` |
@@ -61,16 +60,6 @@ Load when the default TiDB backend cannot be reached or the MySQL/TiDB client is
 
 Return to the setup domain (init stage) when TiDB is confirmed ready.
 
-## Postgres domain
-
-Load only when the user explicitly selects the PostgreSQL backend or reports a Postgres connectivity issue.
-
-- `references/postgres/01-readiness-checks.md`: pg_isready, pg_ctl status, socket vs TCP checks
-- `references/postgres/02-from-scratch.md`: full install from PGDG or Homebrew (only when no Postgres exists)
-- `references/postgres/03-connection-strings.md`: connection string format, common variants
-
-Return to the setup domain (init stage) when Postgres is confirmed ready.
-
 ## First-request domain
 
 Load after the first IAM access key is created, or when the user asks about AWS CLI/SDK configuration.
@@ -108,7 +97,7 @@ Load when the user reports an error or unexpected behavior.
 ### Lookup procedure
 
 1. Grep `references/troubleshooting/01-symptom-index.md` for the user's error text.
-2. The index points to one of six category files (`02-postgres-symptoms.md` through `07-runtime-symptoms.md`).
+2. The index points to one of the troubleshooting category files.
 3. Load the category file and present the verbatim Cause and Fix to the user.
 
 ### No speculation
@@ -141,10 +130,6 @@ This skill presents commands but does not execute state-changing operations (`ex
 | `references/setup/07-platform-commands.md` | Linux and macOS command table |
 | **TiDB** | |
 | `references/tidb/01-readiness-checks.md` | mysql client, TiDB SQL endpoint, TiUP playground |
-| **Postgres** | |
-| `references/postgres/01-readiness-checks.md` | pg_isready, pg_ctl status, socket/TCP |
-| `references/postgres/02-from-scratch.md` | PGDG and Homebrew install paths |
-| `references/postgres/03-connection-strings.md` | Connection string format |
 | **First Request** | |
 | `references/first-request/01-aws-cli-config.md` | Env vars, AWS profile, per-command flags |
 | `references/first-request/02-first-crud.md` | create-table, put-item, get-item |
@@ -155,7 +140,6 @@ This skill presents commands but does not execute state-changing operations (`ex
 | `references/samples/03-stream-consumer.md` | Streams demo, two-client pattern |
 | **Troubleshooting** | |
 | `references/troubleshooting/01-symptom-index.md` | 16-symptom keyword-to-category lookup |
-| `references/troubleshooting/02-postgres-symptoms.md` | Connection refused, password auth, migration |
 | `references/troubleshooting/03-catalog-symptoms.md` | Version mismatch, not initialized, already exists |
 | `references/troubleshooting/04-startup-symptoms.md` | Address in use, TLS, permissions, daemonize |
 | `references/troubleshooting/05-feature-gate-symptoms.md` | Import/export disabled |

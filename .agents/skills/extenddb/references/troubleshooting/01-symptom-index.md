@@ -2,54 +2,30 @@
 
 ## 1. Purpose
 
-This index maps each of the 16 known extenddb symptoms to the category file that holds the verbatim Cause and Fix from `docs/troubleshooting.md`. To use it, grep this file for the user's error text, follow the link to the category file, and present the entry to the user. The skill never executes a remediation command on the user's behalf. Requirement 14.4 applies to every entry.
+This index maps each known extenddb symptom to the category file that holds the verbatim Cause and Fix from `docs/troubleshooting.md`. To use it, grep this file for the user's error text, follow the link to the category file, and present the entry to the user. The skill never executes a remediation command on the user's behalf. Requirement 14.4 applies to every entry.
 
 ## 2. Symptom table
 
 | # | Symptom keyword / error text | Category file | Source section in `docs/troubleshooting.md` |
 |---|---|---|---|
-| 1 | Connection refused | `02-postgres-symptoms.md#connection-refused` | `error connecting to server: Connection refused` |
-| 2 | password authentication failed for user "extenddb" | `02-postgres-symptoms.md#password-authentication-failed` | `password authentication failed for user "extenddb"` |
-| 3 | migration failed | `02-postgres-symptoms.md#migration-failed` | `migration failed: ...` |
-| 4 | Catalog version mismatch | `03-catalog-symptoms.md#catalog-version-mismatch` | `Catalog version mismatch: expected X, found Y. Run 'extenddb migrate' to update.` |
-| 5 | Catalog not initialized | `03-catalog-symptoms.md#catalog-not-initialized` | `Catalog not initialized. Run 'extenddb init' to set up the catalog.` |
-| 6 | Database already exists | `03-catalog-symptoms.md#database-already-exists` | `Database '<name>' already exists. Run 'extenddb destroy --config <config>' first, then re-run 'extenddb init'.` |
-| 7 | Address already in use | `04-startup-symptoms.md#address-already-in-use` | `Failed to bind <addr>: Address already in use` |
-| 8 | Failed to load TLS certificates | `04-startup-symptoms.md#failed-to-load-tls-certificates` | `Failed to load TLS certificates: <error>` |
-| 9 | Config file permissions too open | `04-startup-symptoms.md#config-file-permissions` | `Config file <path> has permissions <mode>, which is too open.` |
-| 10 | Import is disabled | `05-feature-gate-symptoms.md#import-disabled` | `Import is disabled. Configure [import] paths in extenddb.toml to enable.` |
-| 11 | Export is disabled | `05-feature-gate-symptoms.md#export-disabled` | `Export is disabled. Configure [export] paths in extenddb.toml to enable.` |
-| 12 | Failed to daemonize | `04-startup-symptoms.md#failed-to-daemonize` | `Failed to daemonize: <error>` |
-| 13 | InvalidSignatureException | `06-auth-symptoms.md#invalidsignatureexception` | `InvalidSignatureException: The request signature we calculated does not match the signature you provided` |
-| 14 | UnrecognizedClientException | `06-auth-symptoms.md#unrecognizedclientexception` | `UnrecognizedClientException: The security token included in the request is invalid` |
-| 15 | AccessDeniedException | `06-auth-symptoms.md#accessdeniedexception` | `AccessDeniedException: User: <ARN> is not authorized to perform: <action>` |
-| 16 | Connection pool exhausted / HTTP 503 under load | `07-runtime-symptoms.md#connection-pool-exhausted` | `HTTP 503 on all requests under heavy load` |
+| 1 | Catalog version mismatch | `03-catalog-symptoms.md#catalog-version-mismatch` | `Catalog version mismatch: expected X, found Y. Run 'extenddb migrate' to update.` |
+| 2 | Catalog not initialized | `03-catalog-symptoms.md#catalog-not-initialized` | `Catalog not initialized. Run 'extenddb init' to set up the catalog.` |
+| 3 | Database already exists | `03-catalog-symptoms.md#database-already-exists` | `Database '<name>' already exists. Run 'extenddb destroy --config <config>' first, then re-run 'extenddb init'.` |
+| 4 | Address already in use | `04-startup-symptoms.md#address-already-in-use` | `Failed to bind <addr>: Address already in use` |
+| 5 | Failed to load TLS certificates | `04-startup-symptoms.md#failed-to-load-tls-certificates` | `Failed to load TLS certificates: <error>` |
+| 6 | Config file permissions too open | `04-startup-symptoms.md#config-file-permissions` | `Config file <path> has permissions <mode>, which is too open.` |
+| 7 | Import is disabled | `05-feature-gate-symptoms.md#import-disabled` | `Import is disabled. Configure [import] paths in extenddb.toml to enable.` |
+| 8 | Export is disabled | `05-feature-gate-symptoms.md#export-disabled` | `Export is disabled. Configure [export] paths in extenddb.toml to enable.` |
+| 9 | Failed to daemonize | `04-startup-symptoms.md#failed-to-daemonize` | `Failed to daemonize: <error>` |
+| 10 | InvalidSignatureException | `06-auth-symptoms.md#invalidsignatureexception` | `InvalidSignatureException: The request signature we calculated does not match the signature you provided` |
+| 11 | UnrecognizedClientException | `06-auth-symptoms.md#unrecognizedclientexception` | `UnrecognizedClientException: The security token included in the request is invalid` |
+| 12 | AccessDeniedException | `06-auth-symptoms.md#accessdeniedexception` | `AccessDeniedException: User: <ARN> is not authorized to perform: <action>` |
+| 13 | Connection pool exhausted / HTTP 503 under load | `07-runtime-symptoms.md#connection-pool-exhausted` | `HTTP 503 on all requests under heavy load` |
 
 
 ## 3. Per-entry summaries
 
 The cause and fix summaries below are paraphrased for quick scanning. The category file holds the verbatim text from `docs/troubleshooting.md`.
-
-### Connection refused
-
-**Error text:** `error connecting to server: Connection refused`
-**Cause summary:** PostgreSQL is not running or not listening on the configured host and port.
-**Fix summary:** Check `pg_ctl status` and start Postgres if needed.
-**Full entry:** `references/02-postgres-symptoms.md#connection-refused`
-
-### password authentication failed for user "extenddb"
-
-**Error text:** `password authentication failed for user "extenddb"`
-**Cause summary:** The PostgreSQL `extenddb` user does not exist or the password does not match.
-**Fix summary:** Create the `extenddb` user and database with the password extenddb expects, per `docs/local-postgres-setup.md`.
-**Full entry:** `references/02-postgres-symptoms.md#password-authentication-failed`
-
-### migration failed
-
-**Error text:** `migration failed: ...`
-**Cause summary:** The database exists but the migration SQL failed because of permissions or schema conflicts.
-**Fix summary:** Check `~/pgdata/server.log` and confirm the `extenddb` user has CREATE TABLE on the `extenddb` database.
-**Full entry:** `references/02-postgres-symptoms.md#migration-failed`
 
 ### Catalog version mismatch
 
@@ -61,7 +37,7 @@ The cause and fix summaries below are paraphrased for quick scanning. The catego
 ### Catalog not initialized
 
 **Error text:** `Catalog not initialized. Run 'extenddb init' to set up the catalog.`
-**Cause summary:** The server connected to Postgres but the catalog tables do not exist yet.
+**Cause summary:** The server connected to TiDB but the catalog tables do not exist yet.
 **Fix summary:** Run `extenddb init` to create the catalog schema and data database.
 **Full entry:** `references/03-catalog-symptoms.md#catalog-not-initialized`
 
@@ -139,7 +115,7 @@ The cause and fix summaries below are paraphrased for quick scanning. The catego
 
 **Error text:** `HTTP 503 on all requests under heavy load`
 **Cause summary:** The active storage backend connection pool is exhausted and new requests cannot acquire a connection within the timeout.
-**Fix summary:** For TiDB, raise `[storage.tidb] pool_size` and `catalog_pool_size`, then inspect TiDB sessions, slow queries, DDL jobs, and Resource Control. PostgreSQL alternate deployments should raise `[storage.postgres] pool_size` and inspect `pg_stat_activity`.
+**Fix summary:** Raise `[storage.tidb] pool_size` and `catalog_pool_size`, then inspect TiDB sessions, slow queries, DDL jobs, and Resource Control.
 **Full entry:** `references/07-runtime-symptoms.md#connection-pool-exhausted`
 
 ## 4. Unknown-symptom fallback

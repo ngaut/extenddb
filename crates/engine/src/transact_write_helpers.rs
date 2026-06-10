@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{ExpressionMaps, PathElement, UpdateAction};
+use extenddb_core::expression::{ExpressionKind, ExpressionMaps, PathElement, UpdateAction};
 use extenddb_core::types::{
     ReturnItemCollectionMetrics, ReturnValuesOnConditionCheckFailure, TableKeyInfo,
     TransactWriteItem, attribute_value_size, extract_key, item_size_bytes,
@@ -276,7 +276,7 @@ pub(crate) fn parse_optional_condition(
             let tokens = crate::expression_helpers::tokenize_typed_expression(
                 s,
                 limits,
-                "ConditionExpression",
+                ExpressionKind::Condition,
             )?;
             let ast = extenddb_core::expression::parse_condition_with_depth_limit(
                 &tokens,

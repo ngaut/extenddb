@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use extenddb_core::error::DynamoDbError;
 use extenddb_core::expression::{
-    Expr, ExpressionMaps, Token, parse_condition_with_depth_limit, tokenize_for_with_limits,
-    validate_no_reserved_words,
+    Expr, ExpressionKind, ExpressionMaps, PathElement, Token, parse_condition_with_depth_limit,
+    parse_projection, tokenize_for, tokenize_for_with_limits, validate_no_reserved_words,
 };
 use extenddb_core::limits::LimitsConfig;
 use extenddb_core::types::{
@@ -21,13 +21,13 @@ use crate::expected::desugar_expected;
 pub fn tokenize_typed_expression(
     input: &str,
     limits: &LimitsConfig,
-    expr_type: &str,
+    kind: ExpressionKind,
 ) -> Result<Vec<Token>, DynamoDbError> {
     let tokens = tokenize_for_with_limits(
         input,
         limits.max_expression_tokens,
         limits.max_expression_bytes,
-        expr_type,
+        kind,
     )?;
     if limits.enforce_reserved_keywords {
         validate_no_reserved_words(&tokens)?;
@@ -131,7 +131,7 @@ pub fn parse_optional_condition(
 ) -> Result<Option<Expr>, DynamoDbError> {
     match expr {
         Some(s) if !s.is_empty() => {
-            let tokens = tokenize_typed_expression(s, limits, "ConditionExpression")?;
+            let tokens = tokenize_typed_expression(s, limits, ExpressionKind::Condition)?;
             let ast = parse_condition_with_depth_limit(&tokens, limits.max_expression_depth)?;
             Ok(Some(ast))
         }
@@ -152,7 +152,7 @@ pub fn parse_optional_filter(
     limits: &LimitsConfig,
 ) -> Result<Option<Expr>, DynamoDbError> {
     parse_optional_condition(expr, limits)
-        .map_err(|e| prefix_expression_error(e, "FilterExpression"))
+        .map_err(|e| prefix_expression_error(e, ExpressionKind::Filter))
 }
 
 /// Resolve a condition from either `ConditionExpression` or legacy `Expected`.
@@ -213,21 +213,48 @@ pub fn resolve_condition(
     Ok((condition, maps))
 }
 
+/// Tokenize, reserved-word check, and parse a `ProjectionExpression`.
+///
+/// Errors carry the `ProjectionExpression` prefix, matching Amazon DynamoDB.
+///
+/// # Errors
+///
+/// Returns `DynamoDbError::ValidationException` for syntax or reserved-word errors.
+pub fn parse_projection_expr(
+    proj_str: &str,
+    limits: &LimitsConfig,
+) -> Result<Vec<Vec<PathElement>>, DynamoDbError> {
+    let result = tokenize_for(
+        proj_str,
+        limits.max_expression_tokens,
+        ExpressionKind::Projection,
+    )
+    .and_then(|tokens| {
+        if limits.enforce_reserved_keywords {
+            validate_no_reserved_words(&tokens)?;
+        }
+        parse_projection(&tokens)
+    });
+    result.map_err(|e| prefix_expression_error(e, ExpressionKind::Projection))
+}
+
 /// Prefix an expression error with the expression type, matching DynamoDB's format.
 ///
 /// `FilterExpression` shares the condition parser, so its errors arrive labelled
 /// `ConditionExpression`; those are relabelled to `expr_type`. Errors already
 /// labelled with another expression type, or non-expression validation errors,
 /// are returned unchanged.
-pub fn prefix_expression_error(err: DynamoDbError, expr_type: &str) -> DynamoDbError {
+pub fn prefix_expression_error(err: DynamoDbError, kind: ExpressionKind) -> DynamoDbError {
     match err {
         DynamoDbError::ValidationException(msg) => {
             if let Some(rest) = msg.strip_prefix("Invalid ConditionExpression:") {
-                DynamoDbError::ValidationException(format!("Invalid {expr_type}:{rest}"))
+                DynamoDbError::ValidationException(format!("Invalid {kind}:{rest}"))
+            } else if let Some(rest) = msg.strip_prefix("Invalid expression:") {
+                DynamoDbError::ValidationException(format!("Invalid {kind}:{rest}"))
             } else if msg.starts_with("Invalid ") || msg.starts_with("1 validation") {
                 DynamoDbError::ValidationException(msg)
             } else {
-                DynamoDbError::ValidationException(format!("Invalid {expr_type}: {msg}"))
+                DynamoDbError::ValidationException(format!("Invalid {kind}: {msg}"))
             }
         }
         other => other,
@@ -339,9 +366,12 @@ mod tests {
             max_expression_bytes: 8,
             ..Default::default()
         };
-        let err =
-            tokenize_typed_expression("very_long_attribute_name", &limits, "ProjectionExpression")
-                .expect_err("oversized typed expression must fail");
+        let err = tokenize_typed_expression(
+            "very_long_attribute_name",
+            &limits,
+            ExpressionKind::Projection,
+        )
+        .expect_err("oversized typed expression must fail");
 
         assert!(
             matches!(&err, DynamoDbError::ValidationException(msg)

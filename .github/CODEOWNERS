@@ -16,7 +16,6 @@ crates/core/                   @amrith @c33howard @jcshepherd @pdf-amzn @LeeroyH
 
 # Storage abstraction — breaking changes ripple to every backend.
 crates/storage/                @amrith @c33howard @jcshepherd @pdf-amzn @LeeroyHannigan @yesyayen
-crates/storage-postgres/       @amrith @c33howard @jcshepherd @pdf-amzn @LeeroyHannigan @yesyayen
 crates/engine/                 @amrith @c33howard @jcshepherd @pdf-amzn @LeeroyHannigan @yesyayen
 
 # Auth & SigV4 — security-sensitive.

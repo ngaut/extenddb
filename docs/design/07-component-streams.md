@@ -9,9 +9,8 @@
 DynamoDB Streams provides change data capture for table writes. When streams
 are enabled, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, and
 `TransactWriteItems` generate stream records with keys and the configured
-old/new image shape. Backend-owned TTL deletes are backend-specific:
-PostgreSQL's TTL worker emits service REMOVE stream records, while TiDB delegates
-item expiry to native TTL and does not synthesize TTL service records.
+old/new image shape. TTL deletes are delegated to TiDB native TTL, so ExtendDB
+does not synthesize TTL service stream records.
 
 ExtendDB serves DynamoDB and DynamoDB Streams on the same HTTPS endpoint. The
 wire target prefix distinguishes operations:
@@ -31,8 +30,6 @@ Streams are backend-owned storage state, not frontend-local state.
   mutation when the backend can do so.
 - TiDB stages native stream records inside write transactions and finalizes
   them through backend-native append tables and stream generations.
-- PostgreSQL stores stream records in the data database with fixed shards and
-  periodic retention cleanup.
 - Stream metadata is tied to table metadata through stream labels, so disabled
   stream generations remain addressable during their retention window.
 
@@ -64,10 +61,9 @@ iterator.
 
 ## 4. Retention And Lifecycle
 
-DynamoDB-compatible stream retention is 24 hours by default. PostgreSQL prunes
-old stream rows with a worker. TiDB uses native generation metadata and backend
-cleanup paths so disabled generations and their records age out without
-frontend replay logic.
+DynamoDB-compatible stream retention is 24 hours by default. TiDB uses native
+generation metadata and backend cleanup paths so disabled generations and their
+records age out without frontend replay logic.
 
 Enabling or disabling streams updates table metadata and stream-generation
 metadata atomically with the backend's catalog path. The data plane reads the

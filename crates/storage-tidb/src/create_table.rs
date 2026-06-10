@@ -402,6 +402,7 @@ impl TidbEngine {
             deletion_protection_enabled: input.deletion_protection_enabled.unwrap_or(false),
             sse_description: None,
             table_class_summary: None,
+            on_demand_throughput: input.on_demand_throughput,
         })
     }
 }

@@ -411,7 +411,9 @@ Transactional write: ceil(item_size / 1024) * 2 WCU
 
 ### 7.3 Throughput Enforcement
 
-Throughput enforcement is a runtime concern, not pure business logic. PostgreSQL can use server-side token buckets for single-frontend fidelity tests, while TiDB uses native Resource Control/resource groups for distributed enforcement. See the server component design for the backend-aware request path.
+Throughput enforcement is a runtime concern, not pure business logic. ExtendDB
+uses TiDB native Resource Control/resource groups for distributed enforcement.
+See the server component design for the request path.
 
 `core::capacity` only contains the pure math: `calculator.rs` (item size → RCU/WCU).
 

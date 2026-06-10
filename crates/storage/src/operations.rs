@@ -111,9 +111,8 @@ pub trait OperationsEngine: Send + Sync {
 
     /// Run backend-specific catalog and physical data integrity checks.
     ///
-    /// Backends own this because physical data artifacts differ sharply:
-    /// PostgreSQL uses backend companion tables, while TiDB uses generated
-    /// columns, native secondary indexes, native TTL, and online DDL state.
+    /// TiDB owns this because physical data artifacts use generated columns,
+    /// native secondary indexes, native TTL, and online DDL state.
     fn catalog_check<'a>(
         &'a self,
         connection_config: &'a str,

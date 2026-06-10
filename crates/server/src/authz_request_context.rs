@@ -11,8 +11,9 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use extenddb_auth::policy::context::RequestParams;
 use extenddb_core::error::DynamoDbError;
 use extenddb_core::expression::{
-    Expr, ExpressionMaps, PathElement, UpdateAction, parse_condition, parse_key_condition,
-    parse_projection, parse_update_from, tokenize_for_with_limits, validate_no_reserved_words,
+    Expr, ExpressionKind, ExpressionMaps, PathElement, UpdateAction, parse_condition,
+    parse_key_condition, parse_projection, parse_update_from, tokenize_for_with_limits,
+    validate_no_reserved_words,
 };
 use extenddb_core::limits::LimitsConfig;
 use extenddb_core::types::{
@@ -1012,7 +1013,7 @@ fn extract_query_leading_keys(
         kce,
         limits.max_expression_tokens,
         limits.max_expression_bytes,
-        "KeyConditionExpression",
+        ExpressionKind::KeyCondition,
     )
     .ok()?;
     if limits.enforce_reserved_keywords && validate_no_reserved_words(&tokens).is_err() {
@@ -1323,7 +1324,7 @@ fn extract_attributes_from_parts(
         return Ok(None);
     };
     let maps = build_expression_maps(expression_attribute_names, None);
-    let tokens = tokenize_authorization_expression(proj, "ProjectionExpression", limits)?;
+    let tokens = tokenize_authorization_expression(proj, ExpressionKind::Projection, limits)?;
     let paths = parse_projection(&tokens)?;
     let mut attributes = Vec::with_capacity(paths.len());
     for path in paths {
@@ -1373,7 +1374,7 @@ fn expression_attribute_names_from_optional_condition(
         return Ok(None);
     };
     let maps = build_expression_maps(names, values);
-    let tokens = tokenize_authorization_expression(expression, "ConditionExpression", limits)?;
+    let tokens = tokenize_authorization_expression(expression, ExpressionKind::Condition, limits)?;
     let expr = parse_condition(&tokens)?;
     let mut attributes = Vec::new();
     collect_expr_attribute_names(&expr, &maps, &mut attributes)?;
@@ -1390,7 +1391,7 @@ fn update_expression_attribute_names(
         return Ok(None);
     };
     let maps = build_expression_maps(names, values);
-    let tokens = tokenize_authorization_expression(expression, "UpdateExpression", limits)?;
+    let tokens = tokenize_authorization_expression(expression, ExpressionKind::Update, limits)?;
     let actions = parse_update_from(&tokens, expression)?;
     let mut attributes = Vec::new();
     for action in actions {
@@ -1401,14 +1402,14 @@ fn update_expression_attribute_names(
 
 fn tokenize_authorization_expression(
     expression: &str,
-    expression_name: &str,
+    kind: ExpressionKind,
     limits: &LimitsConfig,
 ) -> Result<Vec<extenddb_core::expression::Token>, DynamoDbError> {
     let tokens = tokenize_for_with_limits(
         expression,
         limits.max_expression_tokens,
         limits.max_expression_bytes,
-        expression_name,
+        kind,
     )?;
     if limits.enforce_reserved_keywords {
         validate_no_reserved_words(&tokens)?;
@@ -1552,7 +1553,8 @@ mod tests {
                     .iter()
                     .map(|key| attr(&key.attribute_name))
                     .collect(),
-                key_schema,
+                key_schema: key_schema.clone(),
+                base_key_schema: key_schema,
                 secondary_index_key_schemas: Vec::new(),
                 has_lsi: false,
                 stream_specification: None,

@@ -21,7 +21,7 @@ use crate::transact_write_helpers::{
 };
 use crate::{DispatchMetrics, DispatchResult};
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::parse_update;
+use extenddb_core::expression::{ExpressionKind, parse_update};
 use extenddb_core::types::{
     TableKeyInfo, TransactWriteItem, TransactWriteItemsInput, TransactWriteItemsOutput,
 };
@@ -343,7 +343,7 @@ fn prepare_write_op(
         let update_tokens = crate::expression_helpers::tokenize_typed_expression(
             &upd.update_expression,
             &ctx.limits,
-            "UpdateExpression",
+            ExpressionKind::Update,
         )?;
         let actions = parse_update(&update_tokens)?;
         validate_no_key_updates(&actions, &key_info, &maps)?;
@@ -401,7 +401,7 @@ fn prepare_write_op(
         let tokens = crate::expression_helpers::tokenize_typed_expression(
             &cc.condition_expression,
             &ctx.limits,
-            "ConditionExpression",
+            ExpressionKind::Condition,
         )?;
         let condition = extenddb_core::expression::parse_condition_with_depth_limit(
             &tokens,

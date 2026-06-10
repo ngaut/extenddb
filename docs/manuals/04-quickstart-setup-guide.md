@@ -10,7 +10,6 @@ This section gets you from zero to a working extenddb instance as fast as possib
 
 - TiDB 8.5.4+ running locally or reachable over the network
 - Rust toolchain 1.88+
-- PostgreSQL 14+ only when explicitly building/running the PostgreSQL backend
 - AWS CLI v2
 
 ### Steps

@@ -27,14 +27,14 @@ crates/server/src/
 
 ## 3. Server Startup
 
-### 3.1 Runtime Storage Backend Selection
+### 3.1 Storage Wiring
 
 `AppState` stores the selected backend as `Arc<dyn StorageEngine>`, matching
 auth's `Arc<dyn AuthProvider>` shape:
 
 - **Storage uses object-safe dynamic dispatch.** The server and engine do not
-  carry backend generics; the binary chooses PostgreSQL, TiDB, or another
-  registered backend at startup and hands the server one trait object.
+  carry database driver types; the binary creates the TiDB backend and hands the
+  server one trait object.
 - **Storage traits use explicit `BoxFuture` signatures.** This keeps the
   traits object-safe without `#[async_trait]`. Data-plane methods bind the
   returned future lifetime to borrowed request metadata, so implementations can
@@ -581,12 +581,9 @@ impl RateLimiter {
 
 ## 11. Throughput Tracking
 
-Throughput tracking is backend-aware. The server records consumed capacity for
-all backends. PostgreSQL deployments can additionally use process-local token
-buckets for DynamoDB-like throttling in a single-frontend test environment.
-TiDB deployments disable those frontend buckets and use TiDB Resource
-Control/resource groups, because capacity enforcement must be cluster-owned when
-multiple ExtendDB frontends share one TiDB backend.
+The server records consumed capacity for DynamoDB-compatible responses. Capacity
+enforcement belongs to TiDB Resource Control/resource groups, because it must be
+cluster-owned when multiple ExtendDB frontends share one TiDB backend.
 
 ```rust
 use std::sync::Mutex;

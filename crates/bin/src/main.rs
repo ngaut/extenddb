@@ -25,9 +25,6 @@ mod serve_helpers;
 mod util;
 mod workers;
 
-#[cfg(feature = "postgres")]
-use extenddb_storage_postgres as _;
-#[cfg(feature = "tidb")]
 use extenddb_storage_tidb as _;
 
 use clap::{Parser, Subcommand};

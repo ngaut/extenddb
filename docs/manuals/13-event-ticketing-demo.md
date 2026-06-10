@@ -13,12 +13,11 @@ via DynamoDB Streams, enforce IAM policies, and verify operational metrics.
 
 ## Prerequisites
 
-Install PostgreSQL and the Rust toolchain if you haven't already:
+Install TiDB client tooling and the Rust toolchain if you haven't already:
 
 ```bash
-# PostgreSQL
-brew install postgresql@16
-brew services start postgresql@16
+# TiDB client
+brew install mysql-client
 
 # Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -63,7 +62,7 @@ serves them when `docs_dir` is configured.
 
 This creates:
 - `extenddb.toml` with TLS certificates, database connection, and `docs_dir`
-- A PostgreSQL catalog database
+- TiDB catalog and data databases
 - An admin user (save the credentials printed to stdout)
 
 Record the admin password:

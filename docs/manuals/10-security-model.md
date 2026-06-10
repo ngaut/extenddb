@@ -178,13 +178,11 @@ The management web console (`/console/*`) implements:
 - **HSTS**: Sent automatically (TLS is always enabled)
 - **Login rate limiting**: Failed login attempts are tracked per user. Excessive failures trigger account lockout.
 
-## Provisioned Throughput Throttling
+## Provisioned Throughput Governance
 
-extenddb includes a token bucket rate limiter for PostgreSQL-backed provisioned throughput experiments. When `server.throttling_enabled = true` in `extenddb.toml`, read and write requests are throttled against the table's provisioned RCU/WCU limits. Requests that exceed the limit receive `ProvisionedThroughputExceededException` (HTTP 400), matching real DynamoDB behavior.
-
-Token buckets are purely in-memory operational state — not cached database state. They are recreated on server restart.
-
-TiDB-backed deployments do not use these process-local token buckets. A multi-frontend TiDB deployment needs one cluster-owned quota and scheduler, so capacity governance belongs in TiDB Resource Control/resource groups.
+ExtendDB does not use process-local token buckets for provisioned throughput.
+A multi-frontend deployment needs one cluster-owned quota and scheduler, so
+capacity governance belongs in TiDB Resource Control/resource groups.
 
 ## Input Validation
 
@@ -243,14 +241,8 @@ Import/export file paths are validated:
 
 ### Backup and Recovery
 
-Use the configured storage backend's native backup and recovery tools.
-
-For PostgreSQL:
-
-```bash
-pg_dump extenddb_catalog > catalog_backup.sql
-pg_dump extenddb_catalog_data > data_backup.sql
-```
+Use TiDB native backup and recovery tools. ExtendDB's DynamoDB-compatible backup
+APIs delegate physical backup data to TiDB BR.
 
 Encryption keys are stored in the catalog database. A catalog backup includes the encryption key needed to decrypt access key secrets.
 

@@ -7,7 +7,7 @@ Thank you for your interest in contributing to ExtendDB!
 ### Prerequisites
 
 - Rust 1.88+ (stable)
-- PostgreSQL 14+
+- TiDB 8.5.4+
 - Python 3.10+ (for integration tests)
 
 ### Prepare

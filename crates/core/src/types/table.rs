@@ -122,6 +122,17 @@ pub struct SseDescription {
     pub status: String,
     #[serde(rename = "SSEType", skip_serializing_if = "Option::is_none")]
     pub sse_type: Option<SseType>,
+    #[serde(rename = "KMSMasterKeyArn", skip_serializing_if = "Option::is_none")]
+    pub kms_master_key_arn: Option<String>,
+}
+
+/// On-demand throughput settings for a table or index.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OnDemandThroughput {
+    #[serde(rename = "MaxReadRequestUnits")]
+    pub max_read_request_units: Option<i64>,
+    #[serde(rename = "MaxWriteRequestUnits")]
+    pub max_write_request_units: Option<i64>,
 }
 
 /// Summary of the table's billing mode and last update timestamp.
@@ -264,6 +275,8 @@ pub struct TableDescription {
     pub sse_description: Option<SseDescription>,
     #[serde(rename = "TableClassSummary", skip_serializing_if = "Option::is_none")]
     pub table_class_summary: Option<serde_json::Value>,
+    #[serde(rename = "OnDemandThroughput", skip_serializing_if = "Option::is_none")]
+    pub on_demand_throughput: Option<OnDemandThroughput>,
 }
 
 /// `CreateTable` request body.
@@ -293,6 +306,8 @@ pub struct CreateTableInput {
     pub deletion_protection_enabled: Option<bool>,
     #[serde(rename = "TableClass")]
     pub table_class: Option<String>,
+    #[serde(rename = "OnDemandThroughput")]
+    pub on_demand_throughput: Option<OnDemandThroughput>,
 }
 
 /// `CreateTable` response body.
@@ -416,6 +431,10 @@ pub struct UpdateTableInput {
     pub attribute_definitions: Option<Vec<AttributeDefinition>>,
     #[serde(rename = "StreamSpecification")]
     pub stream_specification: Option<StreamSpecification>,
+    #[serde(rename = "TableClass")]
+    pub table_class: Option<String>,
+    #[serde(rename = "OnDemandThroughput")]
+    pub on_demand_throughput: Option<OnDemandThroughput>,
 }
 
 /// `UpdateTable` response body.
@@ -553,7 +572,7 @@ pub struct DescribeLimitsOutput {
 
 #[cfg(test)]
 mod tests {
-    use super::UpdateTableInput;
+    use super::*;
 
     #[test]
     fn update_table_deserializes_gsi_throughput_update() {
@@ -581,5 +600,69 @@ mod tests {
             .expect("throughput");
         assert_eq!(throughput.read_capacity_units, 7);
         assert_eq!(throughput.write_capacity_units, 9);
+    }
+
+    #[test]
+    fn on_demand_throughput_round_trips_json() {
+        let odt = OnDemandThroughput {
+            max_read_request_units: Some(100),
+            max_write_request_units: Some(50),
+        };
+        let json = serde_json::to_value(&odt).unwrap();
+        assert_eq!(json["MaxReadRequestUnits"], 100);
+        assert_eq!(json["MaxWriteRequestUnits"], 50);
+        let parsed: OnDemandThroughput = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed, odt);
+    }
+
+    #[test]
+    fn on_demand_throughput_deserializes_from_input() {
+        let input_json = r#"{"MaxReadRequestUnits": 10, "MaxWriteRequestUnits": 5}"#;
+        let odt: OnDemandThroughput = serde_json::from_str(input_json).unwrap();
+        assert_eq!(odt.max_read_request_units, Some(10));
+        assert_eq!(odt.max_write_request_units, Some(5));
+    }
+
+    #[test]
+    fn sse_description_serializes_with_kms_arn() {
+        let sse = SseDescription {
+            status: "ENABLED".to_string(),
+            sse_type: Some(SseType::KMS),
+            kms_master_key_arn: Some("arn:aws:kms:us-east-1:123456789012:key/default".to_string()),
+        };
+        let json = serde_json::to_value(&sse).unwrap();
+        assert_eq!(json["Status"], "ENABLED");
+        assert_eq!(json["SSEType"], "KMS");
+        assert_eq!(
+            json["KMSMasterKeyArn"],
+            "arn:aws:kms:us-east-1:123456789012:key/default"
+        );
+    }
+
+    #[test]
+    fn sse_description_omits_none_fields() {
+        let sse = SseDescription {
+            status: "ENABLED".to_string(),
+            sse_type: None,
+            kms_master_key_arn: None,
+        };
+        let json = serde_json::to_value(&sse).unwrap();
+        assert_eq!(json["Status"], "ENABLED");
+        assert!(json.get("SSEType").is_none());
+        assert!(json.get("KMSMasterKeyArn").is_none());
+    }
+
+    #[test]
+    fn create_table_input_deserializes_on_demand_throughput() {
+        let json = r#"{
+            "TableName": "T",
+            "KeySchema": [{"AttributeName": "pk", "KeyType": "HASH"}],
+            "AttributeDefinitions": [{"AttributeName": "pk", "AttributeType": "S"}],
+            "OnDemandThroughput": {"MaxReadRequestUnits": 10, "MaxWriteRequestUnits": 5}
+        }"#;
+        let input: CreateTableInput = serde_json::from_str(json).unwrap();
+        let odt = input.on_demand_throughput.unwrap();
+        assert_eq!(odt.max_read_request_units, Some(10));
+        assert_eq!(odt.max_write_request_units, Some(5));
     }
 }

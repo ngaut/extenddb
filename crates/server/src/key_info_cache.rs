@@ -179,4 +179,4 @@ impl extenddb_auth::TableKeyInfoCacheInvalidator for CachedTableKeyInfoStore {
 // No unit tests in this module: the SWR mechanics are covered by the
 // extenddb-cache crate's tests (same `Loader<K, V, E>` shape), and the
 // table_key_info round-trip is exercised end-to-end by tests/test_cache_coherence.py
-// against a live Postgres backend.
+// against a live backend.

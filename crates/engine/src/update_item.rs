@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{ExpressionMaps, PathElement, UpdateAction, parse_update_from};
+use extenddb_core::expression::{
+    ExpressionKind, ExpressionMaps, PathElement, UpdateAction, parse_update_from,
+};
 use extenddb_core::types::{
     AttributeValue, Item, ReturnValues, TableKeyInfo, UpdateItemInput, UpdateItemOutput,
     item_size_bytes,
@@ -109,6 +111,23 @@ pub async fn handle_update_item(
         &key_info.attribute_definitions,
     )?;
 
+    let has_update_expr = input
+        .update_expression
+        .as_ref()
+        .is_some_and(|s| !s.is_empty());
+    let has_condition = input
+        .condition_expression
+        .as_ref()
+        .is_some_and(|s| !s.is_empty());
+    let has_expr = has_update_expr || has_condition;
+    extenddb_core::expression::validate_expression_param_usage(
+        input.expression_attribute_names.as_ref(),
+        has_expr,
+        input.expression_attribute_values.as_ref(),
+        has_expr,
+        &[ExpressionKind::Update, ExpressionKind::Condition],
+    )?;
+
     let (condition, maps) = resolve_condition(
         input.condition_expression.as_deref(),
         effective_expr_names.as_ref(),
@@ -122,8 +141,10 @@ pub async fn handle_update_item(
     // Some("") still errors via typed expression tokenization.
     let actions = if let Some(update_expr) = effective_update_expr.as_deref() {
         let update_tokens =
-            tokenize_typed_expression(update_expr, &ctx.limits, "UpdateExpression")?;
-        parse_update_from(&update_tokens, update_expr)?
+            tokenize_typed_expression(update_expr, &ctx.limits, ExpressionKind::Update)?;
+        parse_update_from(&update_tokens, update_expr).map_err(|e| {
+            crate::expression_helpers::prefix_expression_error(e, ExpressionKind::Update)
+        })?
     } else {
         Vec::new()
     };

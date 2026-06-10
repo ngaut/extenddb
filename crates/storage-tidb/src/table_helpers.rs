@@ -254,6 +254,7 @@ impl TidbEngine {
             deletion_protection_enabled: row.deletion_protection_enabled,
             sse_description: None,
             table_class_summary: None,
+            on_demand_throughput: None,
         })
     }
 }

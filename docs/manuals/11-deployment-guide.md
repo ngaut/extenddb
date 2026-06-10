@@ -3,13 +3,12 @@
 > See [NOTICE](../NOTICE.md) for important disclaimers.
 
 This guide covers deploying extenddb in environments beyond local development.
-The default and recommended storage backend is TiDB. PostgreSQL remains an
-explicit alternate backend for users who build and configure it deliberately,
-but production guidance in this manual assumes TiDB.
+The supported storage backend is TiDB.
 
 ## Architecture Overview
 
-extenddb is a single Rust binary that connects to a configured storage backend. All durable state lives in that backend — extenddb itself is stateless (no in-process caching). This means:
+extenddb is a single Rust binary that connects to TiDB. All durable state lives
+in TiDB; extenddb itself is stateless aside from short-lived request state. This means:
 
 - Multiple extenddb instances can share one TiDB catalog/data topology
 - Backend-native HA, backup, and replication tools provide durability
@@ -25,7 +24,7 @@ extenddb and the storage backend on the same host. Simplest setup, suitable for 
 ┌─────────────────────────┐
 │  Host                   │
 │  ┌─────┐  ┌──────────┐ │
-│  │ extenddb│──│Storage DB │ │
+│  │ extenddb│──│  TiDB    │ │
 │  └─────┘  └──────────┘ │
 └─────────────────────────┘
 ```
@@ -92,16 +91,9 @@ Use TiDB-native HA for the cluster and BR for physical backup/restore.
 Use TiDB Resource Control/resource groups for distributed capacity governance
 across multiple extenddb frontends.
 
-### PostgreSQL Alternate Backend
-
-PostgreSQL is not the product-default deployment path. To use it, build the
-binary with `--no-default-features --features postgres`, set
-`[storage].backend = "postgres"`, and follow PostgreSQL-native HA and backup
-guidance. Do not mix TiDB and PostgreSQL frontends against one deployment.
-
 ### Containerized
 
-extenddb runs in Docker or Kubernetes. The binary has no runtime dependencies beyond libc and network access to the configured storage backend.
+extenddb runs in Docker or Kubernetes. The binary has no runtime dependencies beyond libc and network access to TiDB.
 
 Example Dockerfile:
 

@@ -386,6 +386,7 @@ fn create_table_input_from_params(tcp: &TableCreationParameters) -> CreateTableI
         tags: None,
         deletion_protection_enabled: None,
         table_class: None,
+        on_demand_throughput: None,
     }
 }
 
@@ -459,6 +460,7 @@ mod tests {
             account_id: "123456789012".to_owned(),
             table_id: "importtable".to_owned(),
             key_schema: vec![hash_key()],
+            base_key_schema: vec![hash_key()],
             attribute_definitions: vec![
                 AttributeDefinition {
                     attribute_name: "pk".to_owned(),

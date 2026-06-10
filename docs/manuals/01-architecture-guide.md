@@ -4,13 +4,13 @@
 
 ## Overview
 
-extenddb (ExtendDB) is a standalone DynamoDB-compatible API server written in Rust. It receives DynamoDB wire protocol requests over HTTP/HTTPS, authenticates and authorizes them via SigV4 and a local IAM policy engine, executes operation logic in a backend-agnostic engine, and delegates persistence to a pluggable storage backend. TiDB is the default backend; PostgreSQL remains available as an explicit alternate backend.
+extenddb (ExtendDB) is a standalone DynamoDB-compatible API server written in Rust. It receives DynamoDB wire protocol requests over HTTP/HTTPS, authenticates and authorizes them via SigV4 and a local IAM policy engine, executes operation logic in a storage-agnostic engine, and delegates persistence to TiDB.
 
 extenddb runs as a daemon process, logging to syslog. It is designed for any environment where DynamoDB semantics are needed — local development, CI pipelines, self-hosted production, multi-cloud, or air-gapped deployments. Developers and applications point their AWS SDKs at extenddb and get identical DynamoDB behavior.
 
 ## Cargo Workspace
 
-The project is structured as a Cargo workspace with 8 crates. Crate boundaries enforce dependency rules at compile time.
+The project is structured as a Cargo workspace with focused crates. Crate boundaries enforce dependency rules at compile time.
 
 ```
 extenddb/
@@ -18,7 +18,6 @@ extenddb/
 │   ├── core/              Pure sync Rust: types, expressions, validation, errors
 │   ├── engine/            Async operation handlers (PutItem, Query, etc.)
 │   ├── storage/           Storage trait definitions and backend-agnostic utilities
-│   ├── storage-postgres/  PostgreSQL backend implementation
 │   ├── storage-tidb/      TiDB backend implementation
 │   ├── auth/              AuthProvider trait, SigV4 verification, IAM policy engine
 │   ├── server/            HTTP server (axum), management API, web console
@@ -35,8 +34,7 @@ bin ──→ server ──→ engine ──→ core
  │        ├──→ auth ──→ core
  │        └──→ storage
  │
- ├──→ storage-postgres ──→ storage ──→ core
- ├──→ storage-tidb ──────→ storage ──→ core
+ ├──→ storage-tidb ──→ storage ──→ core
  └──→ core
 ```
 
@@ -86,19 +84,8 @@ Trait definitions for the storage layer. Thirteen storage traits partition backe
 - **AuthorizationStore**: Authorization policy, boundary, session, and tag metadata
 - **Bootstrapper**: Initial database setup
 
-Traits use `BoxFuture` for object safety. Backends register at compile time via the `inventory` crate and are selected at startup by name. The `RuntimeHooks` trait allows backends to spawn backend-specific workers.
-
-### storage-postgres
-
-PostgreSQL implementation of all storage traits using `sqlx`. Features:
-
-- Dual-database architecture: catalog DB (metadata) + data DB (user items)
-- Schema migrations managed by version-stamped SQL files
-- Items stored as JSONB with indexed key columns
-- GSI/LSI metadata in the catalog; physical index layout is backend-specific
-- Transactions use `SELECT FOR UPDATE` + single-transaction commits
-- Stream records stored in a dedicated table; retention is backend-owned
-- Query values are parameterized; dynamic DDL identifiers are backend-validated and quoted
+Traits use `BoxFuture` for object safety. The runtime implementation is TiDB,
+and `RuntimeHooks` allows TiDB-owned workers to start outside the server crate.
 
 ### storage-tidb
 
@@ -177,15 +164,15 @@ extenddb always runs as a daemon. There is no foreground mode.
 extenddb uses a catalog/data storage architecture:
 
 - **Catalog database** (e.g., `extenddb_catalog`): Stores table metadata, account/user/group/role/policy definitions, access keys, settings, stream metadata, and metrics. Shared across all accounts.
-- **Data database** (e.g., `extenddb_catalog_data`): Stores user items, backend-specific secondary-index state, and stream records. PostgreSQL uses companion data/index tables. TiDB stores item rows once and uses generated columns plus native secondary indexes.
+- **Data database** (e.g., `extenddb_catalog_data`): Stores user items, native secondary-index state, and stream records. TiDB stores item rows once and uses generated columns plus native secondary indexes.
 
 The backend-specific catalog version is stored in the `settings` table as `catalog_version` and checked at startup. Version mismatches prevent the server from starting until migrations are run. TiDB also records the data database connection string in the catalog, and both TiDB databases must remain in the same TiDB cluster so native timestamps, online DDL, TTL, and BR operate on one global timeline. Startup validates this with TiDB's native `information_schema.cluster_info` topology view when available; if a TiDB edition hides that view, catalog and data must use the same SQL endpoint and user.
 
-## Pluggable Architecture
+## Storage Boundary
 
 ### Storage
 
-Storage backends implement thirteen traits (see **storage** section above). The traits use `BoxFuture` for object safety. Backends register at compile time via the `inventory` crate, and the `bin` crate selects the backend by name at startup. TiDB is the default backend for standard builds; PostgreSQL is available only when the binary is explicitly built and configured for it.
+The TiDB backend implements thirteen storage traits (see **storage** section above). The traits use `BoxFuture` for object safety and keep SQL driver details out of the engine and server crates.
 
 ### Authentication
 
@@ -285,7 +272,7 @@ extenddb is a single-binary server that connects to a configured storage backend
 - **Containerized**: Docker/Kubernetes with the storage backend as a sidecar or external service
 - **Air-gapped**: No internet connectivity required; all functionality is self-contained
 
-The storage backend provides durability, replication, and physical backup capabilities. Use backend-native HA tools: PostgreSQL streaming replication/managed services for PostgreSQL, and TiDB's PD/TiKV topology plus BR for TiDB. `/health` is readiness-oriented and checks the selected backend's live pools before reporting healthy.
+TiDB provides durability, replication, and physical backup capabilities through its PD/TiKV topology and BR. `/health` is readiness-oriented and checks the live TiDB pools before reporting healthy.
 
 ---
 

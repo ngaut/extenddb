@@ -3,9 +3,8 @@
 
 //! Login rate limiting and account lockout.
 //!
-//! All state lives in the storage backend (e.g. `login_attempts` table in
-//! PostgreSQL) so multiple ExtendDB instances sharing a catalog see a consistent
-//! view. No in-process caching.
+//! All state lives in the storage backend so multiple ExtendDB instances
+//! sharing a catalog see a consistent view. No in-process caching.
 
 use extenddb_storage::management_store::RateLimitStore;
 

@@ -4,8 +4,8 @@
 //! `extenddb catalog-check` — backend-owned catalog/data integrity checks.
 //!
 //! The CLI handles config loading, server-liveness protection, and reporting.
-//! Physical integrity rules live in backend crates because PostgreSQL companion
-//! tables and TiDB native online-DDL artifacts have different invariants.
+//! Physical integrity rules live in backend crates because storage-native
+//! artifacts have backend-specific invariants.
 
 use clap::Args;
 use extenddb_storage::operations::{CatalogCheckFix, CatalogCheckIssue, CatalogCheckReport};

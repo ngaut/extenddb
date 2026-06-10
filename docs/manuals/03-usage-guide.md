@@ -108,7 +108,7 @@ aws dynamodb create-table \
     }]'
 ```
 
-Tables transition through `CREATING` → `ACTIVE` status. PostgreSQL can use the `control_plane_delay_seconds` runtime setting to simulate a delay. TiDB reconciles immediately and lets TiDB native online DDL schedule physical table and index changes. Poll with DescribeTable until `TableStatus` is `ACTIVE` before performing operations on the table.
+Tables transition through `CREATING` → `ACTIVE` status. TiDB reconciliation lets native online DDL schedule physical table and index changes. Poll with DescribeTable until `TableStatus` is `ACTIVE` before performing operations on the table.
 
 ### DeleteTable
 

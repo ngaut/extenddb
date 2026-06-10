@@ -39,6 +39,5 @@ pub async fn hash_password(password: String) -> Result<String, bcrypt::BcryptErr
         })
 }
 
-// Password verification (verify_password) has been migrated to the
-// AdminStore and ManagementStore trait implementations in storage-postgres.
+// Password verification lives behind the AdminStore and ManagementStore traits.
 // The server crate only needs hash_password for creating/updating passwords.

@@ -6,7 +6,7 @@ Accepted — 2026-04-07. Revised — 2026-04-21 to reflect the implemented desig
 
 ## Context
 
-extenddb stores DynamoDB table metadata and item data in PostgreSQL. User-supplied strings — table names, attribute names, key values, filter expressions — flow from HTTP requests through the engine layer into SQL queries. A SQL injection vulnerability here would allow arbitrary database access.
+extenddb stores DynamoDB table metadata and item data in TiDB. User-supplied strings — table names, attribute names, key values, filter expressions — flow from HTTP requests through the engine layer into SQL queries. A SQL injection vulnerability here would allow arbitrary database access.
 
 ## Decision
 
@@ -16,15 +16,15 @@ extenddb stores DynamoDB table metadata and item data in PostgreSQL. User-suppli
 
 - Table names: validated against DynamoDB's regex (`[a-zA-Z0-9_.-]+`, 3–255 chars) in `validate_table_name()`
 - Index names: validated against the same character set
-- Account IDs: validated in `PostgresEngine::validate_account_id()` — rejects `"`, `\0`, and non-ASCII
+- Account IDs: validated before storage identifier construction — rejects `"`, `\0`, and non-ASCII
 - Attribute names: validated in expression parsing
 - Key values: type-checked via `AttributeValue` deserialization
 
-**Tier 2: Parameterized queries for user values.** All user-supplied *values* (key data, item data, filter parameters) use bind parameters (`$1`, `$2`, ...) via sqlx. No user-supplied value is ever interpolated into a SQL string.
+**Tier 2: Parameterized queries for user values.** All user-supplied *values* (key data, item data, filter parameters) use bind parameters via sqlx. No user-supplied value is ever interpolated into a SQL string.
 
 ```rust
 // Correct — parameterized value
-sqlx::query("SELECT item_data FROM some_table WHERE pk = $1")
+sqlx::query("SELECT item_data FROM some_table WHERE pk = ?")
     .bind(&pk_value)
     .fetch_one(&pool)
     .await?;
@@ -32,12 +32,12 @@ sqlx::query("SELECT item_data FROM some_table WHERE pk = $1")
 
 ### SQL identifier construction (validated interpolation)
 
-Per-table data storage uses dynamically named PostgreSQL tables. Table names are constructed from validated components via `data_table_name()` and `index_table_name()` in `storage-postgres/src/data.rs`:
+Per-table data storage uses dynamically named TiDB tables. Table names are constructed from validated components through the TiDB storage naming helpers:
 
 ```rust
 // Table name built from validated account_id + table_name
 fn data_table_name(account_id: &str, table_name: &str) -> String {
-    format!("\"_ddb_{account_id}_{table_name}\"")
+    format!("`_ddb_{account_id}_{table_name}`")
 }
 ```
 
@@ -45,8 +45,8 @@ These identifiers are interpolated into SQL strings via `format!`. This is safe 
 
 1. `account_id` is validated by `validate_account_id()` — rejects `"`, `\0`, non-ASCII
 2. `table_name` is validated by `validate_table_name()` — only `[a-zA-Z0-9_.-]`
-3. The result is double-quoted, preventing interpretation as SQL keywords
-4. No character in the validated set can escape a double-quoted identifier
+3. The result is backtick-quoted, preventing interpretation as SQL keywords
+4. No character in the validated set can escape a quoted identifier
 
 This is **not** the same as raw string interpolation of user input. The validation happens at the engine layer before the storage layer ever sees the value.
 
@@ -58,7 +58,7 @@ This is **not** the same as raw string interpolation of user input. The validati
 ## Consequences
 
 - Every new SQL query that uses bind parameters for values needs no special review beyond normal correctness.
-- Any new SQL identifier interpolation must go through `data_table_name()` / `index_table_name()` or an equivalent validated path. Direct `format!` with user-supplied identifiers is a review blocker.
+- Any new SQL identifier interpolation must go through the TiDB storage naming helpers or an equivalent validated path. Direct `format!` with user-supplied identifiers is a review blocker.
 - The engine layer is the single point of input validation. Adding a new user-facing field requires adding validation before it reaches storage.
 - `validate_account_id()` is the defense-in-depth gate for account IDs used in SQL identifiers.
 

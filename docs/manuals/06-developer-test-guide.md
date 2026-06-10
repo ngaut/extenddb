@@ -13,7 +13,6 @@ extenddb/
 │   ├── engine/                Async operation handlers
 │   ├── storage/               Storage trait definitions
 │   ├── storage-tidb/          Default TiDB backend
-│   ├── storage-postgres/      Explicit PostgreSQL alternate backend
 │   ├── auth/                  Authentication and authorization
 │   ├── server/                HTTP server, management API, web console
 │   └── bin/                   CLI entry point
@@ -58,7 +57,6 @@ Both debug and release builds must pass before branch acceptance.
 - `engine` contains async operation handlers that call storage traits
 - `storage-tidb` implements the default TiDB backend with native online DDL,
   secondary indexes, TTL, follower reads, Resource Control, and BR
-- `storage-postgres` implements the explicit PostgreSQL alternate backend
 - `auth` handles authentication and authorization
 - `server` handles HTTP concerns
 - `bin` wires everything together

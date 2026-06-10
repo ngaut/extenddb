@@ -9,7 +9,7 @@ use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{ExpressionMaps, PathElement, apply_projection, parse_projection};
+use extenddb_core::expression::{ExpressionMaps, PathElement, apply_projection};
 use extenddb_core::limits::LimitsConfig;
 use extenddb_core::types::{
     ItemResponse, TableKeyInfo, TransactGetItem, TransactGetItemsInput, TransactGetItemsOutput,
@@ -20,7 +20,7 @@ use extenddb_storage::TransactGetOp;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::{build_checked_expression_maps, tokenize_typed_expression};
+use crate::expression_helpers::{build_checked_expression_maps, parse_projection_expr};
 use crate::serialize_output;
 use crate::{DispatchMetrics, DispatchResult};
 
@@ -189,22 +189,25 @@ fn build_transact_get_projection(
     tgi: &TransactGetItem,
     limits: &LimitsConfig,
 ) -> Result<TransactGetProjection, DynamoDbError> {
+    let has_projection = tgi
+        .get
+        .projection_expression
+        .as_ref()
+        .is_some_and(|s| !s.is_empty());
+    extenddb_core::expression::validate_expression_param_usage(
+        tgi.get.expression_attribute_names.as_ref(),
+        has_projection,
+        None,
+        false,
+        &[],
+    )?;
     let maps =
         build_checked_expression_maps(tgi.get.expression_attribute_names.as_ref(), None, limits)?;
     let Some(ref proj_str) = tgi.get.projection_expression else {
-        extenddb_core::expression::validate_unused_attributes(
-            &maps.names,
-            &maps.values,
-            &[],
-            &[],
-            &HashSet::new(),
-            &HashSet::new(),
-        )?;
         return Ok(None);
     };
 
-    let proj_tokens = tokenize_typed_expression(proj_str, limits, "ProjectionExpression")?;
-    let projection = parse_projection(&proj_tokens)?;
+    let projection = parse_projection_expr(proj_str, limits)?;
     let mut extra_names = HashSet::new();
     for path in &projection {
         for el in path {

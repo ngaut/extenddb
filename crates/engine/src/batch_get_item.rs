@@ -9,7 +9,7 @@ use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{ExpressionMaps, PathElement, apply_projection, parse_projection};
+use extenddb_core::expression::{ExpressionMaps, PathElement, apply_projection};
 use extenddb_core::limits::LimitsConfig;
 use extenddb_core::types::{
     BatchGetItemInput, BatchGetItemOutput, Item, KeySchemaElement, KeysAndAttributes, TableKeyInfo,
@@ -20,7 +20,7 @@ use extenddb_core::validation::validate_batch_key_only;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::build_checked_expression_maps;
+use crate::expression_helpers::{build_checked_expression_maps, parse_projection_expr};
 use crate::serialize_output;
 use crate::{DispatchMetrics, DispatchResult};
 
@@ -262,6 +262,18 @@ fn build_batch_get_projection(
         ));
     }
 
+    let has_projection_expression = ka
+        .projection_expression
+        .as_ref()
+        .is_some_and(|s| !s.is_empty());
+    extenddb_core::expression::validate_expression_param_usage(
+        ka.expression_attribute_names.as_ref(),
+        has_projection_expression,
+        None,
+        false,
+        &[],
+    )?;
+
     let (effective_proj_str, extra_proj_names) = if ka.projection_expression.is_some() {
         (ka.projection_expression.clone(), HashMap::new())
     } else if let Some(attrs) = &ka.attributes_to_get {
@@ -284,12 +296,7 @@ fn build_batch_get_projection(
         return Ok(None);
     };
 
-    let proj_tokens = crate::expression_helpers::tokenize_typed_expression(
-        &proj_str,
-        limits,
-        "ProjectionExpression",
-    )?;
-    let paths = parse_projection(&proj_tokens)?;
+    let paths = parse_projection_expr(&proj_str, limits)?;
     let maps = if extra_proj_names.is_empty() {
         build_checked_expression_maps(ka.expression_attribute_names.as_ref(), None, limits)?
     } else {
@@ -297,6 +304,27 @@ fn build_batch_get_projection(
         merged.extend(extra_proj_names);
         build_checked_expression_maps(Some(&merged), None, limits)?
     };
+
+    if has_projection_expression {
+        let mut used_names = HashSet::new();
+        for path in &paths {
+            for element in path {
+                if let PathElement::Attribute(name) = element
+                    && let Some(ref_name) = name.strip_prefix('#')
+                {
+                    used_names.insert(ref_name.to_owned());
+                }
+            }
+        }
+        extenddb_core::expression::validate_unused_attributes(
+            &maps.names,
+            &maps.values,
+            &[],
+            &[],
+            &used_names,
+            &HashSet::new(),
+        )?;
+    }
 
     Ok(Some(BatchGetProjection { paths, maps }))
 }

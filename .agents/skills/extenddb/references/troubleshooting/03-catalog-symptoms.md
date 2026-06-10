@@ -51,7 +51,7 @@ Run `extenddb init` to create the catalog schema and data database. See `docs/ge
 Database '<name>' already exists. Run 'extenddb destroy --config <config>' first, then re-run 'extenddb init'.
 ```
 
-**Cause:** `extenddb init` detected that the catalog or data database already exists in PostgreSQL. To prevent accidental data loss, `extenddb init` refuses to proceed when either database is present.
+**Cause:** `extenddb init` detected that the catalog or data database already exists in TiDB. To prevent accidental data loss, `extenddb init` refuses to proceed when either database is present.
 
 **Fix:**
 If you want to re-initialize from scratch, run `extenddb destroy --config extenddb.toml` first to drop both databases, then run `extenddb init` again. If you want to keep the existing data and just apply migrations, use `extenddb migrate` instead.

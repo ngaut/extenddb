@@ -4,7 +4,7 @@
 
 Use this reference when the default TiDB backend is not ready for `extenddb init`
 or `extenddb serve`. TiDB is the default backend for standard builds, so setup
-must verify the TiDB SQL endpoint rather than PostgreSQL readiness.
+must verify the TiDB SQL endpoint readiness.
 
 ## Client Check
 

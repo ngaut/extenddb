@@ -7,7 +7,6 @@ members = [
     "crates/cache",
     "crates/engine",
     "crates/storage",
-    "crates/storage-postgres",
     "crates/storage-tidb",
     "crates/auth",
     "crates/server",
@@ -26,7 +25,6 @@ extenddb-core = { path = "crates/core" }
 extenddb-cache = { path = "crates/cache" }
 extenddb-engine = { path = "crates/engine" }
 extenddb-storage = { path = "crates/storage" }
-extenddb-storage-postgres = { path = "crates/storage-postgres" }
 extenddb-storage-tidb = { path = "crates/storage-tidb" }
 extenddb-auth = { path = "crates/auth" }
 extenddb-server = { path = "crates/server" }
@@ -59,7 +57,7 @@ inventory = "0.3"
 moka = { version = "0.12", features = ["future"] }
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "mysql", "json", "time", "uuid", "bigdecimal"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "mysql", "json", "time", "uuid", "bigdecimal", "macros"] }
 
 # Crypto & checksums
 crc32fast = "1"

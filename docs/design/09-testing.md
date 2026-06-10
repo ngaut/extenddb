@@ -98,8 +98,7 @@ valuable through the real Rust AWS SDK than through internal unit tests.
 ### 3.5 CLI and Documentation Checks
 
 `tests/cli/` covers shell-level lifecycle and documentation consistency checks.
-CLI lifecycle tests may require backend-specific environment, such as
-`EXTENDDB_TEST_PG_CONNECTION_STRING` for PostgreSQL lifecycle coverage.
+CLI lifecycle tests run against the TiDB-backed runtime.
 
 Documentation builds are part of the test architecture because manuals and
 embedded console docs are generated artifacts. Use:

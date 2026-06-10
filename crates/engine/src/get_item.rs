@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
-use extenddb_core::expression::{apply_projection, parse_projection};
+use extenddb_core::expression::apply_projection;
 use extenddb_core::types::GetItemInput;
 use extenddb_core::types::GetItemOutput;
 use extenddb_core::types::item_size_bytes;
@@ -18,7 +18,7 @@ use extenddb_core::types::item_size_bytes;
 use crate::OperationContext;
 use crate::capacity_helpers;
 use crate::create_table::storage_err_to_dynamo;
-use crate::expression_helpers::{build_checked_expression_maps, tokenize_typed_expression};
+use crate::expression_helpers::{build_checked_expression_maps, parse_projection_expr};
 use crate::serialize_output;
 use crate::{DispatchMetrics, DispatchResult};
 
@@ -46,6 +46,19 @@ pub async fn handle_get_item(
         &ctx.limits,
         &key_info.key_schema,
         &key_info.attribute_definitions,
+    )?;
+
+    // Reject ExpressionAttributeNames supplied with no ProjectionExpression
+    // (legacy AttributesToGet does not count as an expression).
+    extenddb_core::expression::validate_expression_param_usage(
+        input.expression_attribute_names.as_ref(),
+        input
+            .projection_expression
+            .as_ref()
+            .is_some_and(|s| !s.is_empty()),
+        None,
+        true,
+        &[],
     )?;
 
     // Apply projection if requested.
@@ -92,8 +105,13 @@ pub async fn handle_get_item(
     };
 
     let projection = if let Some(ref proj_str) = effective_projection {
-        let proj_tokens = tokenize_typed_expression(proj_str, &ctx.limits, "ProjectionExpression")?;
-        let projection = parse_projection(&proj_tokens)?;
+        let projection = parse_projection_expr(proj_str, &ctx.limits)?;
+        if input.projection_expression.is_some() {
+            crate::read_helpers::validate_projection_unused_names(
+                input.expression_attribute_names.as_ref(),
+                &projection,
+            )?;
+        }
         let maps = build_checked_expression_maps(effective_proj_names.as_ref(), None, &ctx.limits)?;
         Some((projection, maps))
     } else {

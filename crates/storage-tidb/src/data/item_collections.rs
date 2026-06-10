@@ -180,6 +180,10 @@ mod tests {
                 attribute_name: "pk".to_owned(),
                 key_type: KeyType::Hash,
             }],
+            base_key_schema: vec![KeySchemaElement {
+                attribute_name: "pk".to_owned(),
+                key_type: KeyType::Hash,
+            }],
             attribute_definitions: vec![AttributeDefinition {
                 attribute_name: "pk".to_owned(),
                 attribute_type: ScalarAttributeType::S,

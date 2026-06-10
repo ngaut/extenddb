@@ -143,7 +143,7 @@ pub(crate) fn storage_err_to_dynamo(e: extenddb_storage::error::StorageError) ->
                 return crate::storage_unavailable_to_dynamo(msg, "storage internal error");
             }
             // Log the raw message for debugging but do not expose storage
-            // backend details (e.g. PostgreSQL error text) to the client.
+            // backend details (for example SQL engine error text) to the client.
             // REQ-ERR: tenet 4 — only DynamoDB-shaped errors cross the wire.
             tracing::error!(internal_error = %msg, "storage internal error");
             DynamoDbError::InternalServerError("Internal server error".to_owned())

@@ -68,7 +68,7 @@ uses storage-owned authorization aggregates and the policy evaluator.
 
 The auth crate defines `CredentialStore` for access-key lookup. The server
 implements it against the selected storage backend, which keeps the auth crate
-free of `sqlx`, TiDB, and PostgreSQL dependencies.
+free of `sqlx` and TiDB dependencies.
 
 `StoredCredential` zeroizes secret material on drop. Long-lived keys and
 temporary session keys use the same lookup interface; session credentials carry

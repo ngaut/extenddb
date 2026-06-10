@@ -200,8 +200,7 @@ pub(crate) async fn metrics_prune_worker(metrics: Arc<extenddb_core::metrics::Me
 ///
 /// Drains data points older than 60 seconds, aggregates them into 1-minute
 /// buckets, and upserts via the `MetricsStore` trait. Database retention is
-/// backend-specific: TiDB uses native TTL and Postgres runs a concrete backend
-/// pruning worker.
+/// backend-specific and implemented by the selected storage backend.
 pub(crate) async fn metrics_flush_worker(
     metrics: Arc<extenddb_core::metrics::MetricsCollector>,
     store: Arc<dyn MetricsStore>,

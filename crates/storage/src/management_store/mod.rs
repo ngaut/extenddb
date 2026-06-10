@@ -4,10 +4,9 @@
 //! Trait definitions for non-DynamoDB storage subsystems.
 //!
 //! These traits abstract the IAM management, settings, metrics, rate limiting,
-//! admin user, and authorization storage that currently uses `sqlx::PgPool`
-//! directly. A new storage backend must implement these traits alongside the
-//! existing `TableEngine`, `DataEngine`, `MetadataEngine`, and `StreamEngine`
-//! traits in `lib.rs`.
+//! admin user, and authorization storage. The TiDB backend implements these
+//! traits alongside the existing `TableEngine`, `DataEngine`,
+//! `MetadataEngine`, and `StreamEngine` traits in `lib.rs`.
 //!
 //! # Design decisions
 //!

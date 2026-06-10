@@ -73,12 +73,22 @@ struct DeleteReconcilePlan {
     table_id: String,
 }
 
-#[derive(sqlx::FromRow)]
 struct ControlPlaneTransitionRow {
     table_status: String,
     table_name: String,
     table_id: String,
     table_arn: String,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for ControlPlaneTransitionRow {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            table_status: sqlx::Row::try_get(row, "table_status")?,
+            table_name: sqlx::Row::try_get(row, "table_name")?,
+            table_id: sqlx::Row::try_get(row, "table_id")?,
+            table_arn: sqlx::Row::try_get(row, "table_arn")?,
+        })
+    }
 }
 
 #[derive(Clone)]

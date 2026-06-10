@@ -320,8 +320,7 @@ impl extenddb_storage::management_store::MetricsStore for TidbCatalogStore {
     }
 }
 
-/// Internal row type for `sqlx::FromRow` derivation.
-#[derive(sqlx::FromRow)]
+/// Internal row type for database metric rollups.
 struct DbMetricsRow {
     bucket: time::OffsetDateTime,
     metric: String,
@@ -332,6 +331,22 @@ struct DbMetricsRow {
     count: i64,
     min: f64,
     max: f64,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for DbMetricsRow {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            bucket: sqlx::Row::try_get(row, "bucket")?,
+            metric: sqlx::Row::try_get(row, "metric")?,
+            table_name: sqlx::Row::try_get(row, "table_name")?,
+            index_name: sqlx::Row::try_get(row, "index_name")?,
+            operation: sqlx::Row::try_get(row, "operation")?,
+            sum: sqlx::Row::try_get(row, "sum")?,
+            count: sqlx::Row::try_get(row, "count")?,
+            min: sqlx::Row::try_get(row, "min")?,
+            max: sqlx::Row::try_get(row, "max")?,
+        })
+    }
 }
 
 // ── RateLimitStore ─────────────────────────────────────────────────────

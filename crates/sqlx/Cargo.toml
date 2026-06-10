@@ -1,0 +1,16 @@
+# Copyright 2026 ExtendDB contributors
+# SPDX-License-Identifier: Apache-2.0
+[package]
+name = "extenddb-sqlx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "sqlx"
+path = "src/lib.rs"
+
+[dependencies]
+sqlx-core = { version = "0.8", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "json", "time", "uuid", "bigdecimal"] }
+sqlx-mysql = { version = "0.8", default-features = false, features = ["json", "time", "uuid", "bigdecimal"] }

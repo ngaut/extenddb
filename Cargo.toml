@@ -7,6 +7,7 @@ members = [
     "crates/cache",
     "crates/engine",
     "crates/storage",
+    "crates/sqlx",
     "crates/storage-tidb",
     "crates/auth",
     "crates/server",
@@ -57,7 +58,7 @@ inventory = "0.3"
 moka = { version = "0.12", features = ["future"] }
 
 # Database
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "mysql", "json", "time", "uuid", "bigdecimal", "macros"] }
+sqlx = { package = "extenddb-sqlx", path = "crates/sqlx" }
 
 # Crypto & checksums
 crc32fast = "1"

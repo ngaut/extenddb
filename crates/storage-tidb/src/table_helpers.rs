@@ -17,7 +17,6 @@ use crate::TidbEngine;
 use crate::data::physical_data_table_name;
 
 /// Row type for table metadata queries.
-#[derive(sqlx::FromRow)]
 pub(crate) struct TableRow {
     pub table_name: String,
     pub key_schema: serde_json::Value,
@@ -33,6 +32,25 @@ pub(crate) struct TableRow {
     pub stream_label: Option<String>,
 }
 
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for TableRow {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            table_name: sqlx::Row::try_get(row, "table_name")?,
+            key_schema: sqlx::Row::try_get(row, "key_schema")?,
+            attribute_definitions: sqlx::Row::try_get(row, "attribute_definitions")?,
+            billing_mode: sqlx::Row::try_get(row, "billing_mode")?,
+            provisioned_throughput: sqlx::Row::try_get(row, "provisioned_throughput")?,
+            stream_specification: sqlx::Row::try_get(row, "stream_specification")?,
+            table_status: sqlx::Row::try_get(row, "table_status")?,
+            creation_epoch: sqlx::Row::try_get(row, "creation_epoch")?,
+            table_arn: sqlx::Row::try_get(row, "table_arn")?,
+            table_id: sqlx::Row::try_get(row, "table_id")?,
+            deletion_protection_enabled: sqlx::Row::try_get(row, "deletion_protection_enabled")?,
+            stream_label: sqlx::Row::try_get(row, "stream_label")?,
+        })
+    }
+}
+
 /// TiDB table statistics used for DynamoDB table descriptions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TableStats {
@@ -41,7 +59,6 @@ pub(crate) struct TableStats {
 }
 
 /// Row type for index metadata queries.
-#[derive(sqlx::FromRow)]
 pub(crate) struct IndexRow {
     pub index_name: String,
     pub index_type: String,
@@ -49,6 +66,19 @@ pub(crate) struct IndexRow {
     pub projection: serde_json::Value,
     pub index_status: String,
     pub provisioned_throughput: Option<serde_json::Value>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for IndexRow {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            index_name: sqlx::Row::try_get(row, "index_name")?,
+            index_type: sqlx::Row::try_get(row, "index_type")?,
+            key_schema: sqlx::Row::try_get(row, "key_schema")?,
+            projection: sqlx::Row::try_get(row, "projection")?,
+            index_status: sqlx::Row::try_get(row, "index_status")?,
+            provisioned_throughput: sqlx::Row::try_get(row, "provisioned_throughput")?,
+        })
+    }
 }
 
 fn current_table_stats_sql() -> &'static str {

@@ -46,7 +46,6 @@ fn timestamp_to_epoch(ts: time::OffsetDateTime) -> f64 {
     ts.unix_timestamp() as f64 + f64::from(ts.nanosecond()) / 1_000_000_000.0
 }
 
-#[derive(sqlx::FromRow)]
 struct BackupSourceRow {
     table_id: String,
     table_arn: String,
@@ -58,7 +57,21 @@ struct BackupSourceRow {
     deletion_protection_enabled: bool,
 }
 
-#[derive(sqlx::FromRow)]
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for BackupSourceRow {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            table_id: sqlx::Row::try_get(row, "table_id")?,
+            table_arn: sqlx::Row::try_get(row, "table_arn")?,
+            key_schema: sqlx::Row::try_get(row, "key_schema")?,
+            attribute_definitions: sqlx::Row::try_get(row, "attribute_definitions")?,
+            billing_mode: sqlx::Row::try_get(row, "billing_mode")?,
+            provisioned_throughput: sqlx::Row::try_get(row, "provisioned_throughput")?,
+            stream_specification: sqlx::Row::try_get(row, "stream_specification")?,
+            deletion_protection_enabled: sqlx::Row::try_get(row, "deletion_protection_enabled")?,
+        })
+    }
+}
+
 struct BackupRestoreRow {
     key_schema: serde_json::Value,
     attribute_definitions: serde_json::Value,
@@ -69,7 +82,20 @@ struct BackupRestoreRow {
     physical_table_name: Option<String>,
 }
 
-#[derive(sqlx::FromRow)]
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for BackupRestoreRow {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            key_schema: sqlx::Row::try_get(row, "key_schema")?,
+            attribute_definitions: sqlx::Row::try_get(row, "attribute_definitions")?,
+            billing_mode: sqlx::Row::try_get(row, "billing_mode")?,
+            provisioned_throughput: sqlx::Row::try_get(row, "provisioned_throughput")?,
+            backup_backend: sqlx::Row::try_get(row, "backup_backend")?,
+            storage_uri: sqlx::Row::try_get(row, "storage_uri")?,
+            physical_table_name: sqlx::Row::try_get(row, "physical_table_name")?,
+        })
+    }
+}
+
 struct BackupIndexSnapshotRow {
     index_id: String,
     index_name: String,
@@ -77,6 +103,19 @@ struct BackupIndexSnapshotRow {
     key_schema: serde_json::Value,
     projection: serde_json::Value,
     provisioned_throughput: Option<serde_json::Value>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for BackupIndexSnapshotRow {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            index_id: sqlx::Row::try_get(row, "index_id")?,
+            index_name: sqlx::Row::try_get(row, "index_name")?,
+            index_type: sqlx::Row::try_get(row, "index_type")?,
+            key_schema: sqlx::Row::try_get(row, "key_schema")?,
+            projection: sqlx::Row::try_get(row, "projection")?,
+            provisioned_throughput: sqlx::Row::try_get(row, "provisioned_throughput")?,
+        })
+    }
 }
 
 struct BackupMetadataSnapshot {
@@ -719,7 +758,6 @@ impl BackupEngine for TidbEngine {
         let backup_arn = backup_arn.to_string();
         Box::pin(async move {
             let account_id = account_id?;
-            #[derive(sqlx::FromRow)]
             struct Row {
                 backup_name: String,
                 backup_status: String,
@@ -732,6 +770,24 @@ impl BackupEngine for TidbEngine {
                 created_at: time::OffsetDateTime,
                 table_arn: Option<String>,
                 backup_created_at: time::OffsetDateTime,
+            }
+
+            impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for Row {
+                fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+                    Ok(Self {
+                        backup_name: sqlx::Row::try_get(row, "backup_name")?,
+                        backup_status: sqlx::Row::try_get(row, "backup_status")?,
+                        table_id: sqlx::Row::try_get(row, "table_id")?,
+                        table_name: sqlx::Row::try_get(row, "table_name")?,
+                        backup_size_bytes: sqlx::Row::try_get(row, "backup_size_bytes")?,
+                        item_count: sqlx::Row::try_get(row, "item_count")?,
+                        key_schema: sqlx::Row::try_get(row, "key_schema")?,
+                        billing_mode: sqlx::Row::try_get(row, "billing_mode")?,
+                        created_at: sqlx::Row::try_get(row, "created_at")?,
+                        table_arn: sqlx::Row::try_get(row, "table_arn")?,
+                        backup_created_at: sqlx::Row::try_get(row, "backup_created_at")?,
+                    })
+                }
             }
 
             let row: Row = sqlx::query_as(

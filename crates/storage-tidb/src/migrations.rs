@@ -510,7 +510,6 @@ fn information_schema_null(value: Option<&str>) -> bool {
     value.is_none() || value.is_some_and(|value| value.eq_ignore_ascii_case("NULL"))
 }
 
-#[derive(sqlx::FromRow)]
 struct IdempotencyTokenLayoutColumn {
     column_name: String,
     column_type: String,
@@ -518,6 +517,19 @@ struct IdempotencyTokenLayoutColumn {
     column_key: String,
     generation_expression: Option<String>,
     row_id_sharding_info: Option<String>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for IdempotencyTokenLayoutColumn {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            column_name: sqlx::Row::try_get(row, "column_name")?,
+            column_type: sqlx::Row::try_get(row, "column_type")?,
+            is_nullable: sqlx::Row::try_get(row, "is_nullable")?,
+            column_key: sqlx::Row::try_get(row, "column_key")?,
+            generation_expression: sqlx::Row::try_get(row, "generation_expression")?,
+            row_id_sharding_info: sqlx::Row::try_get(row, "row_id_sharding_info")?,
+        })
+    }
 }
 
 async fn idempotency_token_layout_summary(pool: &MySqlPool) -> OpResult<String> {
@@ -647,12 +659,22 @@ fn incompatible_dynamodb_hash_key_column_error(
     ))
 }
 
-#[derive(sqlx::FromRow)]
 struct DataTablePartitionLayout {
     table_name: String,
     partition_count: i64,
     min_partition_method: Option<String>,
     max_partition_method: Option<String>,
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::mysql::MySqlRow> for DataTablePartitionLayout {
+    fn from_row(row: &'r sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            table_name: sqlx::Row::try_get(row, "table_name")?,
+            partition_count: sqlx::Row::try_get(row, "partition_count")?,
+            min_partition_method: sqlx::Row::try_get(row, "min_partition_method")?,
+            max_partition_method: sqlx::Row::try_get(row, "max_partition_method")?,
+        })
+    }
 }
 
 async fn validate_dynamodb_data_table_partition_layout(pool: &MySqlPool) -> OpResult<()> {

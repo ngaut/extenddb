@@ -691,16 +691,3 @@ class TestGetShardIterator:
                 ShardIteratorType="TRIM_HORIZON",
             )
         assert exc_info.value.response["Error"]["Code"] == "ResourceNotFoundException"
-
-    @pytest.mark.xfail(
-        reason="15-minute iterator expiration cannot be tested in integration tests",
-        strict=True,
-    )
-    def test_expired_iterator(self, streams_client, stream_table):
-        """Expired iterators should raise ExpiredIteratorException.
-
-        We can't easily test real expiration (15 min), so this is a
-        placeholder that verifies the error code format if we could
-        craft an expired token.
-        """
-        pytest.fail("Cannot test 15-minute expiration in integration tests")

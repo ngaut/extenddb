@@ -356,13 +356,12 @@ Defined in `crates/storage/src/authorization_store.rs`. Policy lookups for autho
 
 | Method | Purpose |
 |--------|---------|
-| `fetch_user_authorization` | Get direct and group policies, user boundary, principal tags, and resource tags for one user request |
-| `fetch_role_authorization` | Get role policies, role boundary, session policy/tags, principal tags, and resource tags for one assumed-role request |
-| Split lookup methods | Backend compatibility methods for policies, boundaries, sessions, and tags; the default aggregate methods call these |
+| Split lookup methods | Fetch policies, boundaries, sessions, principal tags, and resource tags for the server-side authorization cache |
 
-Backends with a relational catalog should override the aggregate methods with
-one native set query per authorization check. Simpler backends can implement the
-split lookup methods and inherit the default aggregate behavior.
+The server-side authorization cache assembles request-scoped auth inputs and
+keeps parsed policy documents hot. Storage backends implement the individual
+lookup methods directly instead of carrying an aggregate authorization query
+contract.
 
 ### BackupEngine
 

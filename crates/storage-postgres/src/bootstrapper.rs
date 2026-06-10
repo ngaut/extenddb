@@ -153,7 +153,8 @@ impl Bootstrapper for PostgresBootstrapper {
                     .to_owned(),
             ));
         }
-        let sql = format!("CREATE USER \"{user}\" WITH PASSWORD '{password}'");
+        let user_ident = quote_identifier(user, "application user")?;
+        let sql = format!("CREATE USER {user_ident} WITH PASSWORD '{password}'");
         sqlx::query(&sql)
             .execute(admin)
             .await
@@ -167,10 +168,7 @@ impl Bootstrapper for PostgresBootstrapper {
         if self.config.admin_user == self.config.app_user {
             return Ok(());
         }
-        let grant_sql = format!(
-            "GRANT \"{}\" TO \"{}\"",
-            self.config.app_user, self.config.admin_user
-        );
+        let grant_sql = grant_role_sql(&self.config.app_user, &self.config.admin_user)?;
         sqlx::query(&grant_sql).execute(admin).await.map_err(|e| {
             OpError::Internal(format!(
                 "Cannot grant {} to {}: {e}",
@@ -378,7 +376,8 @@ impl Bootstrapper for PostgresBootstrapper {
         let admin = self.admin_pool().await?;
         if !data_db.is_empty() {
             println!("--- Dropping data database '{data_db}'...");
-            let sql = format!("DROP DATABASE IF EXISTS \"{data_db}\"");
+            let data_db = quote_identifier(data_db, "data database name")?;
+            let sql = format!("DROP DATABASE IF EXISTS {data_db}");
             sqlx::query(&sql)
                 .execute(admin)
                 .await
@@ -387,7 +386,8 @@ impl Bootstrapper for PostgresBootstrapper {
 
         let catalog = &self.config.catalog_db;
         println!("--- Dropping catalog database '{catalog}'...");
-        let sql = format!("DROP DATABASE IF EXISTS \"{catalog}\"");
+        let catalog = quote_identifier(catalog, "catalog database name")?;
+        let sql = format!("DROP DATABASE IF EXISTS {catalog}");
         sqlx::query(&sql)
             .execute(admin)
             .await
@@ -459,13 +459,40 @@ async fn create_database(pool: &PgPool, name: &str, owner: &str) -> OpResult<()>
     }
 
     // CREATE DATABASE doesn't support parameterized names.
-    let sql = format!("CREATE DATABASE \"{name}\" OWNER \"{owner}\"");
+    let database_ident = quote_identifier(name, "database name")?;
+    let owner_ident = quote_identifier(owner, "database owner")?;
+    let sql = format!("CREATE DATABASE {database_ident} OWNER {owner_ident}");
     sqlx::query(&sql)
         .execute(pool)
         .await
         .map_err(|e| OpError::Internal(format!("Create database '{name}': {e}")))?;
     println!("    Created.");
     Ok(())
+}
+
+fn quote_identifier(name: &str, label: &str) -> OpResult<String> {
+    if name.contains('"') {
+        return Err(OpError::Validation(format!(
+            "{label} must not contain double quotes"
+        )));
+    }
+    if name.contains('\0') {
+        return Err(OpError::Validation(format!(
+            "{label} must not contain null bytes"
+        )));
+    }
+    if !name.is_ascii() {
+        return Err(OpError::Validation(format!(
+            "{label} must contain only ASCII characters"
+        )));
+    }
+    Ok(format!("\"{name}\""))
+}
+
+fn grant_role_sql(app_user: &str, admin_user: &str) -> OpResult<String> {
+    let app_user = quote_identifier(app_user, "application user")?;
+    let admin_user = quote_identifier(admin_user, "admin user")?;
+    Ok(format!("GRANT {app_user} TO {admin_user}"))
 }
 
 impl PostgresBootstrapper {
@@ -636,6 +663,24 @@ mod tests {
             url,
             "postgresql://extenddb:pass%40word%3Awith%2Fspecial@localhost:5432/extenddb_catalog"
         );
+    }
+
+    #[test]
+    fn quote_identifier_rejects_ddl_breakout_characters() {
+        assert!(quote_identifier("extenddb", "database").is_ok());
+        assert!(quote_identifier("bad\"name", "database").is_err());
+        assert!(quote_identifier("bad\0name", "database").is_err());
+        assert!(quote_identifier("数据", "database").is_err());
+    }
+
+    #[test]
+    fn grant_role_sql_quotes_configured_identifiers() {
+        assert_eq!(
+            grant_role_sql("extenddb_app", "extenddb_admin").unwrap(),
+            "GRANT \"extenddb_app\" TO \"extenddb_admin\""
+        );
+        assert!(grant_role_sql("bad\"app", "extenddb_admin").is_err());
+        assert!(grant_role_sql("extenddb_app", "bad\"admin").is_err());
     }
 
     #[tokio::test]

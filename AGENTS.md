@@ -100,14 +100,14 @@ Binary: `target/release/extenddb`
 ### Unit Test
 
 ```bash
-cargo test --workspace
+cargo test -j12 --workspace
 ```
 
 ### Lint
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy -j12 --workspace --all-targets -- -D warnings
 ```
 
 ### Initialize (first time only)

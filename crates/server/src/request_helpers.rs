@@ -10,6 +10,11 @@ use serde_json::Value;
 
 use crate::AppState;
 use crate::authorization;
+use crate::authz_request_context::{
+    DynamoDbResource, authorization_resources_for_operation, build_nested_authorization_targets,
+    extract_attributes, extract_leading_keys, extract_select, optional_auth_metadata,
+    request_params,
+};
 
 /// Extract operation name from X-Amz-Target header.
 /// Accepts both `DynamoDB_20120810` and `DynamoDBStreams_20120810` wire-format prefixes.
@@ -35,21 +40,13 @@ pub(crate) fn extract_operation(headers: &HeaderMap) -> Result<String, DynamoDbE
         .ok_or_else(|| DynamoDbError::UnknownOperationException(String::new()))
 }
 
-/// Extract the table name from a `DynamoDB` request body.
+/// Extract the top-level `TableName` from a `DynamoDB` request body.
 ///
-/// Most operations use `TableName`. Batch and transact operations embed table
-/// names in nested structures — returns `None` for those; the caller maps
-/// `None` to `*` via `build_resource_arn`.
+/// This is used by throttling only. Authorization uses typed operation
+/// resources from `authz_request_context`.
 pub(crate) fn extract_table_name(input: &Value) -> Option<String> {
     input
         .get("TableName")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-}
-
-fn extract_index_name(input: &Value) -> Option<String> {
-    input
-        .get("IndexName")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
 }
@@ -77,31 +74,34 @@ pub(crate) async fn authorize_request(
     operation: &str,
     account_id: &str,
 ) -> Result<AuthorizationPrefetch, DynamoDbError> {
-    let table_name = extract_table_name(input);
-    let index_name = extract_index_name(input);
-    let resource_arn = build_resource_arn(&state.region, account_id, table_name.as_deref());
+    let resources = authorization_resources_for_operation(input, operation, account_id)?;
+    let primary_resource = resources
+        .first()
+        .cloned()
+        .unwrap_or(DynamoDbResource::TableWildcard);
+    let table_name = primary_resource.table_name().map(ToOwned::to_owned);
+    let index_name = primary_resource.index_name().map(ToOwned::to_owned);
 
     // Fetch table metadata for item-level operations. The result is both used
     // for LeadingKeys extraction here and returned to the caller to avoid a
     // redundant fetch in the engine layer. Query/Scan include IndexName when
-    // present so index metadata is resolved once per request. Put/Update ask
-    // for write metadata because secondary-index key validation can matter.
+    // present so index metadata is resolved once per request. Put/Update/Delete
+    // ask for write metadata because secondary-index and stream write metadata
+    // can matter.
     let (read_info, write_info) = match operation {
-        "PutItem" | "UpdateItem" => {
+        "PutItem" | "UpdateItem" | "DeleteItem" => {
             let write_info = if let Some(ref tn) = table_name {
-                state.storage.table_write_info(account_id, tn).await.ok()
+                optional_auth_metadata(state.storage.table_write_info(account_id, tn).await)?
             } else {
                 None
             };
             (None, write_info)
         }
-        "GetItem" | "DeleteItem" => {
+        "GetItem" => {
             if let Some(ref tn) = table_name {
-                let read_info = state
-                    .table_key_info_cache
-                    .get_optional(account_id, tn)
-                    .await
-                    .map(|table| TableReadInfo { table, index: None });
+                let read_info =
+                    optional_auth_metadata(state.table_key_info_cache.get(account_id, tn).await)?
+                        .map(|table| TableReadInfo { table, index: None });
                 (read_info, None)
             } else {
                 (None, None)
@@ -110,11 +110,12 @@ pub(crate) async fn authorize_request(
         "Query" | "Scan" => {
             if let Some(ref tn) = table_name {
                 (
-                    state
-                        .storage
-                        .table_read_info(account_id, tn, index_name.as_deref())
-                        .await
-                        .ok(),
+                    optional_auth_metadata(
+                        state
+                            .storage
+                            .table_read_info(account_id, tn, index_name.as_deref())
+                            .await,
+                    )?,
                     None,
                 )
             } else {
@@ -124,41 +125,83 @@ pub(crate) async fn authorize_request(
         _ => (None, None),
     };
 
-    let pk_attr = read_info
-        .as_ref()
-        .map(|info| info.table.key_schema[0].attribute_name.clone());
-    let pk_attr = pk_attr.or_else(|| {
-        write_info
-            .as_ref()
-            .map(|info| info.key_schema[0].attribute_name.clone())
-    });
+    let prepared_authorization =
+        authorization::prepare_authorization(state.authz_cache.as_ref(), identity).await?;
 
-    let params = extenddb_auth::policy::context::RequestParams {
-        leading_keys: extract_leading_keys(input, operation, pk_attr.as_deref()),
-        attributes: extract_attributes(input),
-        select: input
-            .get("Select")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
-        return_values: input
-            .get("ReturnValues")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
-        return_consumed_capacity: input
-            .get("ReturnConsumedCapacity")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
-        ..Default::default()
-    };
-    authorization::check_authorization(
-        state.authz_cache.as_ref(),
-        identity,
+    if let Some(targets) =
+        build_nested_authorization_targets(state, input, operation, account_id).await?
+    {
+        for target in targets {
+            let target_operation = target.operation;
+            let params = request_params(
+                input,
+                &target_operation,
+                target.leading_keys,
+                target.attributes,
+                target.select,
+                target.enclosing_operation,
+            );
+            let resource_arn = target.resource.policy_arn(&state.region, account_id);
+            let tag_resource_arn = target.resource.tag_arn(&state.region, account_id);
+            authorization::check_prepared_authorization(
+                state.authz_cache.as_ref(),
+                &target_operation,
+                &prepared_authorization,
+                authorization::AuthorizationResource {
+                    policy_arn: &resource_arn,
+                    tag_arn: &tag_resource_arn,
+                },
+                false,
+                params,
+            )
+            .await?;
+        }
+
+        return Ok(AuthorizationPrefetch {
+            read_info,
+            write_info,
+        });
+    }
+
+    let key_info = read_info
+        .as_ref()
+        .map(|info| &info.table)
+        .or(write_info.as_ref());
+
+    let leading_keys = extract_leading_keys(
+        input,
         operation,
-        &resource_arn,
-        operation == "Scan",
-        params,
-    )
-    .await?;
+        key_info,
+        read_info.as_ref(),
+        state.limits.as_ref(),
+    );
+    let attributes = extract_attributes(input, operation, state.limits.as_ref())?;
+    let select = extract_select(input, operation, read_info.as_ref());
+
+    for resource in resources {
+        let params = request_params(
+            input,
+            operation,
+            leading_keys.clone(),
+            attributes.clone(),
+            select.clone(),
+            None,
+        );
+        let resource_arn = resource.policy_arn(&state.region, account_id);
+        let tag_resource_arn = resource.tag_arn(&state.region, account_id);
+        authorization::check_prepared_authorization(
+            state.authz_cache.as_ref(),
+            operation,
+            &prepared_authorization,
+            authorization::AuthorizationResource {
+                policy_arn: &resource_arn,
+                tag_arn: &tag_resource_arn,
+            },
+            operation == "Scan",
+            params,
+        )
+        .await?;
+    }
 
     Ok(AuthorizationPrefetch {
         read_info,
@@ -166,122 +209,9 @@ pub(crate) async fn authorize_request(
     })
 }
 
-/// Extract partition key values from the request body for `dynamodb:LeadingKeys`.
-///
-/// For item-level operations (`GetItem`, `PutItem`, `DeleteItem`, `UpdateItem`),
-/// extracts the partition key value from the `Key` or `Item` using the table's
-/// key schema. For `Query`, the leading key comes from `KeyConditionExpression`
-/// values, but extracting that requires expression parsing — deferred to the
-/// engine layer.
-/// Returns `None` for table-level and batch/transact operations, or when
-/// `pk_attr` is not available.
-fn extract_leading_keys(
-    input: &Value,
-    operation: &str,
-    pk_attr: Option<&str>,
-) -> Option<Vec<String>> {
-    let pk_attr = pk_attr?;
-    match operation {
-        "GetItem" | "DeleteItem" | "UpdateItem" => extract_pk_value(input.get("Key")?, pk_attr),
-        "PutItem" => extract_pk_value(input.get("Item")?, pk_attr),
-        _ => None,
-    }
-}
-
-/// Extract the partition key value from a `DynamoDB` key/item map using the
-/// known PK attribute name.
-///
-/// `DynamoDB` keys are `{"attrName": {"S": "value"}}`. We extract the typed
-/// value of the partition key attribute as a string.
-fn extract_pk_value(map: &Value, pk_attr: &str) -> Option<Vec<String>> {
-    let obj = map.as_object()?;
-    let type_val = obj.get(pk_attr)?;
-    let type_obj = type_val.as_object()?;
-    let (_, val) = type_obj.iter().next()?;
-    let s = val.as_str().unwrap_or_default();
-    Some(vec![s.to_owned()])
-}
-
-/// Extract attribute names from the request for `dynamodb:Attributes`.
-///
-/// Collects attribute names from `ProjectionExpression` (comma-separated list
-/// of top-level names). Resolves `ExpressionAttributeNames` placeholders
-/// (e.g. `#n` → `name`) when present.
-/// Returns `None` when no projection is specified.
-pub(crate) fn extract_attributes(input: &Value) -> Option<Vec<String>> {
-    let proj = input.get("ProjectionExpression")?.as_str()?;
-    let ean = input
-        .get("ExpressionAttributeNames")
-        .and_then(|v| v.as_object());
-    let names: Vec<String> = proj
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            ean.and_then(|m| m.get(s))
-                .and_then(|v| v.as_str())
-                .unwrap_or(s)
-                .to_owned()
-        })
-        .collect();
-    if names.is_empty() { None } else { Some(names) }
-}
-
-/// Build a `DynamoDB` table ARN for authorization.
-///
-/// If no table name is available (e.g. `ListTables`, `DescribeEndpoints`),
-/// uses `*` as the resource.
-fn build_resource_arn(region: &str, account_id: &str, table_name: Option<&str>) -> String {
-    match table_name {
-        Some(name) => format!("arn:aws:dynamodb:{region}:{account_id}:table/{name}"),
-        None => format!("arn:aws:dynamodb:{region}:{account_id}:table/*"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn extract_attributes_resolves_expression_attribute_names() {
-        let input = json!({
-            "ProjectionExpression": "#n, #v",
-            "ExpressionAttributeNames": {
-                "#n": "name",
-                "#v": "value"
-            }
-        });
-        let result = extract_attributes(&input);
-        assert_eq!(result, Some(vec!["name".to_owned(), "value".to_owned()]));
-    }
-
-    #[test]
-    fn extract_attributes_mixed_placeholders_and_literals() {
-        let input = json!({
-            "ProjectionExpression": "#n, age",
-            "ExpressionAttributeNames": {
-                "#n": "name"
-            }
-        });
-        let result = extract_attributes(&input);
-        assert_eq!(result, Some(vec!["name".to_owned(), "age".to_owned()]));
-    }
-
-    #[test]
-    fn extract_attributes_no_expression_attribute_names() {
-        let input = json!({
-            "ProjectionExpression": "name, age"
-        });
-        let result = extract_attributes(&input);
-        assert_eq!(result, Some(vec!["name".to_owned(), "age".to_owned()]));
-    }
-
-    #[test]
-    fn extract_attributes_no_projection() {
-        let input = json!({"TableName": "test"});
-        assert_eq!(extract_attributes(&input), None);
-    }
 
     #[test]
     fn missing_target_no_auth_returns_missing_auth_token() {

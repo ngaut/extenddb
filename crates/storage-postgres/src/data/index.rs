@@ -9,6 +9,7 @@
 
 use extenddb_core::types::{
     AttributeDefinition, Item, KeySchemaElement, Projection, ProjectionType, ScalarAttributeType,
+    TableKeyInfo,
 };
 use extenddb_storage::error::StorageError;
 use extenddb_storage::util::SortKeyValue;
@@ -57,6 +58,17 @@ pub(crate) async fn fetch_indexes_for_table(
             })
         })
         .collect()
+}
+
+/// Fetch index metadata only when write metadata proves the table has indexes.
+pub(crate) async fn fetch_indexes_for_write(
+    key_info: &TableKeyInfo,
+    pool: &sqlx::PgPool,
+) -> Result<Vec<IndexMeta>, StorageError> {
+    if key_info.secondary_index_key_schemas.is_empty() && !key_info.has_lsi {
+        return Ok(Vec::new());
+    }
+    fetch_indexes_for_table(&key_info.table_id, pool).await
 }
 
 /// Project an item according to an index's projection configuration.

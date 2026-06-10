@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-04-03
-**Status:** Draft
+**Status:** Active
 **Crate:** `extenddb-core`
 
 ## 1. Purpose

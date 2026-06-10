@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-04-03
-**Status:** Draft
+**Status:** Active
 
 ## 1. Architecture Overview
 
@@ -324,34 +324,25 @@ There is no in-memory locking (no `Mutex`, `RwLock`, or similar) on the data pat
 - **Contention on the same item serializes at the database.** 50 threads incrementing the same counter will queue on the backend row/record lock — each update succeeds, but throughput for that single item is bounded by the backend's single-key transaction rate.
 - **Different items have no contention.** Parallel inserts to different keys proceed fully concurrently up to the pool size.
 
-## 7. High-Level Design Choices — Deferred Components
+## 7. High-Level Design Choices
 
 ### 7.1 DynamoDB Streams
 
-**Design space:**
-- **Option A: Application-layer capture** — The core operation handlers emit stream events after successful writes. The storage trait includes `write_stream_record()`. Stream records are stored in a dedicated table/collection managed by the storage backend.
-- **Option B: Storage-layer triggers** — The storage backend uses native CDC (e.g., PostgreSQL LISTEN/NOTIFY or logical replication). More efficient but ties stream behavior to the backend.
-- **Option C: Hybrid** — The core handler constructs the stream record (it has access to old/new images). The storage engine persists the stream record in the same transaction as the data write.
-- **Recommended direction:** Option C (hybrid). The core crate controls what gets captured (portable), while the storage backend ensures atomicity by writing the data and stream record in a single transaction. This guarantees no stream record without a data write and no data write without a stream record (when streams are enabled).
-
-**Deferred decisions:**
-- Shard management strategy (fixed shards vs. dynamic splitting)
-- Stream record retention period and cleanup
-- Iterator expiration semantics
-- Cross-instance stream consistency
+Streams use hybrid capture: operation handlers decide whether stream capture is
+needed from table metadata, and the storage backend writes the stream record in
+the same transaction as the data mutation when the backend can do so. Streams
+use fixed hash-based shards per stream generation, 15-minute shard iterators,
+bounded shard-reader leases, and 24-hour retention cleanup. See
+[`07-component-streams.md`](07-component-streams.md) for the implemented design
+and remaining compatibility boundaries.
 
 ### 7.2 Global Tables
 
-**Design space:**
-- **Option A: Application-layer replication** — A replication agent reads stream records from one instance and replays them to another. Conflict resolution via last-writer-wins with vector clocks.
-- **Option B: Storage-layer replication** — Delegate to the storage backend's native replication (e.g., PostgreSQL logical replication). Simpler but less portable.
-- **Recommended direction:** Option A for portability, built on top of DynamoDB Streams.
-
-**Deferred decisions:**
-- Conflict resolution strategy (last-writer-wins, vector clocks, CRDTs)
-- Replication topology (star, mesh, chain)
-- Consistency model (eventual vs. strong)
-- Replica management API semantics
+Global Tables are deferred and are not in the current API surface. Requests for
+Global Tables operations return `UnknownOperationException`. Future work needs
+an accepted multi-region design covering conflict resolution, replication
+topology, consistency semantics, and replica-management API behavior before any
+handlers are added.
 
 ## 8. Technology Choices
 

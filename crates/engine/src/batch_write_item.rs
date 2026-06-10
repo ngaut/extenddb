@@ -43,8 +43,11 @@ pub async fn handle_batch_write_item(
     ctx: &OperationContext,
 ) -> Result<DispatchResult, DynamoDbError> {
     let input: BatchWriteItemInput =
-        serde_json::from_value(body.clone()).map_err(crate::deserialize_error)?;
-    crate::aggregate_limits::validate_batch_write_request_size(&body, &ctx.limits)?;
+        serde_json::from_value(body).map_err(crate::deserialize_error)?;
+    crate::aggregate_limits::validate_batch_write_request_size_bytes(
+        ctx.request_body_bytes,
+        &ctx.limits,
+    )?;
 
     // Validate: RequestItems must not be empty
     if input.request_items.is_empty() {
@@ -209,23 +212,11 @@ async fn batch_write_table_infos(
     ctx: &OperationContext,
     request_items: &HashMap<String, Vec<WriteRequest>>,
 ) -> Result<HashMap<String, TableKeyInfo>, DynamoDbError> {
-    let mut table_plans = request_items
-        .iter()
-        .map(|(table_name, reqs)| {
-            (
-                table_name.clone(),
-                reqs.iter().any(|request| request.put_request.is_some()),
-            )
-        })
-        .collect::<Vec<_>>();
-    table_plans.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut table_plans = request_items.keys().cloned().collect::<Vec<_>>();
+    table_plans.sort();
 
-    let results = join_all(table_plans.iter().map(|(table_name, has_put)| async move {
-        let result = if *has_put {
-            ctx.table_write_info(table_name).await
-        } else {
-            ctx.table_key_info(table_name).await
-        };
+    let results = join_all(table_plans.iter().map(|table_name| async move {
+        let result = ctx.table_write_info(table_name).await;
         (table_name.clone(), result.map_err(storage_err_to_dynamo))
     }))
     .await;

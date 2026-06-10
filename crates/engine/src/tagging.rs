@@ -8,6 +8,7 @@ use extenddb_core::types::{
     ListTagsOfResourceInput, ListTagsOfResourceOutput, TagResourceInput, UntagResourceInput,
 };
 use extenddb_core::validation::{validate_tag_keys, validate_tags};
+use extenddb_storage::util::table_arn;
 use serde_json::Value;
 
 use crate::OperationContext;
@@ -18,23 +19,55 @@ use crate::serialize_output;
 /// Extract the table name from a `DynamoDB` table ARN.
 ///
 /// Expected format: `arn:aws:dynamodb:{region}:{account}:table/{name}[/...]`
-fn extract_table_name_from_arn(arn: &str) -> Option<&str> {
-    let resource = arn.strip_prefix("arn:aws:dynamodb:")?.split(':').nth(2)?;
-    let table_name = resource.strip_prefix("table/")?;
-    // Strip any sub-resource (e.g. /index/foo, /stream/label)
-    Some(table_name.split('/').next().unwrap_or(table_name))
+struct TableResourceArn<'a> {
+    region: &'a str,
+    account_id: &'a str,
+    table_name: &'a str,
 }
 
-/// Extract the account ID from a DynamoDB table ARN.
-fn extract_account_from_arn(arn: &str) -> Option<&str> {
-    arn.strip_prefix("arn:aws:dynamodb:")?.split(':').nth(1)
+fn parse_table_resource_arn(arn: &str) -> Option<TableResourceArn<'_>> {
+    let mut parts = arn.splitn(6, ':');
+    let (
+        Some("arn"),
+        Some("aws"),
+        Some("dynamodb"),
+        Some(region),
+        Some(account_id),
+        Some(resource),
+    ) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    )
+    else {
+        return None;
+    };
+    if region.is_empty() || account_id.is_empty() {
+        return None;
+    }
+    let table_resource = resource.strip_prefix("table/")?;
+    let table_name = table_resource.split('/').next().unwrap_or(table_resource);
+    if table_name.is_empty() {
+        return None;
+    }
+    Some(TableResourceArn {
+        region,
+        account_id,
+        table_name,
+    })
 }
 
-/// Validate that the ARN refers to an existing table.
+/// Validate that the ARN refers to an existing table and return its canonical table ARN.
 ///
 /// Returns `ResourceNotFoundException` if the table does not exist.
-async fn validate_resource_arn(arn: &str, ctx: &OperationContext) -> Result<(), DynamoDbError> {
-    let table_name = extract_table_name_from_arn(arn).ok_or_else(|| {
+async fn canonical_resource_arn(
+    arn: &str,
+    ctx: &OperationContext,
+) -> Result<String, DynamoDbError> {
+    let parsed = parse_table_resource_arn(arn).ok_or_else(|| {
         DynamoDbError::ValidationException(format!(
             "1 validation error detected: Value '{arn}' at 'resourceArn' failed to satisfy constraint: \
              Member must satisfy regular expression pattern: arn:aws:dynamodb:.+"
@@ -42,23 +75,29 @@ async fn validate_resource_arn(arn: &str, ctx: &OperationContext) -> Result<(), 
     })?;
 
     // Check the ARN's account matches the caller's account.
-    if let Some(arn_account) = extract_account_from_arn(arn)
-        && arn_account != ctx.account_id.as_ref()
-    {
+    if parsed.account_id != ctx.account_id.as_ref() {
         return Err(DynamoDbError::AccessDeniedException(
             "Access is denied".to_owned(),
         ));
     }
 
     // Verify the table exists via table_key_info (lightweight check).
-    ctx.table_key_info(table_name).await.map_err(|e| match e {
-        extenddb_storage::error::StorageError::TableNotFound(_) => {
-            DynamoDbError::ResourceNotFoundException(format!("Requested resource not found: {arn}"))
-        }
-        other => sanitize_storage_error(other),
-    })?;
+    ctx.table_key_info(parsed.table_name)
+        .await
+        .map_err(|e| match e {
+            extenddb_storage::error::StorageError::TableNotFound(_) => {
+                DynamoDbError::ResourceNotFoundException(format!(
+                    "Requested resource not found: {arn}"
+                ))
+            }
+            other => sanitize_storage_error(other),
+        })?;
 
-    Ok(())
+    Ok(table_arn(
+        parsed.region,
+        parsed.account_id,
+        parsed.table_name,
+    ))
 }
 
 /// Handle `TagResource` — add or overwrite tags on a resource.
@@ -81,18 +120,16 @@ pub async fn handle_tag_resource(
     }
     validate_tags(&input.tags, &ctx.limits)?;
 
-    validate_resource_arn(&input.resource_arn, ctx).await?;
+    let resource_arn = canonical_resource_arn(&input.resource_arn, ctx).await?;
 
     ctx.storage
-        .tag_resource(&input.resource_arn, &input.tags)
+        .tag_resource(&resource_arn, &input.tags)
         .await
         .map_err(storage_err_to_dynamo)?;
 
     // Drop any cached resource-tag entry so the new tags are visible to
     // ABAC policy evaluation immediately.
-    ctx.auth_cache
-        .invalidate_resource_tags(&input.resource_arn)
-        .await;
+    ctx.auth_cache.invalidate_resource_tags(&resource_arn).await;
 
     // TagResource returns an empty body on success.
     Ok(Value::Object(serde_json::Map::new()))
@@ -119,16 +156,14 @@ pub async fn handle_untag_resource(
     }
     validate_tag_keys(&input.tag_keys, &ctx.limits)?;
 
-    validate_resource_arn(&input.resource_arn, ctx).await?;
+    let resource_arn = canonical_resource_arn(&input.resource_arn, ctx).await?;
 
     ctx.storage
-        .untag_resource(&input.resource_arn, &input.tag_keys)
+        .untag_resource(&resource_arn, &input.tag_keys)
         .await
         .map_err(storage_err_to_dynamo)?;
 
-    ctx.auth_cache
-        .invalidate_resource_tags(&input.resource_arn)
-        .await;
+    ctx.auth_cache.invalidate_resource_tags(&resource_arn).await;
 
     // UntagResource returns an empty body on success.
     Ok(Value::Object(serde_json::Map::new()))
@@ -154,11 +189,11 @@ pub async fn handle_list_tags_of_resource(
         ));
     }
 
-    validate_resource_arn(&input.resource_arn, ctx).await?;
+    let resource_arn = canonical_resource_arn(&input.resource_arn, ctx).await?;
 
     let tags = ctx
         .storage
-        .list_tags(&input.resource_arn)
+        .list_tags(&resource_arn)
         .await
         .map_err(storage_err_to_dynamo)?;
 
@@ -167,4 +202,39 @@ pub async fn handle_list_tags_of_resource(
         next_token: None, // All tags returned in one page.
     };
     serialize_output(&output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_table_resource_arn;
+    use extenddb_storage::util::table_arn;
+
+    #[test]
+    fn parses_table_and_subresource_arns_to_owning_table() {
+        let table = parse_table_resource_arn(
+            "arn:aws:dynamodb:us-west-2:123456789012:table/Orders/index/ByDate",
+        )
+        .expect("index ARN should parse");
+
+        assert_eq!(table.region, "us-west-2");
+        assert_eq!(table.account_id, "123456789012");
+        assert_eq!(table.table_name, "Orders");
+        assert_eq!(
+            table_arn(table.region, table.account_id, table.table_name),
+            "arn:aws:dynamodb:us-west-2:123456789012:table/Orders"
+        );
+    }
+
+    #[test]
+    fn rejects_non_table_resource_arns() {
+        assert!(
+            parse_table_resource_arn("arn:aws:dynamodb:us-west-2:123456789012:backup/x").is_none()
+        );
+        assert!(
+            parse_table_resource_arn("arn:aws:s3:us-west-2:123456789012:table/Orders").is_none()
+        );
+        assert!(
+            parse_table_resource_arn("arn:aws:dynamodb:us-west-2:123456789012:table/").is_none()
+        );
+    }
 }

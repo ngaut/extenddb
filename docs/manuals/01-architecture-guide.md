@@ -98,7 +98,7 @@ PostgreSQL implementation of all storage traits using `sqlx`. Features:
 - GSI/LSI metadata in the catalog; physical index layout is backend-specific
 - Transactions use `SELECT FOR UPDATE` + single-transaction commits
 - Stream records stored in a dedicated table; retention is backend-owned
-- All queries parameterized (no dynamic SQL construction)
+- Query values are parameterized; dynamic DDL identifiers are backend-validated and quoted
 
 ### storage-tidb
 
@@ -220,7 +220,7 @@ TLS is supported via rustls. `extenddb init` generates a self-signed certificate
 
 ### Input Validation
 
-All user-supplied strings are validated at the engine layer before reaching storage. Expression parsing enforces configurable expression string, substitution-map, token, and depth limits. Policy documents are size-capped before JSON parsing. The storage layer uses parameterized queries exclusively.
+All user-supplied strings are validated at the engine layer before reaching storage. Expression parsing enforces configurable expression string, substitution-map, token, and depth limits. Policy documents are size-capped before JSON parsing. Storage uses parameterized queries for values; backend-specific DDL paths validate and quote identifiers before formatting.
 
 ## Web Console
 

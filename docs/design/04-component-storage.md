@@ -411,25 +411,19 @@ native TTL on `login_attempts`.
 ### AuthorizationStore
 
 Policy lookups for authorization decisions:
-- `fetch_user_authorization`, `fetch_role_authorization`
 - split lookup methods for policies, boundaries, sessions, and tags
 
 Used by the authorization policy engine to retrieve policies for authorization
 evaluation.
-The aggregate methods are the hot-path contract: a backend can fetch all policy,
-permissions boundary, principal tag, session, and resource tag metadata needed
-for one request in the most natural shape for that backend. The split lookup
-methods remain available for simpler backend implementations and are used by the
-default aggregate methods.
-
-TiDB overrides the aggregate methods with one set-oriented `UNION ALL` catalog
-query per user or role authorization check. User group membership is indexed by
-`(account_id, user_name, group_name)` for policy joins. Role session metadata is
-selected by the authenticated temporary access key using the native unique
-`access_key_id` index declared by `iam_sessions`, and expired-session retention
-is TiDB native TTL. This keeps SigV4 authorization on native TiDB range/point
-lookups instead of scanning memberships or sessions for an account, without
-maintaining a redundant session cleanup index.
+The server-side authorization cache owns request-scoped assembly and fetches
+policies, boundaries, sessions, principal tags, and resource tags through the
+split lookup methods. User group membership is indexed by `(account_id,
+user_name, group_name)` for policy joins. Role session metadata is selected by
+the authenticated temporary access key using the native unique `access_key_id`
+index declared by `iam_sessions`, and expired-session retention is TiDB native
+TTL. This keeps SigV4 authorization on native TiDB range/point lookups instead
+of scanning memberships or sessions for an account, without maintaining a
+redundant session cleanup index.
 
 ### Bootstrapper
 
@@ -1639,7 +1633,7 @@ cargo build -j12 --release
 ./target/release/extenddb serve --config extenddb.toml
 
 # Run tests
-cargo test --workspace
+cargo test -j12 --workspace
 ./devtools/run-tests --extenddb --all
 ```
 

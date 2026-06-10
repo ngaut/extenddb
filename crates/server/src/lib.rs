@@ -10,6 +10,7 @@
 
 pub(crate) mod authorization;
 pub mod authz_cache;
+mod authz_request_context;
 pub mod console;
 mod handler;
 pub mod key_info_cache;
@@ -45,7 +46,6 @@ pub struct AppState {
     pub storage: Arc<dyn extenddb_storage::StorageEngine>,
     pub auth: Arc<dyn AuthProvider>,
     pub limits: Arc<LimitsConfig>,
-    // Fix #9: Use Arc<str> to avoid per-request cloning
     pub region: Arc<str>,
     pub server_addr: String,
     /// Catalog store implementing operational storage traits.

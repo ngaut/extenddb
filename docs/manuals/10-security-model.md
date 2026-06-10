@@ -108,16 +108,16 @@ Set operators and `IfExists` can be combined: `ForAllValues:StringEqualsIfExists
 | Key | Type | Description |
 |-----|------|-------------|
 | `aws:PrincipalTag/<key>` | String | Tag on the authenticated principal (user or role) |
-| `dynamodb:ResourceTag/<key>` | String | Tag on the target DynamoDB table |
+| `aws:ResourceTag/<key>` | String | Tag on the target DynamoDB table or inherited table tag for an index |
 | `dynamodb:LeadingKeys` | Multi-valued string | Partition key values being accessed |
 | `dynamodb:Attributes` | Multi-valued string | Attribute names being read or written |
-| `dynamodb:Select` | String | The `Select` parameter value |
+| `dynamodb:Select` | String | The effective read selection: `SPECIFIC_ATTRIBUTES`, `ALL_ATTRIBUTES`, `ALL_PROJECTED_ATTRIBUTES`, or `COUNT` |
 | `dynamodb:ReturnValues` | String | The `ReturnValues` parameter value |
 | `dynamodb:ReturnConsumedCapacity` | String | The `ReturnConsumedCapacity` parameter value |
 | `dynamodb:FullTableScan` | Boolean | `true` for Scan operations |
-| `dynamodb:EnclosingOperation` | String | The enclosing operation for batch/transact sub-operations |
+| `dynamodb:EnclosingOperation` | String | `TransactWriteItems` or `TransactGetItems` for transaction item-action authorization |
 
-Policy variables (e.g., `${aws:PrincipalTag/Team}`) are expanded in condition values.
+Policy variables (e.g., `${aws:PrincipalTag/Team}`) are expanded in condition values. Resource ARN policy variables are deferred.
 
 ### Access Control Patterns
 
@@ -127,13 +127,19 @@ extenddb supports the same access control patterns as real AWS IAM:
 
 **Role-Based Access Control (RBAC)**: Create IAM groups with policies, add users to groups. Users inherit group policies. Create IAM roles for cross-account or service-to-service access.
 
-**Attribute-Based Access Control (ABAC)**: Use `aws:PrincipalTag/*` and `dynamodb:ResourceTag/*` condition keys to make access decisions based on tags. Example: allow users tagged `Department=Engineering` to access tables tagged `Department=Engineering`.
+**Attribute-Based Access Control (ABAC)**: Use `aws:PrincipalTag/*` and `aws:ResourceTag/*` condition keys to make access decisions based on tags. Example: allow users tagged `Department=Engineering` to access tables tagged `Department=Engineering`.
 
 **Fine-Grained Access Control (FGAC)**: Use `dynamodb:LeadingKeys` to restrict access to specific partition key values. Use `dynamodb:Attributes` to restrict which attributes can be read or written. Example: allow a user to access only items where the partition key matches their user ID.
 
+Transaction requests are authorized through their underlying item actions:
+`Get` uses `dynamodb:GetItem`; `Put`, `Update`, and `Delete` use their matching
+item actions; and `ConditionCheck` uses `dynamodb:ConditionCheckItem`. Policies
+can distinguish transaction calls from standalone item calls with
+`dynamodb:EnclosingOperation`.
+
 ### Resource ARNs
 
-Resources are identified by ARN: `arn:aws:dynamodb:<region>:<account-id>:table/<table-name>`. Wildcard matching (`*`, `?`) in policy Resource fields follows AWS IAM conventions. `NotResource` is also supported.
+Resources are identified by ARN: `arn:aws:dynamodb:<region>:<account-id>:table/<table-name>` for table operations and `arn:aws:dynamodb:<region>:<account-id>:table/<table-name>/index/<index-name>` for secondary-index `Query` and `Scan`. Wildcard matching (`*`, `?`) in policy Resource fields follows AWS IAM conventions. `NotResource` is also supported.
 
 ### Supported Policy Elements
 
@@ -188,7 +194,7 @@ Input validation is layered:
 
 1. **Server layer**: Request size limits, header validation, content-type checks
 2. **Engine layer**: All user-supplied strings validated before reaching storage — table names, attribute names, expression strings, policy documents
-3. **Storage layer**: Parameterized queries only — no dynamic SQL construction from user input
+3. **Storage layer**: Parameterized queries for values; dynamic DDL identifiers are backend-validated and quoted before formatting
 
 ### Expression Limits
 

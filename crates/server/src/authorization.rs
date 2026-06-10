@@ -15,44 +15,66 @@
 //! See `docs/design/12-auth-authz-cache.md`.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use extenddb_auth::AuthIdentity;
 use extenddb_auth::policy::context::{RequestContext, RequestParams};
+use extenddb_auth::policy::document::PolicyDocument;
 use extenddb_auth::policy::evaluator::{AuthzDecision, evaluate_policies_arc};
 use extenddb_core::error::DynamoDbError;
 use extenddb_storage::management_store::OpError;
 
 use crate::authz_cache::{CachedAuthzStore, PolicyList, TagMap};
 
-/// Evaluate whether the authenticated identity is authorized for the given
-/// DynamoDB operation on the given resource.
+#[derive(Clone, Copy)]
+pub(crate) struct AuthorizationResource<'a> {
+    pub(crate) policy_arn: &'a str,
+    pub(crate) tag_arn: &'a str,
+}
+
+pub(crate) struct PreparedAuthorization {
+    principal_arn: String,
+    identity_policies: Vec<Arc<PolicyDocument>>,
+    boundary: Option<Arc<PolicyDocument>>,
+    session_policy: Option<Arc<PolicyDocument>>,
+    principal_tags: HashMap<String, String>,
+}
+
+/// Fetch all principal-scoped authorization inputs once for a DynamoDB request.
 ///
-/// For `AuthIdentity::User` and `AuthIdentity::RoleSession`, the full IAM
-/// evaluation algorithm runs: explicit deny -> permissions boundary -> session
-/// policy -> identity allow -> implicit deny.
-pub async fn check_authorization(
+/// Resource tags still depend on the target resource and are fetched per
+/// resource check. The identity policies, permissions boundary, session policy,
+/// and principal tags are invariant across every nested target in a batch or
+/// transaction request, so preparing them once avoids repeated cache/catalog
+/// work and repeated policy-list assembly.
+pub(crate) async fn prepare_authorization(
     cache: &CachedAuthzStore,
     identity: &AuthIdentity,
-    operation: &str,
-    resource_arn: &str,
-    is_scan: bool,
-    params: RequestParams,
-) -> Result<(), DynamoDbError> {
+) -> Result<PreparedAuthorization, DynamoDbError> {
     match identity {
         AuthIdentity::User {
             account_id,
             user_name,
         } => {
-            check_user_authorization(
-                cache,
-                account_id,
-                user_name,
-                operation,
-                resource_arn,
-                is_scan,
-                params,
-            )
-            .await
+            let (user_policies, group_policies, boundary, principal_tags) = tokio::try_join!(
+                wrap_policies(cache.fetch_user_policies(account_id, user_name)),
+                wrap_policies(cache.fetch_user_group_policies(account_id, user_name)),
+                wrap_boundary(cache.fetch_user_boundary(account_id, user_name)),
+                wrap_tags(cache.fetch_user_tags(account_id, user_name)),
+            )?;
+
+            let mut identity_policies =
+                Vec::with_capacity(user_policies.len() + group_policies.len());
+            identity_policies.extend(user_policies.iter().cloned());
+            identity_policies.extend(group_policies.iter().cloned());
+
+            Ok(PreparedAuthorization {
+                principal_arn: format!("arn:aws:iam::{account_id}:user/{user_name}"),
+                identity_policies,
+                boundary,
+                session_policy: None,
+                principal_tags: (*principal_tags).clone(),
+            })
         }
         AuthIdentity::RoleSession {
             account_id,
@@ -60,60 +82,57 @@ pub async fn check_authorization(
             session_name,
             access_key_id,
         } => {
-            check_role_authorization(
-                cache,
-                account_id,
-                role_name,
-                session_name,
-                access_key_id,
-                operation,
-                resource_arn,
-                is_scan,
-                params,
-            )
-            .await
+            let (identity_policies, boundary, (session_policy, principal_tags)) = tokio::try_join!(
+                wrap_policies(cache.fetch_role_policies(account_id, role_name)),
+                wrap_boundary(cache.fetch_role_boundary(account_id, role_name)),
+                fetch_session_data_and_tags(
+                    cache,
+                    account_id,
+                    role_name,
+                    session_name,
+                    access_key_id
+                ),
+            )?;
+
+            Ok(PreparedAuthorization {
+                principal_arn: format!(
+                    "arn:aws:iam::{account_id}:assumed-role/{role_name}/{session_name}"
+                ),
+                identity_policies: identity_policies.iter().cloned().collect(),
+                boundary,
+                session_policy,
+                principal_tags,
+            })
         }
     }
 }
 
-async fn check_user_authorization(
+/// Evaluate a target resource against request-scoped authorization inputs.
+pub(crate) async fn check_prepared_authorization(
     cache: &CachedAuthzStore,
-    account_id: &str,
-    user_name: &str,
     operation: &str,
-    resource_arn: &str,
+    prepared: &PreparedAuthorization,
+    resource: AuthorizationResource<'_>,
     is_scan: bool,
     params: RequestParams,
 ) -> Result<(), DynamoDbError> {
     let action = format!("dynamodb:{operation}");
 
-    let (user_policies, group_policies, boundary, principal_tags, resource_tags) = tokio::try_join!(
-        wrap_policies(cache.fetch_user_policies(account_id, user_name)),
-        wrap_policies(cache.fetch_user_group_policies(account_id, user_name)),
-        wrap_boundary(cache.fetch_user_boundary(account_id, user_name)),
-        wrap_tags(cache.fetch_user_tags(account_id, user_name)),
-        wrap_tags(cache.fetch_resource_tags(resource_arn)),
-    )?;
-
-    let mut identity_policies: Vec<
-        std::sync::Arc<extenddb_auth::policy::document::PolicyDocument>,
-    > = Vec::with_capacity(user_policies.len() + group_policies.len());
-    identity_policies.extend(user_policies.iter().cloned());
-    identity_policies.extend(group_policies.iter().cloned());
+    let resource_tags = wrap_tags(cache.fetch_resource_tags(resource.tag_arn)).await?;
 
     let context = RequestContext::build(
-        (*principal_tags).clone(),
+        prepared.principal_tags.clone(),
         (*resource_tags).clone(),
         is_scan,
         params,
     );
 
     let decision = evaluate_policies_arc(
-        &identity_policies,
-        boundary.as_deref(),
-        None,
+        &prepared.identity_policies,
+        prepared.boundary.as_deref(),
+        prepared.session_policy.as_deref(),
         &action,
-        resource_arn,
+        resource.policy_arn,
         &context,
     );
 
@@ -121,65 +140,15 @@ async fn check_user_authorization(
         Ok(())
     } else {
         tracing::warn!(
-            principal = format!("arn:aws:iam::{account_id}:user/{user_name}"),
+            principal = prepared.principal_arn.as_str(),
             action = action,
-            resource = resource_arn,
+            resource = resource.policy_arn,
             "Authorization denied"
         );
         Err(DynamoDbError::AccessDeniedException(format!(
-            "User: arn:aws:iam::{account_id}:user/{user_name} is not authorized \
-             to perform: {action} on resource: {resource_arn}"
-        )))
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn check_role_authorization(
-    cache: &CachedAuthzStore,
-    account_id: &str,
-    role_name: &str,
-    session_name: &str,
-    access_key_id: &str,
-    operation: &str,
-    resource_arn: &str,
-    is_scan: bool,
-    params: RequestParams,
-) -> Result<(), DynamoDbError> {
-    let action = format!("dynamodb:{operation}");
-
-    let (identity_policies, boundary, (session_policy, principal_tags), resource_tags) = tokio::try_join!(
-        wrap_policies(cache.fetch_role_policies(account_id, role_name)),
-        wrap_boundary(cache.fetch_role_boundary(account_id, role_name)),
-        fetch_session_data_and_tags(cache, account_id, role_name, session_name, access_key_id),
-        wrap_tags(cache.fetch_resource_tags(resource_arn)),
-    )?;
-
-    let context = RequestContext::build(principal_tags, (*resource_tags).clone(), is_scan, params);
-
-    let identity_slice: Vec<std::sync::Arc<extenddb_auth::policy::document::PolicyDocument>> =
-        identity_policies.iter().cloned().collect();
-    let decision = evaluate_policies_arc(
-        &identity_slice,
-        boundary.as_deref(),
-        session_policy.as_deref(),
-        &action,
-        resource_arn,
-        &context,
-    );
-
-    if decision == AuthzDecision::Allow {
-        Ok(())
-    } else {
-        tracing::warn!(
-            principal =
-                format!("arn:aws:iam::{account_id}:assumed-role/{role_name}/{session_name}"),
-            action = action,
-            resource = resource_arn,
-            "Authorization denied"
-        );
-        Err(DynamoDbError::AccessDeniedException(format!(
-            "User: arn:aws:iam::{account_id}:assumed-role/{role_name}/{session_name} \
-             is not authorized to perform: {action} on resource: {resource_arn}"
+            "User: {} is not authorized \
+             to perform: {action} on resource: {}",
+            prepared.principal_arn, resource.policy_arn
         )))
     }
 }

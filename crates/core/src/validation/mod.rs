@@ -2017,7 +2017,7 @@ mod tests {
     fn update_item_empty_string_update_expression_passes_validation() {
         // Validation must let Some("") through so the engine's tokenize_for
         // produces the DynamoDB-compatible "The expression can not be empty;"
-        // message. PR #24 (ef8b94f) protects this routing; we keep it.
+        // message.
         let limits = LimitsConfig::default();
         let key_schema = vec![make_ks("pk", KeyType::Hash)];
         let attr_defs = vec![make_ad("pk", ScalarAttributeType::S)];

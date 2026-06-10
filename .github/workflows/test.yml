@@ -20,7 +20,7 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: cargo test -j12 --workspace
 
   test:
     runs-on: ubuntu-latest

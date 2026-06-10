@@ -38,13 +38,13 @@ cargo build
 cargo build -j12 --release
 
 # Check without building
-cargo check
+cargo check -j12 --workspace
 
 # Run clippy lints
-cargo clippy -- -W clippy::pedantic
+cargo clippy -j12 --workspace --all-targets -- -D warnings
 
 # Format code
-cargo fmt
+cargo fmt --all -- --check
 ```
 
 Both debug and release builds must pass before branch acceptance.

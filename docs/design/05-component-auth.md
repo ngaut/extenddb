@@ -94,7 +94,7 @@ does not allocate a per-request header map.
 ## Authorization Model
 
 The server maps each DynamoDB operation to an IAM action and resource ARN, then
-loads all authorization metadata through storage aggregate methods:
+loads all authorization metadata through the server-side authorization cache:
 
 - identity policies
 - group policies
@@ -103,9 +103,9 @@ loads all authorization metadata through storage aggregate methods:
 - principal tags
 - resource tags
 
-Backends own the SQL shape for those aggregate methods. This lets TiDB use its
-native hot lookup indexes and avoids forcing PostgreSQL-shaped query sequences
-onto the default backend.
+The cache fetches these inputs through split storage lookup methods and keeps
+parsed policy documents hot. This keeps the storage contract narrow while
+letting each backend keep native indexes on the underlying lookup tables.
 
 The policy evaluator applies the IAM decision order:
 
@@ -126,8 +126,8 @@ Policy documents use the AWS IAM JSON shape:
 - `Condition` supports the implemented string, numeric, date, ARN, bool, null,
   set, and `IfExists` operators.
 
-Policy variables such as `${aws:PrincipalTag/team}` are not expanded. They are
-treated as literal policy text today.
+Policy variables such as `${aws:PrincipalTag/team}` are expanded in condition
+values. Resource ARN policy variables are not expanded today.
 
 ## Condition Context
 

@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures::FutureExt;
+use tokio::sync::Notify;
 
 use crate::swr::{Loader, SwrCache, SwrCacheConfig};
 
@@ -551,8 +552,8 @@ async fn refresh_dropped_when_invalidate_races() {
     );
 }
 
-/// PR-review S1: a slow refresh whose loader started before a concurrent
-/// hard miss must NOT clobber the freshly-loaded value.
+/// A slow refresh whose loader started before a concurrent hard miss must NOT
+/// clobber the freshly-loaded value.
 ///
 /// Sequence:
 /// 1. Prime cache (n=1).
@@ -566,18 +567,10 @@ async fn refresh_dropped_when_invalidate_races() {
 /// 6. Subsequent reads continue to see n=3, not n=2.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn refresh_dropped_when_hard_miss_races() {
-    // Timing budget chosen so the post-hard-miss entry stays alive in the
-    // cache for the duration of the test:
-    //   soft_ttl  = 50ms, hard_ttl = 200ms, slow refresh = 300ms.
-    // Sequence (approximate elapsed):
-    //   t=0    prime n=1 (Entry-A)
-    //   t=80   stale-hit → refresh #2 starts (sleeps 300ms, finishes ~t=380)
-    //   t=250  Entry-A past hard_ttl → hard miss loads n=3 (Entry-B)
-    //   t=380  refresh #2 finishes; identity guard sees the slot now holds
-    //          Entry-B (Arc::ptr_eq != entry_for_clear) → drop the result
-    //   t=400  read v4: Entry-B still fresh, returns "n=3"
+    // The refresh is held behind an explicit gate so the test controls the
+    // race precisely: hard miss first, old refresh completion second.
     let cfg = SwrCacheConfig {
-        ttl: Duration::from_millis(200),
+        ttl: Duration::from_millis(300),
         soft_ttl: Duration::from_millis(50),
         negative_ttl: Duration::from_millis(50),
         max_entries: 100,
@@ -585,15 +578,20 @@ async fn refresh_dropped_when_hard_miss_races() {
     };
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_loader = calls.clone();
+    let refresh_started = Arc::new(Notify::new());
+    let release_refresh = Arc::new(Notify::new());
+    let refresh_started_for_loader = refresh_started.clone();
+    let release_refresh_for_loader = release_refresh.clone();
     let loader: Loader<String, String, &'static str> = make_loader(move |_k: String| {
         let calls = calls_for_loader.clone();
+        let refresh_started = refresh_started_for_loader.clone();
+        let release_refresh = release_refresh_for_loader.clone();
         async move {
             let n = calls.fetch_add(1, Ordering::SeqCst) + 1;
-            // The refresh that runs AFTER the initial load is the one we
-            // want slow — that's call #2. Initial and post-hard-miss loads
-            // return promptly so the test stays fast.
+            // Hold the stale refresh until the test has forced a hard miss.
             if n == 2 {
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                refresh_started.notify_one();
+                release_refresh.notified().await;
             }
             Ok::<_, &'static str>(Some(format!("n={n}")))
         }
@@ -608,25 +606,29 @@ async fn refresh_dropped_when_hard_miss_races() {
     tokio::time::sleep(Duration::from_millis(80)).await;
     let v2 = cache.get("k".into()).await.unwrap().unwrap();
     assert_eq!(v2, "n=1", "stale-hit returns cached value");
+    tokio::time::timeout(Duration::from_millis(100), refresh_started.notified())
+        .await
+        .expect("refresh should start");
 
     // 3. Cross hard_ttl (no invalidate). Next read is a hard miss → n=3.
-    // (Total elapsed ~250ms, past the 200ms hard TTL.)
-    tokio::time::sleep(Duration::from_millis(170)).await;
+    // (Total elapsed ~330ms, past the 300ms hard TTL.)
+    tokio::time::sleep(Duration::from_millis(250)).await;
     let v3 = cache.get("k".into()).await.unwrap().unwrap();
     assert_eq!(v3, "n=3", "hard-miss path loads fresh value");
 
     // 4–5. Wait for the slow refresh (n=2) to finish. Its result must be
     // discarded by the identity guard, NOT inserted on top of n=3.
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    // 6. Subsequent reads still see n=3. The post-hard-miss entry is ~150ms
-    // old now (well within the 200ms hard TTL). If the refresh had clobbered,
-    // we'd see n=2 here.
-    let v4 = cache.get("k".into()).await.unwrap().unwrap();
-    assert_eq!(
-        v4, "n=3",
-        "stale refresh must not overwrite the post-hard-miss value"
-    );
+    release_refresh.notify_one();
+    tokio::time::timeout(Duration::from_millis(100), async {
+        loop {
+            if cache.metrics().snapshot().refresh_dropped_epoch >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("refresh should be dropped");
 
     let m = cache.metrics().snapshot();
     assert_eq!(
@@ -636,6 +638,14 @@ async fn refresh_dropped_when_hard_miss_races() {
     assert!(
         m.refresh_dropped_epoch >= 1,
         "the slow refresh must be counted as dropped; got {m:?}"
+    );
+
+    // 6. Subsequent reads still see n=3. If the refresh had clobbered,
+    // we'd see n=2 here.
+    let v4 = cache.get("k".into()).await.unwrap().unwrap();
+    assert_eq!(
+        v4, "n=3",
+        "stale refresh must not overwrite the post-hard-miss value"
     );
 }
 

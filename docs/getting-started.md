@@ -297,17 +297,6 @@ Stop the server:
 ./target/release/extenddb stop --config extenddb.toml
 ```
 
-If `extenddb stop` is unavailable (e.g., older binary), fall back to manual process management:
-
-1. Find the process listening on the extenddb port (default 8000):
-   ```bash
-   ss -tlnp | grep :8000
-   ```
-2. Kill it:
-   ```bash
-   kill <pid>
-   ```
-
 ## 5. Configure AWS CLI
 
 extenddb uses TLS with a self-signed certificate. To make AWS CLI and SDKs trust it, set `AWS_CA_BUNDLE` to the generated certificate:

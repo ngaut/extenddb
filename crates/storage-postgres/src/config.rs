@@ -4,6 +4,7 @@
 //! PostgreSQL connection configuration.
 
 use serde::Deserialize;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +46,12 @@ pub struct ConnParts {
     pub database: String,
 }
 
+fn decode_url_component(value: &str, label: &str) -> anyhow::Result<String> {
+    urlencoding::decode(value)
+        .map(Cow::into_owned)
+        .map_err(|e| anyhow::anyhow!("Invalid percent-encoding in {label}: {e}"))
+}
+
 /// Parse host, port, user, password, and database from a `PostgreSQL` connection string.
 ///
 /// Handles the standard `postgresql://user:pass@host:port/db` format.
@@ -60,21 +67,22 @@ pub fn parse_connection_string(conn: &str) -> anyhow::Result<ConnParts> {
             anyhow::anyhow!("Connection string must start with postgresql:// or postgres://")
         })?;
 
-    let (userpass, hostdb) = rest
-        .split_once('@')
+    let at = rest
+        .rfind('@')
         .ok_or_else(|| anyhow::anyhow!("Connection string missing '@' separator"))?;
+    let (userpass, hostdb) = rest.split_at(at);
+    let hostdb = &hostdb[1..];
 
-    let (user, password) = userpass.split_once(':').map_or_else(
-        || (userpass.to_owned(), String::new()),
-        |(u, p)| (u.to_owned(), p.to_owned()),
-    );
+    let (user, password) = userpass
+        .split_once(':')
+        .map_or((userpass, ""), |(u, p)| (u, p));
 
     let (hostport, database) = hostdb
         .split_once('/')
         .ok_or_else(|| anyhow::anyhow!("Connection string missing /database"))?;
 
     let (host, port_str) = hostport
-        .split_once(':')
+        .rsplit_once(':')
         .ok_or_else(|| anyhow::anyhow!("Connection string missing :port"))?;
 
     let port: u16 = port_str
@@ -82,11 +90,11 @@ pub fn parse_connection_string(conn: &str) -> anyhow::Result<ConnParts> {
         .map_err(|_| anyhow::anyhow!("Invalid port: {port_str}"))?;
 
     Ok(ConnParts {
-        user,
-        password,
-        host: host.to_owned(),
+        user: decode_url_component(user, "username")?,
+        password: decode_url_component(password, "password")?,
+        host: decode_url_component(host, "host")?,
         port,
-        database: database.to_owned(),
+        database: decode_url_component(database, "database")?,
     })
 }
 
@@ -107,5 +115,35 @@ impl extenddb_storage::config::StorageConfig for PostgresStorageConfig {
 
     fn clone_box(&self) -> Box<dyn extenddb_storage::config::StorageConfig> {
         Box::new(self.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_connection_string;
+
+    #[test]
+    fn parses_percent_encoded_components() {
+        let parts = parse_connection_string(
+            "postgresql://extend%40db:p%40ss%3Aword@%2Fvar%2Frun%2Fpostgresql:5432/db%2D1",
+        )
+        .expect("encoded connection string should parse");
+
+        assert_eq!(parts.user, "extend@db");
+        assert_eq!(parts.password, "p@ss:word");
+        assert_eq!(parts.host, "/var/run/postgresql");
+        assert_eq!(parts.port, 5432);
+        assert_eq!(parts.database, "db-1");
+    }
+
+    #[test]
+    fn splits_at_last_userinfo_separator() {
+        let parts = parse_connection_string("postgresql://extenddb:raw@pass@localhost:5432/db")
+            .expect("raw at sign in password should parse");
+
+        assert_eq!(parts.user, "extenddb");
+        assert_eq!(parts.password, "raw@pass");
+        assert_eq!(parts.host, "localhost");
+        assert_eq!(parts.database, "db");
     }
 }

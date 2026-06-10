@@ -89,6 +89,7 @@ pub(crate) async fn handle_request(
     };
 
     // --- Auth segment ---
+    let request_body_bytes = body.len();
     let auth_start = std::time::Instant::now();
     let identity = match state.auth.authenticate(&headers, &body).await {
         Ok(id) => id,
@@ -137,6 +138,7 @@ pub(crate) async fn handle_request(
         account_id,
         import_paths: state.import_paths.clone(),
         export_paths: state.export_paths.clone(),
+        request_body_bytes,
         pre_fetched_read_info,
         pre_fetched_write_info,
         auth_cache: state.auth_cache.clone(),

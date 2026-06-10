@@ -6,10 +6,6 @@
 //! Loads HTML fragments and PDF files from a configured directory at request
 //! time. The directory is populated by `docs/build-docs.py` and its path is
 //! set via the `docs_dir` key in `extenddb.toml`.
-//!
-//! Previous versions embedded docs at compile time via `include_bytes!` /
-//! `include_str!`. This module replaces that approach so docs can be updated
-//! without recompilation.
 
 use std::path::{Path, PathBuf};
 

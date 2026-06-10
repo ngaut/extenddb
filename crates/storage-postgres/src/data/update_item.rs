@@ -8,9 +8,9 @@ use extenddb_core::types::{Item, KeyType, TableKeyInfo};
 use extenddb_core::validation;
 use extenddb_storage::StreamCapture;
 use extenddb_storage::error::StorageError;
-use extenddb_storage::util::{parse_sk, pk_to_text, sk_column, sk_info};
+use extenddb_storage::util::{composite_pk_to_text, parse_sk, sk_column, sk_info};
 
-use super::index::{enqueue_async_indexes, fetch_indexes_for_table, pk_hash, sync_indexes};
+use super::index::{enqueue_async_indexes, fetch_indexes_for_write, pk_hash, sync_indexes};
 use super::query::check_condition;
 use super::tx_helpers::write_stream_record_in_tx;
 use super::{data_table_name, json_to_item};
@@ -32,11 +32,7 @@ impl PostgresEngine {
     ) -> Result<(Option<Item>, Option<Item>), StorageError> {
         let ddb_table = data_table_name(&key_info.table_id);
 
-        let pk_name = &key_info.key_schema[0].attribute_name;
-        let pk_value = key
-            .get(pk_name)
-            .ok_or_else(|| StorageError::Internal("missing partition key".to_owned()))?;
-        let pk_text = pk_to_text(pk_value)?;
+        let pk_text = composite_pk_to_text(key, &key_info.key_schema)?;
 
         // UpdateItem always needs a transaction (read-modify-write)
         let mut tx = self
@@ -46,7 +42,7 @@ impl PostgresEngine {
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
         // Fetch indexes for GSI/LSI sync and async updates.
-        let indexes = fetch_indexes_for_table(&key_info.table_id, &self.pool).await?;
+        let indexes = fetch_indexes_for_write(key_info, &self.pool).await?;
         let sys_delay = if indexes.is_empty() {
             0
         } else {
@@ -67,12 +63,12 @@ impl PostgresEngine {
                 "SELECT item_data FROM {ddb_table} WHERE pk = $1 AND {sk_col} = $2 FOR UPDATE"
             );
             let row: Option<(serde_json::Value,)> =
-                bind_sk_fetch_optional!(&select_sql, pk_text.as_ref(), &sk, &mut *tx)?;
+                bind_sk_fetch_optional!(&select_sql, pk_text.as_str(), &sk, &mut *tx)?;
             row.map(|(v,)| v)
         } else {
             let select_sql = format!("SELECT item_data FROM {ddb_table} WHERE pk = $1 FOR UPDATE");
             let row: Option<(serde_json::Value,)> = sqlx::query_as(&select_sql)
-                .bind(pk_text.as_ref())
+                .bind(pk_text.as_str())
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
@@ -149,7 +145,7 @@ impl PostgresEngine {
                 let update_sql = format!(
                     "UPDATE {ddb_table} SET item_data = $3 WHERE pk = $1 AND {sk_col} = $2"
                 );
-                bind_sk_execute!(&update_sql, pk_text.as_ref(), &sk, &item_json, &mut *tx)?;
+                bind_sk_execute!(&update_sql, pk_text.as_str(), &sk, &item_json, &mut *tx)?;
             } else {
                 // Row didn't exist (upsert) — atomic insert, fail if someone beat us.
                 let insert_sql = format!(
@@ -157,7 +153,7 @@ impl PostgresEngine {
                      ON CONFLICT (pk, {sk_col}) DO NOTHING"
                 );
                 let result =
-                    bind_sk_execute!(&insert_sql, pk_text.as_ref(), &sk, &item_json, &mut *tx)?;
+                    bind_sk_execute!(&insert_sql, pk_text.as_str(), &sk, &item_json, &mut *tx)?;
                 if result.rows_affected() == 0 {
                     // Another transaction inserted between our SELECT and INSERT.
                     // Fetch the winner to return with ConditionFailed.
@@ -165,7 +161,7 @@ impl PostgresEngine {
                         "SELECT item_data FROM {ddb_table} WHERE pk = $1 AND {sk_col} = $2"
                     );
                     let winner: Option<(serde_json::Value,)> =
-                        bind_sk_fetch_optional!(&winner_sql, pk_text.as_ref(), &sk, &mut *tx)?;
+                        bind_sk_fetch_optional!(&winner_sql, pk_text.as_str(), &sk, &mut *tx)?;
                     let winner_item = winner.map(|(v,)| json_to_item(v)).transpose()?;
                     return Err(StorageError::ConditionFailed(winner_item));
                 }
@@ -173,7 +169,7 @@ impl PostgresEngine {
         } else if item_existed {
             let update_sql = format!("UPDATE {ddb_table} SET item_data = $2 WHERE pk = $1");
             sqlx::query(&update_sql)
-                .bind(pk_text.as_ref())
+                .bind(pk_text.as_str())
                 .bind(&item_json)
                 .execute(&mut *tx)
                 .await
@@ -184,7 +180,7 @@ impl PostgresEngine {
                  ON CONFLICT (pk) DO NOTHING"
             );
             let result = sqlx::query(&insert_sql)
-                .bind(pk_text.as_ref())
+                .bind(pk_text.as_str())
                 .bind(&item_json)
                 .execute(&mut *tx)
                 .await
@@ -194,7 +190,7 @@ impl PostgresEngine {
                 // Fetch the winner to return with ConditionFailed.
                 let winner_sql = format!("SELECT item_data FROM {ddb_table} WHERE pk = $1");
                 let winner: Option<(serde_json::Value,)> = sqlx::query_as(&winner_sql)
-                    .bind(pk_text.as_ref())
+                    .bind(pk_text.as_str())
                     .fetch_optional(&mut *tx)
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
@@ -237,7 +233,7 @@ impl PostgresEngine {
         if let Some(ref q) = self.gsi_queue {
             enqueue_async_indexes(
                 q,
-                pk_hash(pk_text.as_ref()),
+                pk_hash(pk_text.as_str()),
                 &key_info.account_id,
                 &key_info.table_name,
                 &key_info.table_id,

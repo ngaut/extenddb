@@ -675,6 +675,577 @@ class TestAuthorizationEnforcement:
             self.mgmt.delete_user(self.account_id, user)
             self.mgmt.delete_user(self.account_id, admin)
 
+    def test_leading_keys_policy_restricts_query_partition_key(self):
+        user = f"u-{uuid.uuid4().hex[:8]}"
+        admin = f"adm-{uuid.uuid4().hex[:8]}"
+        ak, sk = self._user_with_key(user)
+        admin_ak, admin_sk = self._user_with_key(admin)
+        self.mgmt.put_user_policy(self.account_id, admin, "full", _full_policy())
+
+        admin_client = _make_client(self.endpoint, admin_ak, admin_sk, self.region)
+        client = _make_client(self.endpoint, ak, sk, self.region)
+        table = f"t-{uuid.uuid4().hex[:8]}"
+        try:
+            admin_client.create_table(
+                TableName=table,
+                AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            wait_for_active(admin_client, table)
+            admin_client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "tenant-a"}, "payload": {"S": "allowed"}},
+            )
+            admin_client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "tenant-b"}, "payload": {"S": "denied"}},
+            )
+
+            self.mgmt.put_user_policy(self.account_id, user, "tenant-a-query", {
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": "dynamodb:Query",
+                    "Resource": f"arn:aws:dynamodb:{self.region}:{self.account_id}:table/{table}",
+                    "Condition": {
+                        "ForAllValues:StringEquals": {
+                            "dynamodb:LeadingKeys": ["tenant-a"]
+                        }
+                    },
+                }],
+            })
+
+            allowed = client.query(
+                TableName=table,
+                KeyConditionExpression="pk = :pk",
+                ExpressionAttributeValues={":pk": {"S": "tenant-a"}},
+            )
+            assert allowed["Items"][0]["payload"]["S"] == "allowed"
+
+            with pytest.raises(ClientError) as exc:
+                client.query(
+                    TableName=table,
+                    KeyConditionExpression="pk = :pk",
+                    ExpressionAttributeValues={":pk": {"S": "tenant-b"}},
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+        finally:
+            try:
+                admin_client.delete_table(TableName=table)
+                wait_for_deleted(admin_client, table)
+            except Exception:
+                pass
+            self.mgmt.delete_user(self.account_id, user)
+            self.mgmt.delete_user(self.account_id, admin)
+
+    def test_leading_keys_policy_restricts_batch_and_transaction_keys(self):
+        user = f"u-{uuid.uuid4().hex[:8]}"
+        admin = f"adm-{uuid.uuid4().hex[:8]}"
+        ak, sk = self._user_with_key(user)
+        admin_ak, admin_sk = self._user_with_key(admin)
+        self.mgmt.put_user_policy(self.account_id, admin, "full", _full_policy())
+
+        admin_client = _make_client(self.endpoint, admin_ak, admin_sk, self.region)
+        client = _make_client(self.endpoint, ak, sk, self.region)
+        table = f"t-{uuid.uuid4().hex[:8]}"
+        try:
+            admin_client.create_table(
+                TableName=table,
+                AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            wait_for_active(admin_client, table)
+            admin_client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "tenant-a"}, "payload": {"S": "allowed"}},
+            )
+            admin_client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "tenant-b"}, "payload": {"S": "denied"}},
+            )
+
+            self.mgmt.put_user_policy(self.account_id, user, "tenant-a-batch-txn", {
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": [
+                        "dynamodb:BatchGetItem",
+                        "dynamodb:BatchWriteItem",
+                        "dynamodb:GetItem",
+                        "dynamodb:PutItem",
+                    ],
+                    "Resource": f"arn:aws:dynamodb:{self.region}:{self.account_id}:table/{table}",
+                    "Condition": {
+                        "ForAllValues:StringEquals": {
+                            "dynamodb:LeadingKeys": ["tenant-a"]
+                        }
+                    },
+                }],
+            })
+
+            batch_get = client.batch_get_item(
+                RequestItems={table: {"Keys": [{"pk": {"S": "tenant-a"}}]}}
+            )
+            assert batch_get["Responses"][table][0]["payload"]["S"] == "allowed"
+            with pytest.raises(ClientError) as exc:
+                client.batch_get_item(
+                    RequestItems={table: {"Keys": [{"pk": {"S": "tenant-b"}}]}}
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+
+            client.batch_write_item(
+                RequestItems={table: [{
+                    "PutRequest": {
+                        "Item": {"pk": {"S": "tenant-a"}, "payload": {"S": "batch"}}
+                    }
+                }]}
+            )
+            with pytest.raises(ClientError) as exc:
+                client.batch_write_item(
+                    RequestItems={table: [{
+                        "PutRequest": {
+                            "Item": {"pk": {"S": "tenant-b"}, "payload": {"S": "batch"}}
+                        }
+                    }]}
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+
+            txn_get = client.transact_get_items(
+                TransactItems=[{
+                    "Get": {"TableName": table, "Key": {"pk": {"S": "tenant-a"}}}
+                }]
+            )
+            assert txn_get["Responses"][0]["Item"]["payload"]["S"] == "batch"
+            with pytest.raises(ClientError) as exc:
+                client.transact_get_items(
+                    TransactItems=[{
+                        "Get": {"TableName": table, "Key": {"pk": {"S": "tenant-b"}}}
+                    }]
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+
+            client.transact_write_items(
+                TransactItems=[{
+                    "Put": {
+                        "TableName": table,
+                        "Item": {"pk": {"S": "tenant-a"}, "payload": {"S": "txn"}},
+                    }
+                }]
+            )
+            with pytest.raises(ClientError) as exc:
+                client.transact_write_items(
+                    TransactItems=[{
+                        "Put": {
+                            "TableName": table,
+                            "Item": {"pk": {"S": "tenant-b"}, "payload": {"S": "txn"}},
+                        }
+                    }]
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+        finally:
+            try:
+                admin_client.delete_table(TableName=table)
+                wait_for_deleted(admin_client, table)
+            except Exception:
+                pass
+            self.mgmt.delete_user(self.account_id, user)
+            self.mgmt.delete_user(self.account_id, admin)
+
+    def test_attributes_policy_restricts_write_item_attributes(self):
+        user = f"u-{uuid.uuid4().hex[:8]}"
+        admin = f"adm-{uuid.uuid4().hex[:8]}"
+        ak, sk = self._user_with_key(user)
+        admin_ak, admin_sk = self._user_with_key(admin)
+        self.mgmt.put_user_policy(self.account_id, admin, "full", _full_policy())
+
+        admin_client = _make_client(self.endpoint, admin_ak, admin_sk, self.region)
+        client = _make_client(self.endpoint, ak, sk, self.region)
+        table = f"t-{uuid.uuid4().hex[:8]}"
+        try:
+            admin_client.create_table(
+                TableName=table,
+                AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            wait_for_active(admin_client, table)
+
+            self.mgmt.put_user_policy(self.account_id, user, "attrs-write", {
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": [
+                        "dynamodb:PutItem",
+                        "dynamodb:BatchWriteItem",
+                    ],
+                    "Resource": f"arn:aws:dynamodb:{self.region}:{self.account_id}:table/{table}",
+                    "Condition": {
+                        "ForAllValues:StringEquals": {
+                            "dynamodb:Attributes": ["pk", "allowed"]
+                        }
+                    },
+                }],
+            })
+
+            client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "put-ok"}, "allowed": {"S": "yes"}},
+            )
+            with pytest.raises(ClientError) as exc:
+                client.put_item(
+                    TableName=table,
+                    Item={
+                        "pk": {"S": "put-denied"},
+                        "allowed": {"S": "yes"},
+                        "secret": {"S": "no"},
+                    },
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+
+            client.batch_write_item(
+                RequestItems={table: [{
+                    "PutRequest": {
+                        "Item": {"pk": {"S": "batch-ok"}, "allowed": {"S": "yes"}}
+                    }
+                }]}
+            )
+            with pytest.raises(ClientError) as exc:
+                client.batch_write_item(
+                    RequestItems={table: [{
+                        "PutRequest": {
+                            "Item": {
+                                "pk": {"S": "batch-denied"},
+                                "allowed": {"S": "yes"},
+                                "secret": {"S": "no"},
+                            }
+                        }
+                    }]}
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+
+            client.transact_write_items(
+                TransactItems=[{
+                    "Put": {
+                        "TableName": table,
+                        "Item": {"pk": {"S": "txn-ok"}, "allowed": {"S": "yes"}},
+                    }
+                }]
+            )
+            with pytest.raises(ClientError) as exc:
+                client.transact_write_items(
+                    TransactItems=[{
+                        "Put": {
+                            "TableName": table,
+                            "Item": {
+                                "pk": {"S": "txn-denied"},
+                                "allowed": {"S": "yes"},
+                                "secret": {"S": "no"},
+                            },
+                        }
+                    }]
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+        finally:
+            try:
+                admin_client.delete_table(TableName=table)
+                wait_for_deleted(admin_client, table)
+            except Exception:
+                pass
+            self.mgmt.delete_user(self.account_id, user)
+            self.mgmt.delete_user(self.account_id, admin)
+
+    def test_transaction_authorization_uses_item_actions_and_enclosing_operation(self):
+        user = f"u-{uuid.uuid4().hex[:8]}"
+        admin = f"adm-{uuid.uuid4().hex[:8]}"
+        ak, sk = self._user_with_key(user)
+        admin_ak, admin_sk = self._user_with_key(admin)
+        self.mgmt.put_user_policy(self.account_id, admin, "full", _full_policy())
+
+        admin_client = _make_client(self.endpoint, admin_ak, admin_sk, self.region)
+        client = _make_client(self.endpoint, ak, sk, self.region)
+        table = f"t-{uuid.uuid4().hex[:8]}"
+        try:
+            admin_client.create_table(
+                TableName=table,
+                AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            wait_for_active(admin_client, table)
+            admin_client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "seed"}, "payload": {"S": "ok"}},
+            )
+
+            self.mgmt.put_user_policy(self.account_id, user, "txn-enclosing", {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": "dynamodb:GetItem",
+                        "Resource": f"arn:aws:dynamodb:{self.region}:{self.account_id}:table/{table}",
+                        "Condition": {
+                            "StringEquals": {
+                                "dynamodb:EnclosingOperation": "TransactGetItems"
+                            }
+                        },
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": "dynamodb:PutItem",
+                        "Resource": f"arn:aws:dynamodb:{self.region}:{self.account_id}:table/{table}",
+                        "Condition": {
+                            "StringEquals": {
+                                "dynamodb:EnclosingOperation": "TransactWriteItems"
+                            }
+                        },
+                    },
+                ],
+            })
+
+            txn_get = client.transact_get_items(
+                TransactItems=[{
+                    "Get": {"TableName": table, "Key": {"pk": {"S": "seed"}}}
+                }]
+            )
+            assert txn_get["Responses"][0]["Item"]["payload"]["S"] == "ok"
+            client.transact_write_items(
+                TransactItems=[{
+                    "Put": {
+                        "TableName": table,
+                        "Item": {"pk": {"S": "txn-put"}, "payload": {"S": "ok"}},
+                    }
+                }]
+            )
+
+            with pytest.raises(ClientError) as exc:
+                client.get_item(TableName=table, Key={"pk": {"S": "seed"}})
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+            with pytest.raises(ClientError) as exc:
+                client.put_item(
+                    TableName=table,
+                    Item={"pk": {"S": "standalone-put"}, "payload": {"S": "denied"}},
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+        finally:
+            try:
+                admin_client.delete_table(TableName=table)
+                wait_for_deleted(admin_client, table)
+            except Exception:
+                pass
+            self.mgmt.delete_user(self.account_id, user)
+            self.mgmt.delete_user(self.account_id, admin)
+
+    def test_attribute_policy_requires_effective_specific_attributes(self):
+        user = f"u-{uuid.uuid4().hex[:8]}"
+        admin = f"adm-{uuid.uuid4().hex[:8]}"
+        ak, sk = self._user_with_key(user)
+        admin_ak, admin_sk = self._user_with_key(admin)
+        self.mgmt.put_user_policy(self.account_id, admin, "full", _full_policy())
+
+        admin_client = _make_client(self.endpoint, admin_ak, admin_sk, self.region)
+        client = _make_client(self.endpoint, ak, sk, self.region)
+        table = f"t-{uuid.uuid4().hex[:8]}"
+        try:
+            admin_client.create_table(
+                TableName=table,
+                AttributeDefinitions=[{"AttributeName": "pk", "AttributeType": "S"}],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            wait_for_active(admin_client, table)
+            admin_client.put_item(
+                TableName=table,
+                Item={
+                    "pk": {"S": "row"},
+                    "allowed": {"S": "yes"},
+                    "secret": {"S": "no"},
+                },
+            )
+
+            self.mgmt.put_user_policy(self.account_id, user, "attrs-read", {
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": ["dynamodb:GetItem", "dynamodb:Query"],
+                    "Resource": f"arn:aws:dynamodb:{self.region}:{self.account_id}:table/{table}",
+                    "Condition": {
+                        "ForAllValues:StringEquals": {
+                            "dynamodb:Attributes": ["pk", "allowed"]
+                        },
+                        "StringEqualsIfExists": {
+                            "dynamodb:Select": "SPECIFIC_ATTRIBUTES"
+                        },
+                    },
+                }],
+            })
+
+            got = client.get_item(
+                TableName=table,
+                Key={"pk": {"S": "row"}},
+                ProjectionExpression="pk, allowed",
+            )
+            assert "secret" not in got["Item"]
+
+            with pytest.raises(ClientError) as exc:
+                client.get_item(TableName=table, Key={"pk": {"S": "row"}})
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+
+            queried = client.query(
+                TableName=table,
+                KeyConditionExpression="pk = :pk",
+                ExpressionAttributeValues={":pk": {"S": "row"}},
+                ProjectionExpression="pk, allowed",
+            )
+            assert "secret" not in queried["Items"][0]
+
+            with pytest.raises(ClientError) as exc:
+                client.query(
+                    TableName=table,
+                    KeyConditionExpression="pk = :pk",
+                    ExpressionAttributeValues={":pk": {"S": "row"}},
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+        finally:
+            try:
+                admin_client.delete_table(TableName=table)
+                wait_for_deleted(admin_client, table)
+            except Exception:
+                pass
+            self.mgmt.delete_user(self.account_id, user)
+            self.mgmt.delete_user(self.account_id, admin)
+
+    def test_index_query_requires_index_resource_arn(self):
+        user = f"u-{uuid.uuid4().hex[:8]}"
+        admin = f"adm-{uuid.uuid4().hex[:8]}"
+        ak, sk = self._user_with_key(user)
+        admin_ak, admin_sk = self._user_with_key(admin)
+        self.mgmt.put_user_policy(self.account_id, admin, "full", _full_policy())
+
+        admin_client = _make_client(self.endpoint, admin_ak, admin_sk, self.region)
+        client = _make_client(self.endpoint, ak, sk, self.region)
+        table = f"t-{uuid.uuid4().hex[:8]}"
+        index = "gsi-authz"
+        try:
+            admin_client.create_table(
+                TableName=table,
+                AttributeDefinitions=[
+                    {"AttributeName": "pk", "AttributeType": "S"},
+                    {"AttributeName": "gpk", "AttributeType": "S"},
+                ],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                GlobalSecondaryIndexes=[{
+                    "IndexName": index,
+                    "KeySchema": [{"AttributeName": "gpk", "KeyType": "HASH"}],
+                    "Projection": {"ProjectionType": "ALL"},
+                }],
+                BillingMode="PAY_PER_REQUEST",
+            )
+            wait_for_active(admin_client, table)
+            admin_client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "row"}, "gpk": {"S": "idx"}, "payload": {"S": "ok"}},
+            )
+
+            self.mgmt.put_user_policy(self.account_id, user, "table-query-only", {
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": "dynamodb:Query",
+                    "Resource": f"arn:aws:dynamodb:{self.region}:{self.account_id}:table/{table}",
+                }],
+            })
+
+            base = client.query(
+                TableName=table,
+                KeyConditionExpression="pk = :pk",
+                ExpressionAttributeValues={":pk": {"S": "row"}},
+            )
+            assert base["Items"][0]["payload"]["S"] == "ok"
+
+            with pytest.raises(ClientError) as exc:
+                client.query(
+                    TableName=table,
+                    IndexName=index,
+                    KeyConditionExpression="gpk = :gpk",
+                    ExpressionAttributeValues={":gpk": {"S": "idx"}},
+                )
+            assert exc.value.response["Error"]["Code"] == "AccessDeniedException"
+        finally:
+            try:
+                admin_client.delete_table(TableName=table)
+                wait_for_deleted(admin_client, table)
+            except Exception:
+                pass
+            self.mgmt.delete_user(self.account_id, user)
+            self.mgmt.delete_user(self.account_id, admin)
+
+    def test_index_query_inherits_table_resource_tags(self):
+        user = f"u-{uuid.uuid4().hex[:8]}"
+        admin = f"adm-{uuid.uuid4().hex[:8]}"
+        ak, sk = self._user_with_key(user)
+        admin_ak, admin_sk = self._user_with_key(admin)
+        self.mgmt.put_user_policy(self.account_id, admin, "full", _full_policy())
+
+        admin_client = _make_client(self.endpoint, admin_ak, admin_sk, self.region)
+        client = _make_client(self.endpoint, ak, sk, self.region)
+        table = f"t-{uuid.uuid4().hex[:8]}"
+        index = "gsi-tags"
+        try:
+            admin_client.create_table(
+                TableName=table,
+                AttributeDefinitions=[
+                    {"AttributeName": "pk", "AttributeType": "S"},
+                    {"AttributeName": "gpk", "AttributeType": "S"},
+                ],
+                KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"}],
+                GlobalSecondaryIndexes=[{
+                    "IndexName": index,
+                    "KeySchema": [{"AttributeName": "gpk", "KeyType": "HASH"}],
+                    "Projection": {"ProjectionType": "ALL"},
+                }],
+                BillingMode="PAY_PER_REQUEST",
+                Tags=[{"Key": "Env", "Value": "dev"}],
+            )
+            wait_for_active(admin_client, table)
+            admin_client.put_item(
+                TableName=table,
+                Item={"pk": {"S": "row"}, "gpk": {"S": "idx"}, "payload": {"S": "ok"}},
+            )
+
+            self.mgmt.put_user_policy(self.account_id, user, "tagged-index-query", {
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Effect": "Allow",
+                    "Action": "dynamodb:Query",
+                    "Resource": (
+                        f"arn:aws:dynamodb:{self.region}:{self.account_id}:"
+                        f"table/{table}/index/{index}"
+                    ),
+                    "Condition": {
+                        "StringEquals": {"aws:ResourceTag/Env": "dev"}
+                    },
+                }],
+            })
+
+            indexed = client.query(
+                TableName=table,
+                IndexName=index,
+                KeyConditionExpression="gpk = :gpk",
+                ExpressionAttributeValues={":gpk": {"S": "idx"}},
+            )
+            assert indexed["Items"][0]["payload"]["S"] == "ok"
+        finally:
+            try:
+                admin_client.delete_table(TableName=table)
+                wait_for_deleted(admin_client, table)
+            except Exception:
+                pass
+            self.mgmt.delete_user(self.account_id, user)
+            self.mgmt.delete_user(self.account_id, admin)
+
     def test_explicit_deny_overrides_allow(self):
         user = f"u-{uuid.uuid4().hex[:8]}"
         ak, sk = self._user_with_key(user)

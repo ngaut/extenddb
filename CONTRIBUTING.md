@@ -37,14 +37,14 @@ We suggest following the workflow below for proposing and contributing improveme
 ### Build
 
 ```bash
-cargo build --workspace
+cargo build -j12 --workspace
 ```
 
 ### Run Tests
 
 ```bash
 # Rust unit tests
-cargo test --workspace
+cargo test -j12 --workspace
 
 # Integration tests (requires a running extenddb server)
 devtools/run-tests --extenddb --pytest
@@ -55,11 +55,11 @@ devtools/run-tests --extenddb --pytest
 All contributions must pass:
 
 ```bash
-cargo fmt --check
-cargo clippy -- -W clippy::pedantic -W clippy::unwrap_used -W clippy::expect_used
+cargo fmt --all -- --check
+cargo clippy -j12 --workspace --all-targets -- -D warnings
 ```
 
-- Use `cargo fmt` before committing.
+- Use `cargo fmt --all` before committing.
 - Address all clippy warnings or add `#[allow(...)]` with a justification comment.
 - Avoid `.unwrap()` and `.expect()` in library crates — use `?` or explicit error handling.
 

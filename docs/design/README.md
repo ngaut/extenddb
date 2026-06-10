@@ -12,7 +12,7 @@ This directory contains the authoritative design documents for ExtendDB (extendd
 | 04 | [Storage](04-component-storage.md) | StorageEngine traits, input/output types, PostgreSQL and TiDB backends, schema design, pagination, GSI consistency (`extenddb-storage`, `extenddb-storage-postgres`, `extenddb-storage-tidb` crates) |
 | 05 | [Auth](05-component-auth.md) | AuthProvider trait, SigV4 validation, IAM policy engine, credential encryption (`extenddb-auth` crate) |
 | 06 | [Server](06-component-server.md) | HTTP server, routing, middleware pipeline, response formatting, TLS, rate limiting, throughput tracking (`extenddb-server` crate) |
-| 07 | [Streams](07-component-streams.md) | DynamoDB Streams design space — capture mechanism, shard management, retention (high-level; detailed design deferred) |
+| 07 | [Streams](07-component-streams.md) | Implemented DynamoDB Streams design, shard iterators, retention, and compatibility boundaries |
 | 08 | [Configuration](08-component-config.md) | TOML config, env vars, CLI, logging, metrics, health checks, deployment (VM, Kubernetes, Docker) |
 | 09 | [Testing](09-testing.md) | Current test surfaces, external suite registry, TiDB acceptance gate, and required verification gates |
 | 10 | [Licenses](10-dependency-licenses.md) | Licensing summary for third-party dependencies |

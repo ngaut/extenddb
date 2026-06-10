@@ -25,9 +25,13 @@ Each DynamoDB request issues 6+ catalog queries before dispatch can begin:
 | 6 | Resource tags | `fetch_resource_tags` |
 | 7 | TableKeyInfo (item-level ops only) | `request_helpers.rs::authorize_request` (serial, outside the `try_join!`) |
 
-Queries 2–6 fan out concurrently via `tokio::try_join!` (`crates/server/src/authorization.rs:82`), but they still each consume a connection from the catalog pool. With a 1024-connection catalog pool (post-PR #46), the pool itself is no longer the limit — but the **per-request DB roundtrips and JSON-parse cost** are now the dominant overhead before dispatch.
+Without the cache, queries 2-6 fan out concurrently but still each consume a
+connection from the catalog pool. With the configured 1024-connection catalog
+pool, the pool itself is no longer the limit; the per-request DB roundtrips and
+policy JSON parse cost dominate before dispatch.
 
-In addition, every call to `fetch_policies` reparses policy JSON via `PolicyDocument::from_json` (`crates/server/src/authorization.rs:189`). Caching parsed `PolicyDocument` values eliminates that cost, not just the DB roundtrip.
+Caching parsed `PolicyDocument` values eliminates the parse cost, not just the
+DB roundtrip.
 
 This document specifies an in-memory cache with stale-while-revalidate semantics that eliminates the steady-state cost of these queries while preserving correctness on credential rotation and policy change.
 
@@ -110,7 +114,7 @@ When the management API **or the web console** mutates IAM data, it invalidates 
 
 `UpdateTimeToLive` does NOT invalidate `TableKeyInfo` because TTL state is not part of `TableKeyInfo`.
 
-A cross-process invalidation channel is **not** added in this iteration. Multi-node deployments document the configured TTL as the worst-case lag.
+A cross-process invalidation channel is **not implemented**. Multi-node deployments document the configured TTL as the worst-case lag.
 
 ## 6.1. Manual invalidation: admin break-glass API
 
@@ -173,7 +177,7 @@ Concrete subcommands match the `scope` taxonomy 1:1: `cache invalidate all --yes
 
 ### Console
 
-A new admin-only page at `/console/cache` renders a form whose scope `<select>` reveals the relevant selector inputs via JS. Submitting POSTs to `/console/cache/invalidate` (CSRF-protected, admin-gated). The page also shows a live read of `/management/auth-cache-metrics` so operators can see what's cached before flushing it. Submitting `scope=all` requires typing `INVALIDATE` into a confirmation field, mirroring the CLI's `--yes`.
+The admin-only page at `/console/cache` renders a form whose scope `<select>` reveals the relevant selector inputs via JS. Submitting POSTs to `/console/cache/invalidate` (CSRF-protected, admin-gated). Submitting `scope=all` requires typing `INVALIDATE` into a confirmation field, mirroring the CLI's `--yes`.
 
 ### What this is *not*
 
@@ -424,7 +428,7 @@ future storage-backed fanout shape.
 >
 > Self-induced single-key changes via the admin API or the web console propagate instantly on the local instance via write-through invalidation; both paths share the same `AuthCacheRegistry`.
 >
-> To force-flush the cache without restart: not currently supported. To disable: set `auth.cache.enabled = false` in `extenddb.toml` and restart.
+> To force-flush the local instance without restart: use `extenddb manage cache invalidate all --yes`, `POST /management/cache/invalidate` with `scope=all`, or the `/console/cache` confirmation form. To disable the cache: set `auth.cache.enabled = false` in `extenddb.toml` and restart.
 
 ---
 
@@ -434,14 +438,14 @@ future storage-backed fanout shape.
 - **Verdict cache (cache `Allow`/`Deny` for `(principal, action, resource)`).** Considered. Rejected: condition expressions can depend on per-request context (`aws:CurrentTime`, request IP, leading keys, attribute names) that varies per call. Caching the verdict requires either invalidating on every condition-relevant input change (impractical) or only caching for a subset of verdicts (complexity not worth it). Caching the inputs and re-evaluating in CPU per request gives the same throughput at lower complexity and zero correctness risk.
 - **Hand-roll the cache primitive.** Rejected. ~200 lines of concurrent code we'd then have to maintain, vs. ~80 lines on top of `moka`. `moka` is well-tested and widely used.
 - **Background scan worker for refresh.** Rejected, see §4.
-- **Cross-process invalidation via Postgres `LISTEN/NOTIFY`.** Considered for the multi-node case. Out of scope for this iteration; see Appendix B for the full proposed design.
+- **Cross-process invalidation via Postgres `LISTEN/NOTIFY`.** Considered for the multi-node case. Not implemented; see Appendix B for the full proposed design.
 - **Long TTL (5 minutes or more).** Rejected. The marginal perf gain over 60 s is negligible (cache hit rates are already 99.9%+ at 60 s under load). Long TTLs trade safety for nothing.
 
 ---
 
 ## Appendix B — Multi-instance cache invalidation (deferred)
 
-> **Status:** designed, **not implemented**. Single-instance correctness is the focus of the initial cache PR; multi-instance fanout requires additional engineering review (failure modes, schema, ordering guarantees) before implementation.
+> **Status:** designed, **not implemented**. Single-instance correctness is implemented; multi-instance fanout requires additional engineering review (failure modes, schema, ordering guarantees) before implementation.
 >
 > When this lands, every IAM-mutation handler will replace its single in-process `invalidate_*` call with a transactional pair: enqueue a row + `pg_notify`. Listeners on every other instance receive the notification and apply the local invalidation.
 

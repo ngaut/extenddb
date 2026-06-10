@@ -145,7 +145,7 @@ After authentication, the authorization layer evaluates IAM policies using a 5-p
 4. **Identity Allow** — scan identity policies (user, group, role). Any matching Allow → access granted.
 5. **Implicit Deny** — no matching Allow → access denied.
 
-Policy conditions support all IAM condition operators: `StringEquals`, `StringNotEquals`, `StringEqualsIgnoreCase`, `StringLike`, `StringNotLike`, `NumericEquals`, `NumericNotEquals`, `NumericLessThan`, `NumericLessThanEquals`, `NumericGreaterThan`, `NumericGreaterThanEquals`, `DateEquals`, `DateNotEquals`, `DateLessThan`, `DateLessThanEquals`, `DateGreaterThan`, `DateGreaterThanEquals`, `Bool`, `Null`, `ArnEquals`, `ArnNotEquals`, `ArnLike`, `ArnNotLike`, plus `ForAllValues`, `ForAnyValue`, and `IfExists` modifiers. Supported condition keys include `aws:PrincipalTag/*`, `dynamodb:ResourceTag/*`, `dynamodb:LeadingKeys`, `dynamodb:Attributes`, `dynamodb:Select`, `dynamodb:ReturnValues`, `dynamodb:ReturnConsumedCapacity`, `dynamodb:FullTableScan`, and `dynamodb:EnclosingOperation`.
+Policy conditions support all IAM condition operators: `StringEquals`, `StringNotEquals`, `StringEqualsIgnoreCase`, `StringLike`, `StringNotLike`, `NumericEquals`, `NumericNotEquals`, `NumericLessThan`, `NumericLessThanEquals`, `NumericGreaterThan`, `NumericGreaterThanEquals`, `DateEquals`, `DateNotEquals`, `DateLessThan`, `DateLessThanEquals`, `DateGreaterThan`, `DateGreaterThanEquals`, `Bool`, `Null`, `ArnEquals`, `ArnNotEquals`, `ArnLike`, `ArnNotLike`, plus `ForAllValues`, `ForAnyValue`, and `IfExists` modifiers. Supported condition keys include `aws:PrincipalTag/*`, `aws:ResourceTag/*`, `dynamodb:LeadingKeys`, `dynamodb:Attributes`, `dynamodb:Select`, `dynamodb:ReturnValues`, `dynamodb:ReturnConsumedCapacity`, `dynamodb:FullTableScan`, and `dynamodb:EnclosingOperation`.
 
 ### Credential Storage
 
@@ -195,7 +195,7 @@ use a background cleanup task.
 
 ### SQL Injection Defense
 
-All user-supplied strings are validated at the engine layer before reaching storage. The storage layer uses parameterized queries exclusively — no dynamic SQL construction with user input. See `docs/adr/sql-injection-defense.md`.
+All user-supplied strings are validated before storage uses them. Storage uses parameterized queries for values; backend-specific DDL paths validate and quote identifiers before formatting. See `docs/adr/sql-injection-defense.md`.
 
 ### BoxFuture vs async_trait
 
@@ -241,7 +241,7 @@ Catalog state is never cached because correctness requires every request to see 
 
 - **Table metadata** (key schema, attribute definitions, status, billing mode): A stale cache could serve the wrong key schema after a table is deleted and recreated with the same name but different schema. The new table has a different `table_id`, different key schema, and different indexes — stale cache serves wrong schema, writes corrupt data, reads return garbage.
 - **IAM policies and credentials**: A revoked Deny policy still cached as absent creates a security gap. A deleted access key still cached as valid allows unauthorized access.
-- **Tags**: Tag-based authorization (`dynamodb:ResourceTag/*`) requires current tag values.
+- **Tags**: Tag-based authorization (`aws:ResourceTag/*`) requires current tag values.
 - **GSI definitions**: Stale GSI metadata could route reads or writes through the wrong backend-specific index shape.
 
 ### The Table-Name-Reuse Problem

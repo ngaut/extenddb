@@ -7,9 +7,9 @@ use extenddb_core::expression::{Expr, ExpressionMaps};
 use extenddb_core::types::{Item, TableKeyInfo};
 use extenddb_storage::StreamCapture;
 use extenddb_storage::error::StorageError;
-use extenddb_storage::util::{SortKeyValue, parse_sk, pk_to_text, sk_column, sk_info};
+use extenddb_storage::util::{SortKeyValue, composite_pk_to_text, parse_sk, sk_column, sk_info};
 
-use super::index::{enqueue_async_indexes, fetch_indexes_for_table, pk_hash, sync_indexes};
+use super::index::{enqueue_async_indexes, fetch_indexes_for_write, pk_hash, sync_indexes};
 use super::query::check_condition;
 use super::tx_helpers::write_stream_record_in_tx;
 use super::{data_table_name, json_to_item};
@@ -28,14 +28,10 @@ impl PostgresEngine {
     ) -> Result<Option<Item>, StorageError> {
         let ddb_table = data_table_name(&key_info.table_id);
 
-        let pk_name = &key_info.key_schema[0].attribute_name;
-        let pk_value = key
-            .get(pk_name)
-            .ok_or_else(|| StorageError::Internal("missing partition key".to_owned()))?;
-        let pk_text = pk_to_text(pk_value)?;
+        let pk_text = composite_pk_to_text(key, &key_info.key_schema)?;
 
         // Fetch indexes for GSI/LSI sync and async updates.
-        let indexes = fetch_indexes_for_table(&key_info.table_id, &self.pool).await?;
+        let indexes = fetch_indexes_for_write(key_info, &self.pool).await?;
         let sys_delay = if indexes.is_empty() {
             0
         } else {
@@ -67,7 +63,7 @@ impl PostgresEngine {
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
 
                 let old: Option<(serde_json::Value,)> =
-                    bind_sk_fetch_optional!(&select_sql, pk_text.as_ref(), &sk, &mut *tx)?;
+                    bind_sk_fetch_optional!(&select_sql, pk_text.as_str(), &sk, &mut *tx)?;
 
                 if let Some((ref old_json,)) = old {
                     let old_item: Item = json_to_item(old_json.clone())?;
@@ -96,21 +92,21 @@ impl PostgresEngine {
                 match &sk {
                     SortKeyValue::S(s) => {
                         sqlx::query(&delete_sql)
-                            .bind(pk_text.as_ref())
+                            .bind(pk_text.as_str())
                             .bind(s)
                             .execute(&mut *tx)
                             .await
                     }
                     SortKeyValue::N(n) => {
                         sqlx::query(&delete_sql)
-                            .bind(pk_text.as_ref())
+                            .bind(pk_text.as_str())
                             .bind(n)
                             .execute(&mut *tx)
                             .await
                     }
                     SortKeyValue::B(b) => {
                         sqlx::query(&delete_sql)
-                            .bind(pk_text.as_ref())
+                            .bind(pk_text.as_str())
                             .bind(b)
                             .execute(&mut *tx)
                             .await
@@ -163,7 +159,7 @@ impl PostgresEngine {
                 if let Some(ref q) = self.gsi_queue {
                     enqueue_async_indexes(
                         q,
-                        pk_hash(pk_text.as_ref()),
+                        pk_hash(pk_text.as_str()),
                         &key_info.account_id,
                         &key_info.table_name,
                         &key_info.table_id,
@@ -187,21 +183,21 @@ impl PostgresEngine {
                 match &sk {
                     SortKeyValue::S(s) => {
                         sqlx::query(&delete_sql)
-                            .bind(pk_text.as_ref())
+                            .bind(pk_text.as_str())
                             .bind(s)
                             .execute(&self.data_pool)
                             .await
                     }
                     SortKeyValue::N(n) => {
                         sqlx::query(&delete_sql)
-                            .bind(pk_text.as_ref())
+                            .bind(pk_text.as_str())
                             .bind(n)
                             .execute(&self.data_pool)
                             .await
                     }
                     SortKeyValue::B(b) => {
                         sqlx::query(&delete_sql)
-                            .bind(pk_text.as_ref())
+                            .bind(pk_text.as_str())
                             .bind(b)
                             .execute(&self.data_pool)
                             .await
@@ -224,7 +220,7 @@ impl PostgresEngine {
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
 
                 let old: Option<(serde_json::Value,)> = sqlx::query_as(&select_sql)
-                    .bind(pk_text.as_ref())
+                    .bind(pk_text.as_str())
                     .fetch_optional(&mut *tx)
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
@@ -251,7 +247,7 @@ impl PostgresEngine {
                 }
 
                 sqlx::query(&delete_sql)
-                    .bind(pk_text.as_ref())
+                    .bind(pk_text.as_str())
                     .execute(&mut *tx)
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;
@@ -301,7 +297,7 @@ impl PostgresEngine {
                 if let Some(ref q) = self.gsi_queue {
                     enqueue_async_indexes(
                         q,
-                        pk_hash(pk_text.as_ref()),
+                        pk_hash(pk_text.as_str()),
                         &key_info.account_id,
                         &key_info.table_name,
                         &key_info.table_id,
@@ -323,7 +319,7 @@ impl PostgresEngine {
             } else {
                 let delete_sql = format!("DELETE FROM {ddb_table} WHERE pk = $1");
                 sqlx::query(&delete_sql)
-                    .bind(pk_text.as_ref())
+                    .bind(pk_text.as_str())
                     .execute(&self.data_pool)
                     .await
                     .map_err(|e| StorageError::Internal(e.to_string()))?;

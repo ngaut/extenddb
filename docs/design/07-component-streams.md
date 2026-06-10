@@ -1,172 +1,105 @@
-# extenddb — Component Design: DynamoDB Streams
+# extenddb - Component Design: DynamoDB Streams
 
-**Version:** 1.0
-**Date:** 2026-04-03
-**Status:** Draft — High-Level Design Choices Only (Detailed Design Deferred)
+**Version:** 2.0
+**Date:** 2026-06-07
+**Status:** Implemented design
 
 ## 1. Purpose
 
-DynamoDB Streams provides change data capture (CDC) for DynamoDB tables. When enabled on a table, every write (PutItem, UpdateItem, DeleteItem, BatchWriteItem, TransactWriteItems) generates a stream record containing the item's key and optionally the old/new images.
+DynamoDB Streams provides change data capture for table writes. When streams
+are enabled, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, and
+`TransactWriteItems` generate stream records with keys and the configured
+old/new image shape. Backend-owned TTL deletes are backend-specific:
+PostgreSQL's TTL worker emits service REMOVE stream records, while TiDB delegates
+item expiry to native TTL and does not synthesize TTL service records.
 
-This document outlines the design space and recommended direction. Detailed design decisions (shard management, retention, iterator semantics) are deferred until the core data plane is stable.
+ExtendDB serves DynamoDB and DynamoDB Streams on the same HTTPS endpoint. The
+wire target prefix distinguishes operations:
 
-## 2. API Surface
+| Prefix | Operations |
+|--------|------------|
+| `DynamoDB_20120810` | Table and item APIs |
+| `DynamoDBStreams_20120810` | `ListStreams`, `DescribeStream`, `GetShardIterator`, `GetRecords` |
 
-Four operations, served on the same HTTP endpoint as DynamoDB operations:
+Both paths use mandatory SigV4 auth and the same account isolation model.
 
-| Operation | Description |
-|-----------|-------------|
-| `DescribeStream` | Return stream ARN, status, shard list with parent/child relationships |
-| `ListStreams` | List streams, optionally filtered by table name |
-| `GetShardIterator` | Get an iterator for a shard (TRIM_HORIZON, LATEST, AT_SEQUENCE_NUMBER, AFTER_SEQUENCE_NUMBER) |
-| `GetRecords` | Read up to 1000 records (or 1 MB) from a shard using an iterator |
+## 2. Storage Model
 
-**Note:** In real DynamoDB, Streams is a separate service with its own endpoint (`streams.dynamodb.<region>.amazonaws.com`) and its own SDK client (`boto3.client('dynamodbstreams')` in Python, `DynamoDbStreamsClient` in Java). extenddb serves both services on a single port. This works because SDK clients accept `endpoint_url` overrides — the user sets both `AWS_ENDPOINT_URL_DYNAMODB` and `AWS_ENDPOINT_URL_DYNAMODB_STREAMS` to the same extenddb address. The `X-Amz-Target` prefix distinguishes the two services: DynamoDB operations use `DynamoDB_20120810.<Op>`, Streams operations use `DynamoDBStreams_20120810.<Op>`. Both use `dynamodb` as the SigV4 signing name, so authentication is identical. See `01-requirements.md` §11 and `08-component-config.md` §10 for SDK configuration details.
+Streams are backend-owned storage state, not frontend-local state.
 
-## 3. Stream Record Format
+- Stream records are written in the same storage transaction as the data
+  mutation when the backend can do so.
+- TiDB stages native stream records inside write transactions and finalizes
+  them through backend-native append tables and stream generations.
+- PostgreSQL stores stream records in the data database with fixed shards and
+  periodic retention cleanup.
+- Stream metadata is tied to table metadata through stream labels, so disabled
+  stream generations remain addressable during their retention window.
 
-```rust
-pub struct StreamRecord {
-    pub event_id: String,
-    pub event_name: StreamEventName,  // INSERT, MODIFY, REMOVE
-    pub event_version: String,        // "1.1"
-    pub event_source: String,         // "aws:dynamodb"
-    pub aws_region: String,
-    pub dynamodb: StreamRecordData,
-}
+The storage trait exposes stream methods for record writes, shard validation,
+stream description/listing, iterator reads, latest sequence lookup, and reader
+lease claiming.
 
-pub struct StreamRecordData {
-    pub approximate_creation_date_time: i64,  // epoch seconds
-    pub keys: BTreeMap<String, AttributeValue>,
-    pub new_image: Option<BTreeMap<String, AttributeValue>>,
-    pub old_image: Option<BTreeMap<String, AttributeValue>>,
-    pub sequence_number: String,
-    pub size_bytes: i64,
-    pub stream_view_type: StreamViewType,
-}
+## 3. Shards And Iterators
 
-pub enum StreamEventName { Insert, Modify, Remove }
-pub enum StreamViewType { KeysOnly, NewImage, OldImage, NewAndOldImages }
-```
+ExtendDB uses fixed hash-based shards per stream generation. Shard IDs encode
+the shard index, stream label, and table identity so stale iterator tokens
+cannot silently drift to a new table generation.
 
-## 4. Design Space
+`GetShardIterator` validates the stream and shard, claims a bounded reader
+lease, resolves the requested iterator type to an internal
+`AFTER_SEQUENCE_NUMBER` position, and returns an opaque base64 token containing:
 
-### 4.1 Capture Mechanism
+- shard ID
+- normalized iterator mode
+- sequence position
+- creation timestamp
+- stream ARN
+- reader ID
 
-| Option | Description | Pros | Cons |
-|--------|-------------|------|------|
-| **A: Application-layer** | Core operation handlers call `storage.write_stream_record()` after successful writes | Portable across all backends; consistent behavior | Slight overhead per write; must handle failure (stream write fails after data write) |
-| **B: Storage-layer triggers** | PostgreSQL triggers / CDC (e.g., logical replication) | Zero application overhead; native to backend | Backend-specific; different behavior per backend; harder to control stream view type |
-| **C: Hybrid** | Application layer captures the record, storage layer persists it in the same transaction | Atomic with the data write; portable capture logic | Requires the storage trait to support "write data + stream record in one transaction" |
+`GetRecords` decodes the token, rejects expired iterators after 15 minutes,
+revalidates the shard against the authenticated account and original stream
+ARN, enforces the reader lease limit, reads records, and returns a fresh next
+iterator.
 
-**Recommended: Option C (Hybrid)**
-The core handler constructs the stream record (it has access to old/new images). The storage engine persists the stream record in the same transaction as the data write. This ensures atomicity (no stream record without a data write, no data write without a stream record) while keeping the capture logic portable.
+## 4. Retention And Lifecycle
 
-### 4.2 Shard Management
+DynamoDB-compatible stream retention is 24 hours by default. PostgreSQL prunes
+old stream rows with a worker. TiDB uses native generation metadata and backend
+cleanup paths so disabled generations and their records age out without
+frontend replay logic.
 
-| Option | Description | Pros | Cons |
-|--------|-------------|------|------|
-| **A: Fixed shards** | One shard per table, never splits | Simple; predictable | Doesn't scale; single reader bottleneck |
-| **B: Hash-based shards** | Fixed number of shards per table (e.g., 4), records assigned by partition key hash | Parallel reads; simple assignment | Fixed parallelism; no dynamic scaling |
-| **C: Dynamic splitting** | Shards split when throughput exceeds threshold, creating parent/child relationships | Matches DynamoDB behavior; scales | Complex; requires shard lineage tracking |
+Enabling or disabling streams updates table metadata and stream-generation
+metadata atomically with the backend's catalog path. The data plane reads the
+cached table key info to decide whether a write should capture stream data.
 
-**Recommended: Option B initially, migrate to C later**
-Start with a configurable fixed number of shards per table (default: 4). Records are assigned to shards by hashing the partition key. This supports parallel consumers without the complexity of dynamic splitting. The shard iterator API is designed to support parent/child relationships from day one, so migrating to dynamic splitting later is backward-compatible.
+## 5. Compatibility Boundaries
 
-### 4.3 Record Storage
+Implemented:
 
-| Option | Description |
-|--------|-------------|
-| **A: Same database** | Stream records stored in the storage backend (e.g., `_dynamodb_stream_records` table in PostgreSQL) |
-| **B: Separate store** | Stream records in a dedicated system (e.g., Kafka, Redis Streams) |
+- `ListStreams`
+- `DescribeStream`
+- `GetShardIterator`
+- `GetRecords`
+- fixed shard descriptions
+- stream view types: `KEYS_ONLY`, `NEW_IMAGE`, `OLD_IMAGE`, `NEW_AND_OLD_IMAGES`
+- 15-minute shard iterator expiry
+- bounded simultaneous readers per shard
+- stream ARN and account rebinding for iterator tokens
 
-**Recommended: Option A**
-Store stream records in the same database as the data. This allows atomic writes (data + stream record in one transaction) and avoids introducing additional infrastructure dependencies. The `StorageEngine` trait already includes stream record methods.
+Not implemented:
 
-### 4.4 Retention & Cleanup
-
-DynamoDB retains stream records for 24 hours. Options:
-- **Background worker**: Periodically delete records older than the retention period
-- **TTL on the storage side**: Backend-native TTL where available, or an application-level scheduled task
-
-**Recommended:** Application-level background task (same pattern as TTL cleanup), configurable retention period (default: 24 hours).
-
-## 5. Integration Points
-
-### 5.1 Write Path Integration
-
-```
-PutItem/DeleteItem handler:
-  1. Construct full StreamRecord (engine knows old/new images for Put and Delete)
-  2. Call storage.put_item(..., stream_record) or storage.delete_item(..., stream_record)
-     - Storage executes both in a single transaction
-  3. Return response
-
-UpdateItem handler:
-  1. Construct StreamCapture metadata (stream ARN, view type, shard, sequence, keys)
-     — engine does NOT know the new_image yet (it depends on apply_update inside the tx)
-  2. Call storage.update_item(..., stream_capture)
-     - Storage: SELECT FOR UPDATE, apply_update, then construct full StreamRecord
-       with old_image/new_image based on stream_view_type, all in one transaction
-  3. Return response
-```
-
-The `StorageEngine` trait supports two patterns for atomic stream writes:
-
-- **PutItem/DeleteItem:** The engine pre-constructs the full `StreamRecord` and passes it via the `stream_record` field. The storage backend simply INSERTs it in the same transaction.
-- **UpdateItem:** The engine passes a `StreamCapture` struct with metadata. The storage backend constructs the full `StreamRecord` after `apply_update` produces the `new_image`, then INSERTs it in the same transaction.
-
-```rust
-// PutItem/DeleteItem: engine pre-constructs the full record
-pub struct PutItemInput {
-    // ...
-    pub stream_record: Option<StreamRecord>,  // None if streams not enabled
-}
-
-// UpdateItem: engine passes metadata, storage constructs the record
-pub struct UpdateItemInput {
-    // ...
-    pub stream_capture: Option<StreamCapture>,  // None if streams not enabled
-}
-
-/// Metadata for stream record construction inside the storage transaction.
-pub struct StreamCapture {
-    pub stream_arn: String,
-    pub stream_view_type: StreamViewType,
-    pub shard_id: String,
-    pub sequence_number: String,
-    pub event_name: StreamEventName,
-    pub keys: BTreeMap<String, AttributeValue>,
-}
-```
-
-### 5.2 Read Path (GetRecords)
-
-```
-GetRecords handler:
-  1. Validate shard iterator
-  2. Call storage.get_stream_records(shard_id, after_sequence, limit)
-  3. Format response with records + next shard iterator
-```
-
-## 6. Deferred Decisions
-
-| Decision | Status | Notes |
-|----------|--------|-------|
-| Dynamic shard splitting algorithm | Deferred | Start with fixed shards |
-| Shard iterator expiration (DynamoDB: 15 min) | Deferred | Implement after basic flow works |
-| Cross-instance stream consistency | Deferred | Relevant for multi-instance deployments |
-| Stream record deduplication | Deferred | Relevant for at-least-once delivery guarantees |
-| Kinesis adapter compatibility | Deferred | DynamoDB Streams has a Kinesis-compatible adapter |
-| Stream enable/disable lifecycle | Deferred | What happens to in-flight records when streams are disabled |
+- dynamic shard splitting
+- Kinesis adapter compatibility
+- multi-region stream replication
 
 ---
 
 ## License
 
-Copyright 2026 ExtendDB contributors. Licensed under the Apache License, Version 2.0.
-See [LICENSE](../../LICENSE) for the full text.
+Copyright 2026 ExtendDB contributors. Licensed under the Apache License,
+Version 2.0. See [LICENSE](../../LICENSE) for the full text.
 
 This software is provided "as is" without warranty of any kind. ExtendDB is not
-affiliated with, endorsed by, or sponsored by Amazon Web Services. "DynamoDB" is a trademark
-of Amazon.com, Inc.
+affiliated with, endorsed by, or sponsored by Amazon Web Services. "DynamoDB" is
+a trademark of Amazon.com, Inc.

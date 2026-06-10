@@ -89,7 +89,7 @@ def _create_user_with_key(mgmt: ManagementClient, account_id: str,
 # ---------------------------------------------------------------------------
 
 class TestResourceTagCondition:
-    """Policies with dynamodb:ResourceTag/* conditions."""
+    """Policies with aws:ResourceTag/* conditions."""
 
     @pytest.fixture(autouse=True)
     def setup(self, auth_env, mgmt, account_id, region):
@@ -128,7 +128,7 @@ class TestResourceTagCondition:
                     "Resource": "*",
                     "Condition": {
                         "StringEquals": {
-                            "dynamodb:ResourceTag/Env": "dev",
+                            "aws:ResourceTag/Env": "dev",
                         },
                     },
                 }],
@@ -204,7 +204,7 @@ class TestResourceTagCondition:
                     "Resource": "*",
                     "Condition": {
                         "StringEquals": {
-                            "dynamodb:ResourceTag/Env": "dev",
+                            "aws:ResourceTag/Env": "dev",
                         },
                     },
                 }],

@@ -5,25 +5,24 @@
 
 use extenddb_core::error::DynamoDbError;
 use extenddb_core::limits::LimitsConfig;
-use serde_json::Value;
 
-pub(crate) fn validate_batch_write_request_size(
-    body: &Value,
+pub(crate) fn validate_batch_write_request_size_bytes(
+    size: usize,
     limits: &LimitsConfig,
 ) -> Result<(), DynamoDbError> {
-    validate_json_body_size(
-        body,
+    validate_size(
+        size,
         limits.max_batch_write_request_bytes,
         "BatchWriteItem request size",
     )
 }
 
-pub(crate) fn validate_transaction_request_size(
-    body: &Value,
+pub(crate) fn validate_transaction_request_size_bytes(
+    size: usize,
     limits: &LimitsConfig,
 ) -> Result<(), DynamoDbError> {
-    validate_json_body_size(
-        body,
+    validate_size(
+        size,
         limits.max_transaction_request_bytes,
         "Transaction request size",
     )
@@ -38,17 +37,6 @@ pub(crate) fn validate_transaction_payload_size(
         limits.max_transaction_request_bytes,
         "Transaction item size",
     )
-}
-
-fn validate_json_body_size(
-    body: &Value,
-    max_bytes: usize,
-    label: &str,
-) -> Result<(), DynamoDbError> {
-    let size = serde_json::to_vec(body)
-        .map_err(|e| DynamoDbError::InternalServerError(e.to_string()))?
-        .len();
-    validate_size(size, max_bytes, label)
 }
 
 fn validate_size(size: usize, max_bytes: usize, label: &str) -> Result<(), DynamoDbError> {
@@ -81,11 +69,7 @@ mod tests {
             max_batch_write_request_bytes: 10,
             ..Default::default()
         };
-        let err = validate_batch_write_request_size(
-            &serde_json::json!({"RequestItems": {"t": [{"DeleteRequest": {"Key": {"pk": {"S": "1"}}}}]}}),
-            &limits,
-        )
-        .unwrap_err();
+        let err = validate_batch_write_request_size_bytes(11, &limits).unwrap_err();
 
         assert!(
             err.to_string().contains("BatchWriteItem request size"),
@@ -99,11 +83,7 @@ mod tests {
             max_transaction_request_bytes: 10,
             ..Default::default()
         };
-        let err = validate_transaction_request_size(
-            &serde_json::json!({"TransactItems": [{"Get": {"TableName": "t", "Key": {"pk": {"S": "1"}}}}]}),
-            &limits,
-        )
-        .unwrap_err();
+        let err = validate_transaction_request_size_bytes(11, &limits).unwrap_err();
 
         assert!(
             err.to_string().contains("Transaction request size"),

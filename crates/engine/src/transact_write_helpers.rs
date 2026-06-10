@@ -16,6 +16,7 @@ use extenddb_core::types::{
 };
 use extenddb_storage::TransactWriteOp;
 use hmac::{Hmac, Mac};
+#[cfg(test)]
 use serde_json::Value;
 use sha2::Sha256;
 
@@ -55,6 +56,8 @@ pub(crate) fn transact_write_table_name(twi: &TransactWriteItem) -> Option<&str>
 fn transact_write_metadata_kind(twi: &TransactWriteItem) -> Option<(&str, TableMetadataKind)> {
     if let Some(put) = &twi.put {
         Some((&put.table_name, TableMetadataKind::Write))
+    } else if let Some(del) = &twi.delete {
+        Some((&del.table_name, TableMetadataKind::Write))
     } else if let Some(upd) = &twi.update {
         Some((&upd.table_name, TableMetadataKind::Write))
     } else {
@@ -316,17 +319,24 @@ pub(crate) fn validate_client_request_token(token: &str) -> Result<(), DynamoDbE
 /// different request body that produces the same fingerprint for a given token.
 /// The result is truncated to 16 hex chars (64 bits) for storage efficiency
 /// while remaining collision-resistant for the idempotency use case.
+#[cfg(test)]
 pub(crate) fn compute_fingerprint(body: &Value, token: &str) -> String {
     let items = body.get("TransactItems").unwrap_or(&Value::Null);
     // serde_json::to_string on a Value is infallible — all Value variants
     // are representable as JSON. Using unwrap_or_default as a defensive fallback.
     let json = serde_json::to_string(items).unwrap_or_default();
+    compute_fingerprint_from_items_json(&json, token)
+}
+
+/// Compute the same idempotency fingerprint when the caller already serialized
+/// the `TransactItems` value and no longer owns the full request body.
+pub(crate) fn compute_fingerprint_from_items_json(items_json: &str, token: &str) -> String {
     // HMAC-SHA256 accepts any key length — new_from_slice cannot fail.
     // `InvalidLength` is impossible for HMAC per RFC 2104 (oversized keys are hashed).
     #[allow(clippy::expect_used)]
     let mut mac =
         Hmac::<Sha256>::new_from_slice(token.as_bytes()).expect("HMAC accepts any key length");
-    mac.update(json.as_bytes());
+    mac.update(items_json.as_bytes());
     let result = mac.finalize().into_bytes();
     hex::encode(&result[..8])
 }
@@ -369,10 +379,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transact_write_metadata_plan_uses_write_metadata_for_put_and_update_tables() {
+    fn transact_write_metadata_plan_uses_write_metadata_for_mutating_tables() {
         let input: extenddb_core::types::TransactWriteItemsInput =
             serde_json::from_value(serde_json::json!({
                 "TransactItems": [
+                    {
+                        "Delete": {
+                            "TableName": "old_orders",
+                            "Key": {"pk": {"S": "old-1"}}
+                        }
+                    },
                     {
                         "Delete": {
                             "TableName": "orders",
@@ -408,9 +424,10 @@ mod tests {
         let plan = transact_write_metadata_plan(&input.transact_items);
 
         assert_eq!(plan.get("orders"), Some(&TableMetadataKind::Write));
+        assert_eq!(plan.get("old_orders"), Some(&TableMetadataKind::Write));
         assert_eq!(plan.get("items"), Some(&TableMetadataKind::Write));
         assert_eq!(plan.get("customers"), Some(&TableMetadataKind::Key));
-        assert_eq!(plan.len(), 3);
+        assert_eq!(plan.len(), 4);
     }
 
     #[test]

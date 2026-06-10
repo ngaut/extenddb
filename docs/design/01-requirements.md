@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-04-03
-**Status:** Draft
+**Status:** Active
 
 ## 1. Overview
 
@@ -27,7 +27,7 @@ extenddb (ExtendDB) is a standalone, stateless Rust application that provides a 
 | Contributor Insights (DescribeContributorInsights, ListContributorInsights, UpdateContributorInsights) | Excluded — analytics feature, not core API |
 | Kinesis Streaming Destination (DescribeKinesisStreamingDestination, EnableKinesisStreamingDestination, DisableKinesisStreamingDestination, UpdateKinesisStreamingDestination) | Excluded — AWS-specific integration |
 | Resource Policies (GetResourcePolicy, PutResourcePolicy, DeleteResourcePolicy) | Deferred — resource-based policies are a future enhancement |
-| IAM Policy Variables (`${aws:PrincipalTag/key}`, `${aws:username}`, etc.) | Deferred — variable substitution in Resource ARNs and Condition values is a future enhancement (see REQ-ABAC-006) |
+| IAM Policy Variables (`${aws:PrincipalTag/key}`, `${aws:username}`, etc.) | Partial — condition values are expanded; Resource ARN variables are deferred (see REQ-ABAC-006) |
 | Federated Role Assumption (AssumeRoleWithSAML, AssumeRoleWithWebIdentity) | Deferred — v1 supports basic AssumeRole only (see REQ-IDENT-008) |
 | Role Chaining (role assumes role) | Deferred — v1 requires CallerArn to be a user; SourceIdentity and TransitiveTagKeys are deferred alongside (see REQ-IDENT-009) |
 | Role MaxSessionDuration | Deferred — v1 accepts any DurationSeconds with no per-role cap (see REQ-IDENT-010) |
@@ -209,7 +209,7 @@ These are the core CRUD operations. All must be fully implemented.
 - REQ-IMPEXP-003: Import/export must work with local filesystem paths (S3 support is a future enhancement)
 - REQ-IMPEXP-004: Import/export jobs must be tracked with status (IN_PROGRESS, COMPLETED, FAILED, CANCELLED)
 
-### 3.4 DynamoDB Streams Operations (In Scope — Deferred Detail)
+### 3.4 DynamoDB Streams Operations
 
 | # | Operation | Description |
 |---|-----------|-------------|
@@ -223,9 +223,13 @@ These are the core CRUD operations. All must be fully implemented.
 - REQ-STREAM-002: Stream records must capture changes from PutItem, UpdateItem, DeleteItem, BatchWriteItem, TransactWriteItems
 - REQ-STREAM-003: Support shard iterator types: TRIM_HORIZON, LATEST, AT_SEQUENCE_NUMBER, AFTER_SEQUENCE_NUMBER
 - REQ-STREAM-004: Stream records must be ordered by sequence number within a shard
-- REQ-STREAM-005: Detailed shard management and retention design is deferred
+- REQ-STREAM-005: Use fixed hash-based shards per stream generation, 15-minute shard iterators, bounded shard-reader leases, and 24-hour retention cleanup
 
-### 3.5 Global Tables Operations (In Scope — Deferred Detail)
+### 3.5 Global Tables Operations (Deferred)
+
+Global Tables are not part of the current runtime. Requests for these
+operations return `UnknownOperationException`; see
+[`../differences-from-dynamodb.md`](../differences-from-dynamodb.md).
 
 | # | Operation | Description |
 |---|-----------|-------------|
@@ -237,9 +241,8 @@ These are the core CRUD operations. All must be fully implemented.
 | 38 | `UpdateGlobalTableSettings` | Update per-replica settings |
 
 **Key requirements:**
-- REQ-GT-001: Include Global Tables operations in the API surface (accept requests, return valid responses)
-- REQ-GT-002: Detailed multi-region replication design is deferred
-- REQ-GT-003: Single-instance mode must accept Global Table operations and treat the local instance as the sole replica
+- REQ-GT-001 (Deferred): Do not add Global Tables handlers until a multi-region replication design is accepted.
+- REQ-GT-002 (Deferred): Define conflict resolution, replica topology, and consistency semantics before adding API support.
 
 ## 4. Authentication & Authorization Requirements
 
@@ -297,7 +300,7 @@ extenddb implements a local IAM identity model that mirrors the structure of AWS
 
 ### 4.4 Authorization — Tag-Based Access Control (ABAC)
 
-- REQ-ABAC-001: Support **resource tag conditions** in policies via `dynamodb:ResourceTag/{key}`. The policy engine resolves resource tags by querying the tag store for the target table's ARN.
+- REQ-ABAC-001: Support **resource tag conditions** in policies via `aws:ResourceTag/{key}`. The policy engine resolves resource tags by querying the tag store for the target table's ARN; index requests inherit the owning table's tags.
 - REQ-ABAC-002: Support **principal tag conditions** via `aws:PrincipalTag/{key}`. Principal tags come from the authenticated identity (user tags, role tags, or session tags).
 - REQ-ABAC-003: Support the following condition operators for ABAC:
   - String operators: `StringEquals`, `StringNotEquals`, `StringLike`, `StringNotLike`, `StringEqualsIgnoreCase`
@@ -310,13 +313,13 @@ extenddb implements a local IAM identity model that mirrors the structure of AWS
 - REQ-ABAC-004: Support the following DynamoDB-specific condition context keys:
   - `dynamodb:LeadingKeys` — restricts access based on the partition key value of items being accessed. Used with `ForAllValues:StringEquals` to limit a user to their own items.
   - `dynamodb:Attributes` — restricts which attributes can be read or written. Used with `ForAllValues:StringEquals`.
-  - `dynamodb:Select` — restricts the `Select` parameter in Query/Scan (e.g., force `SPECIFIC_ATTRIBUTES` to prevent full-item reads).
+  - `dynamodb:Select` — restricts the effective item-returning read shape (e.g., force `SPECIFIC_ATTRIBUTES` to prevent full-item reads).
   - `dynamodb:ReturnValues` — restricts the `ReturnValues` parameter.
   - `dynamodb:ReturnConsumedCapacity` — restricts the `ReturnConsumedCapacity` parameter.
   - `dynamodb:FullTableScan` — restricts whether Scan operations are allowed (`Bool` condition).
-  - `dynamodb:EnclosingOperation` — identifies the parent operation for batch/transact sub-operations.
+  - `dynamodb:EnclosingOperation` — identifies `TransactWriteItems` or `TransactGetItems` when transaction item actions are authorized.
 - REQ-ABAC-005: The policy engine must build a **request context** for each operation containing all applicable context keys. The request context is populated by the server middleware before policy evaluation.
-- REQ-ABAC-006 (Deferred): **Policy variables** (`${aws:PrincipalTag/key}`, `${aws:username}`, etc.) in Resource ARNs and Condition values are not supported in v1. In AWS IAM, policy variables enable a single policy to grant access to resources that match the caller's own tags — e.g., `"Resource": "arn:aws:dynamodb:*:*:table/${aws:PrincipalTag/Team}-*"`. Without policy variables, each team or department requires a separate policy with hardcoded resource ARNs, which reduces the ABAC testing value. This is a high-priority enhancement for a future version.
+- REQ-ABAC-006 (Deferred): **Policy variables in Resource ARNs** (`${aws:PrincipalTag/key}`, `${aws:username}`, etc.) are not supported in v1. Condition values are expanded. In AWS IAM, resource policy variables enable a single policy to grant access to resources that match the caller's own tags — e.g., `"Resource": "arn:aws:dynamodb:*:*:table/${aws:PrincipalTag/Team}-*"`. Without resource policy variables, each team or department requires a separate policy with hardcoded resource ARNs, which reduces the ABAC testing value. This is a high-priority enhancement for a future version.
 
 ### 4.5 Authorization — Caching
 

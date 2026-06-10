@@ -15,7 +15,7 @@ use crate::expression_helpers::build_checked_expression_maps;
 use crate::serialize_output;
 use crate::stream_capture;
 use crate::transact_write_helpers::{
-    PreparedOp, TableMetadataKind, compute_fingerprint, parse_optional_condition,
+    PreparedOp, TableMetadataKind, compute_fingerprint_from_items_json, parse_optional_condition,
     transact_write_metadata_plan, transact_write_table_name, validate_client_request_token,
     validate_no_key_updates,
 };
@@ -49,16 +49,26 @@ pub async fn handle_transact_write_items(
     body: Value,
     ctx: &OperationContext,
 ) -> Result<DispatchResult, DynamoDbError> {
+    let fingerprint_items_json = body
+        .get("ClientRequestToken")
+        .and_then(Value::as_str)
+        .map(|_| serde_json::to_string(body.get("TransactItems").unwrap_or(&Value::Null)))
+        .transpose()
+        .map_err(|e| DynamoDbError::InternalServerError(e.to_string()))?;
     let input: TransactWriteItemsInput =
-        serde_json::from_value(body.clone()).map_err(crate::deserialize_error)?;
-    crate::aggregate_limits::validate_transaction_request_size(&body, &ctx.limits)?;
+        serde_json::from_value(body).map_err(crate::deserialize_error)?;
+    crate::aggregate_limits::validate_transaction_request_size_bytes(
+        ctx.request_body_bytes,
+        &ctx.limits,
+    )?;
 
     // Compute fingerprint keyed by the client request token for collision
     // resistance. Must happen after parsing so the token is available.
     let fingerprint = input
         .client_request_token
         .as_deref()
-        .map(|t| compute_fingerprint(&body, t))
+        .zip(fingerprint_items_json.as_deref())
+        .map(|(token, items_json)| compute_fingerprint_from_items_json(items_json, token))
         .unwrap_or_default();
 
     if input.transact_items.is_empty() {

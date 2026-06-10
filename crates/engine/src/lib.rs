@@ -350,6 +350,9 @@ pub struct OperationContext {
     /// Allowed directories for export file operations. Empty means exports
     /// are disabled (secure default).
     pub export_paths: Arc<[Arc<PathBuf>]>,
+    /// Length of the original HTTP request body in bytes. Aggregate request
+    /// limits use this instead of reserializing the parsed JSON body.
+    pub request_body_bytes: usize,
     /// Pre-fetched `TableReadInfo` from the auth layer.
     /// Populated for single-table read operations; `None` for table-level,
     /// write, batch, and transact operations.

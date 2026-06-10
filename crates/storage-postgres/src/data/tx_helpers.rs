@@ -12,47 +12,9 @@ use extenddb_core::types::{
 };
 use extenddb_storage::StreamCapture;
 use extenddb_storage::error::StorageError;
-use extenddb_storage::util::{SortKeyValue, parse_sk, pk_to_text, sk_column, sk_info};
+use extenddb_storage::util::{SortKeyValue, composite_pk_to_text, parse_sk, sk_column, sk_info};
 
 use super::{data_table_name, json_to_item};
-
-/// Fetch a single item within an existing transaction.
-pub(super) async fn fetch_item_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    key_info: &TableKeyInfo,
-    key: &Item,
-) -> Result<Option<Item>, StorageError> {
-    let ddb_table = data_table_name(&key_info.table_id);
-    let pk_name = &key_info.key_schema[0].attribute_name;
-    let pk_value = key
-        .get(pk_name)
-        .ok_or_else(|| StorageError::Internal("missing partition key".to_owned()))?;
-    let pk_text = pk_to_text(pk_value)?;
-
-    let json_opt = if let Some((sk_name, sk_type)) =
-        sk_info(&key_info.key_schema, &key_info.attribute_definitions)
-    {
-        let sk_value = key
-            .get(sk_name)
-            .ok_or_else(|| StorageError::Internal("missing sort key".to_owned()))?;
-        let sk = parse_sk(sk_value, sk_type)?;
-        let sk_col = sk_column(sk_type);
-        let sql = format!("SELECT item_data FROM {ddb_table} WHERE pk = $1 AND {sk_col} = $2");
-        let row: Option<(serde_json::Value,)> =
-            bind_sk_fetch_optional!(&sql, pk_text.as_ref(), &sk, &mut **tx)?;
-        row.map(|(v,)| v)
-    } else {
-        let sql = format!("SELECT item_data FROM {ddb_table} WHERE pk = $1");
-        let row: Option<(serde_json::Value,)> = sqlx::query_as(&sql)
-            .bind(pk_text.as_ref())
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(|e| StorageError::Internal(e.to_string()))?;
-        row.map(|(v,)| v)
-    };
-
-    json_opt.map(json_to_item).transpose()
-}
 
 /// Fetch a single item with `FOR UPDATE` lock within a transaction.
 pub(super) async fn fetch_item_for_update(
@@ -61,11 +23,7 @@ pub(super) async fn fetch_item_for_update(
     key: &Item,
 ) -> Result<Option<Item>, StorageError> {
     let ddb_table = data_table_name(&key_info.table_id);
-    let pk_name = &key_info.key_schema[0].attribute_name;
-    let pk_value = key
-        .get(pk_name)
-        .ok_or_else(|| StorageError::Internal("missing partition key".to_owned()))?;
-    let pk_text = pk_to_text(pk_value)?;
+    let pk_text = composite_pk_to_text(key, &key_info.key_schema)?;
 
     let json_opt = if let Some((sk_name, sk_type)) =
         sk_info(&key_info.key_schema, &key_info.attribute_definitions)
@@ -78,12 +36,12 @@ pub(super) async fn fetch_item_for_update(
         let sql =
             format!("SELECT item_data FROM {ddb_table} WHERE pk = $1 AND {sk_col} = $2 FOR UPDATE");
         let row: Option<(serde_json::Value,)> =
-            bind_sk_fetch_optional!(&sql, pk_text.as_ref(), &sk, &mut **tx)?;
+            bind_sk_fetch_optional!(&sql, pk_text.as_str(), &sk, &mut **tx)?;
         row.map(|(v,)| v)
     } else {
         let sql = format!("SELECT item_data FROM {ddb_table} WHERE pk = $1 FOR UPDATE");
         let row: Option<(serde_json::Value,)> = sqlx::query_as(&sql)
-            .bind(pk_text.as_ref())
+            .bind(pk_text.as_str())
             .fetch_optional(&mut **tx)
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
@@ -100,11 +58,7 @@ pub(super) async fn upsert_item_in_tx(
     item: &Item,
 ) -> Result<(), StorageError> {
     let ddb_table = data_table_name(&key_info.table_id);
-    let pk_name = &key_info.key_schema[0].attribute_name;
-    let pk_value = item
-        .get(pk_name)
-        .ok_or_else(|| StorageError::Internal("missing partition key".to_owned()))?;
-    let pk_text = pk_to_text(pk_value)?;
+    let pk_text = composite_pk_to_text(item, &key_info.key_schema)?;
     let item_json =
         serde_json::to_value(item).map_err(|e| StorageError::Internal(e.to_string()))?;
 
@@ -119,14 +73,14 @@ pub(super) async fn upsert_item_in_tx(
             "INSERT INTO {ddb_table} (pk, {sk_col}, item_data) VALUES ($1, $2, $3) \
              ON CONFLICT (pk, {sk_col}) DO UPDATE SET item_data = EXCLUDED.item_data"
         );
-        bind_sk_execute!(&sql, pk_text.as_ref(), &sk, &item_json, &mut **tx)?;
+        bind_sk_execute!(&sql, pk_text.as_str(), &sk, &item_json, &mut **tx)?;
     } else {
         let sql = format!(
             "INSERT INTO {ddb_table} (pk, item_data) VALUES ($1, $2) \
              ON CONFLICT (pk) DO UPDATE SET item_data = EXCLUDED.item_data"
         );
         sqlx::query(&sql)
-            .bind(pk_text.as_ref())
+            .bind(pk_text.as_str())
             .bind(&item_json)
             .execute(&mut **tx)
             .await
@@ -142,11 +96,7 @@ pub(super) async fn delete_item_in_tx(
     key: &Item,
 ) -> Result<(), StorageError> {
     let ddb_table = data_table_name(&key_info.table_id);
-    let pk_name = &key_info.key_schema[0].attribute_name;
-    let pk_value = key
-        .get(pk_name)
-        .ok_or_else(|| StorageError::Internal("missing partition key".to_owned()))?;
-    let pk_text = pk_to_text(pk_value)?;
+    let pk_text = composite_pk_to_text(key, &key_info.key_schema)?;
 
     if let Some((sk_name, sk_type)) = sk_info(&key_info.key_schema, &key_info.attribute_definitions)
     {
@@ -159,21 +109,21 @@ pub(super) async fn delete_item_in_tx(
         match &sk {
             SortKeyValue::S(s) => {
                 sqlx::query(&sql)
-                    .bind(pk_text.as_ref())
+                    .bind(pk_text.as_str())
                     .bind(s)
                     .execute(&mut **tx)
                     .await
             }
             SortKeyValue::N(n) => {
                 sqlx::query(&sql)
-                    .bind(pk_text.as_ref())
+                    .bind(pk_text.as_str())
                     .bind(n)
                     .execute(&mut **tx)
                     .await
             }
             SortKeyValue::B(b) => {
                 sqlx::query(&sql)
-                    .bind(pk_text.as_ref())
+                    .bind(pk_text.as_str())
                     .bind(b)
                     .execute(&mut **tx)
                     .await
@@ -183,7 +133,7 @@ pub(super) async fn delete_item_in_tx(
     } else {
         let sql = format!("DELETE FROM {ddb_table} WHERE pk = $1");
         sqlx::query(&sql)
-            .bind(pk_text.as_ref())
+            .bind(pk_text.as_str())
             .execute(&mut **tx)
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;

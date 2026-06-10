@@ -15,9 +15,9 @@ Closes #
 ## Checklist
 
 - [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md)
-- [ ] All tests pass (`cargo test --workspace`)
-- [ ] Code is formatted (`cargo fmt --check`)
-- [ ] Clippy is clean (`cargo clippy -- -W clippy::pedantic`)
+- [ ] All tests pass (`cargo test -j12 --workspace`)
+- [ ] Code is formatted (`cargo fmt --all -- --check`)
+- [ ] Clippy is clean (`cargo clippy -j12 --workspace --all-targets -- -D warnings`)
 - [ ] I have added or updated tests for new functionality
 - [ ] I have updated documentation if behavior changed
 - [ ] Breaking changes are noted below (if any)

@@ -36,7 +36,7 @@ pub struct RequestParams {
     pub return_values: Option<String>,
     /// The ReturnConsumedCapacity parameter value.
     pub return_consumed_capacity: Option<String>,
-    /// The enclosing operation for batch/transact sub-operations.
+    /// The enclosing operation for transaction item-action authorization.
     pub enclosing_operation: Option<String>,
 }
 
@@ -48,7 +48,7 @@ pub struct RequestParams {
 pub struct RequestContext {
     /// Tags on the authenticated principal (`aws:PrincipalTag/*`).
     pub principal_tags: HashMap<String, String>,
-    /// Tags on the target resource (`dynamodb:ResourceTag/*`).
+    /// Tags on the target resource (`aws:ResourceTag/*`).
     pub resource_tags: HashMap<String, String>,
     /// Partition key values being accessed.
     pub leading_keys: Option<Vec<String>>,
@@ -62,7 +62,7 @@ pub struct RequestContext {
     pub return_consumed_capacity: Option<String>,
     /// Whether this is a Scan operation.
     pub full_table_scan: Option<bool>,
-    /// The enclosing operation for batch/transact sub-operations.
+    /// The enclosing operation for transaction item-action authorization.
     pub enclosing_operation: Option<String>,
 }
 
@@ -96,7 +96,7 @@ impl ConditionContext for RequestContext {
     fn resolve_key(&self, key: &str) -> Option<Vec<&str>> {
         if let Some(tag_key) = key.strip_prefix("aws:PrincipalTag/") {
             self.principal_tags.get(tag_key).map(|v| vec![v.as_str()])
-        } else if let Some(tag_key) = key.strip_prefix("dynamodb:ResourceTag/") {
+        } else if let Some(tag_key) = key.strip_prefix("aws:ResourceTag/") {
             self.resource_tags.get(tag_key).map(|v| vec![v.as_str()])
         } else {
             match key {
@@ -176,10 +176,7 @@ mod tests {
             false,
             RequestParams::default(),
         );
-        assert_eq!(
-            ctx.resolve_key("dynamodb:ResourceTag/Team"),
-            Some(vec!["Alpha"])
-        );
+        assert_eq!(ctx.resolve_key("aws:ResourceTag/Team"), Some(vec!["Alpha"]));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # DynamoDB Limits Enforcement Status
 
-Last updated: 2026-06-03 (closed PR #160 follow-up)
+Last updated: 2026-06-03
 
 Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ServiceQuotas.html)
 

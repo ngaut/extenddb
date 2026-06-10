@@ -42,8 +42,11 @@ pub async fn handle_transact_get_items(
     ctx: &OperationContext,
 ) -> Result<DispatchResult, DynamoDbError> {
     let input: TransactGetItemsInput =
-        serde_json::from_value(body.clone()).map_err(crate::deserialize_error)?;
-    crate::aggregate_limits::validate_transaction_request_size(&body, &ctx.limits)?;
+        serde_json::from_value(body).map_err(crate::deserialize_error)?;
+    crate::aggregate_limits::validate_transaction_request_size_bytes(
+        ctx.request_body_bytes,
+        &ctx.limits,
+    )?;
 
     if input.transact_items.is_empty() {
         return Err(DynamoDbError::ValidationException(

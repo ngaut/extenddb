@@ -3,8 +3,8 @@
 
 //! HTTP transport and command dispatch for `extenddb manage`.
 //!
-//! Handles TLS and plain-text connections. Extracted from `cmd_manage.rs`
-//! to keep all files under the 500-line limit.
+//! Handles management API HTTP transport. Extracted from `cmd_manage.rs` to
+//! keep all files under the 500-line limit.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -17,11 +17,11 @@ use crate::manage_types::{CacheAction, CacheInvalidateScope, ManageCommand};
 
 /// Resolve the management API endpoint from CLI args or config file.
 ///
-/// Returns a `(host_port, use_tls, cert_path)` tuple. TLS is inferred from:
-/// 1. `https://` scheme in `--endpoint`, or
-/// 2. `server.tls.enabled` in the config file.
+/// Returns a `(host_port, use_tls, cert_path)` tuple. Config-based endpoints
+/// always use TLS; an explicit `http://` endpoint is treated as an override for
+/// tests or external proxies.
 ///
-/// When TLS is enabled, `cert_path` is resolved from the config file so the
+/// For TLS endpoints, `cert_path` is resolved from the config file so the
 /// caller doesn't need to reload it.
 pub fn resolve_endpoint(
     endpoint_arg: Option<&str>,
@@ -38,12 +38,8 @@ pub fn resolve_endpoint(
             return Ok((rest.to_owned(), false, None));
         }
         let app_config = config::load(config_path)?;
-        let cert = if app_config.server.tls.enabled {
-            Some(config::expand_tilde(&app_config.server.tls.cert_path))
-        } else {
-            None
-        };
-        return Ok((ep.to_owned(), app_config.server.tls.enabled, cert));
+        let cert = Some(config::expand_tilde(&app_config.server.tls.cert_path));
+        return Ok((ep.to_owned(), true, cert));
     }
     if !std::path::Path::new(config_path).exists() {
         anyhow::bail!(
@@ -57,16 +53,8 @@ pub fn resolve_endpoint(
     } else {
         &app_config.server.bind_addr
     };
-    let cert = if app_config.server.tls.enabled {
-        Some(config::expand_tilde(&app_config.server.tls.cert_path))
-    } else {
-        None
-    };
-    Ok((
-        format!("{addr}:{}", app_config.server.port),
-        app_config.server.tls.enabled,
-        cert,
-    ))
+    let cert = Some(config::expand_tilde(&app_config.server.tls.cert_path));
+    Ok((format!("{addr}:{}", app_config.server.port), true, cert))
 }
 
 /// Resolve the password from: CLI arg or `EXTENDDB_PASSWORD` env var.
@@ -326,7 +314,7 @@ pub fn dispatch(
             if !yes {
                 anyhow::bail!(
                     "--yes is required for import-access-key. This command stores a real AWS \
-                     secret access key in the configured storage backend."
+                     secret access key in the TiDB catalog."
                 );
             }
             c.req("POST", &format!("/management/accounts/{account_id}/users/{user_name}/access-keys/import"),
@@ -480,13 +468,6 @@ fn dispatch_cache(c: &Ctx<'_>, action: CacheAction) -> anyhow::Result<(u16, Stri
                 "selectors": { "account_id": account_id, "user_names": names },
             })
         }
-        CacheInvalidateScope::TableKeyInfo {
-            account_id,
-            table_name,
-        } => serde_json::json!({
-            "scope": "table_key_info",
-            "selectors": { "account_id": account_id, "table_name": table_name },
-        }),
         CacheInvalidateScope::ResourceTags { arn } => serde_json::json!({
             "scope": "resource_tags",
             "selectors": { "arn": arn },

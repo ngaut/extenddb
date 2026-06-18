@@ -63,36 +63,35 @@ fn build_client() -> Client {
     let endpoint = std::env::var("EXTENDDB_TEST_ENDPOINT").ok();
     let region = std::env::var("AWS_DEFAULT_REGION").unwrap_or_else(|_| "us-east-1".into());
 
-    let creds_provider: SharedCredentialsProvider =
-        if let Ok(access_key) = std::env::var("AWS_ACCESS_KEY_ID") {
-            let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_else(|_| {
-                panic!(
-                    "AWS_ACCESS_KEY_ID is set but AWS_SECRET_ACCESS_KEY is not. \
+    let creds_provider: SharedCredentialsProvider = if let Ok(access_key) =
+        std::env::var("AWS_ACCESS_KEY_ID")
+    {
+        let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_else(|_| {
+            panic!(
+                "AWS_ACCESS_KEY_ID is set but AWS_SECRET_ACCESS_KEY is not. \
                      Both must be set for explicit credentials."
+            )
+        });
+        SharedCredentialsProvider::new(Credentials::new(access_key, secret_key, None, None, "env"))
+    } else {
+        // No explicit credentials — use the SDK default credential chain.
+        // DefaultCredentialsChain::builder().build() is async; run it on a
+        // separate thread with its own runtime since build_client() is sync
+        // and called from within a #[tokio::test] current_thread runtime.
+        let chain = std::thread::spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create credential-chain runtime")
+                .block_on(
+                    aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
+                        .build(),
                 )
-            });
-            SharedCredentialsProvider::new(Credentials::new(
-                access_key, secret_key, None, None, "env",
-            ))
-        } else {
-            // No explicit credentials — use the SDK default credential chain.
-            // DefaultCredentialsChain::builder().build() is async; run it on a
-            // separate thread with its own runtime since build_client() is sync
-            // and called from within a #[tokio::test] current_thread runtime.
-            let chain = std::thread::spawn(|| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to create credential-chain runtime")
-                    .block_on(
-                        aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
-                            .build(),
-                    )
-            })
-            .join()
-            .expect("credential chain thread panicked");
-            SharedCredentialsProvider::new(chain)
-        };
+        })
+        .join()
+        .expect("credential chain thread panicked");
+        SharedCredentialsProvider::new(chain)
+    };
 
     // Build HTTP client with custom TLS trust store for self-signed certs.
     let mut trust_store = tls::TrustStore::empty().with_native_roots(true);
@@ -376,13 +375,10 @@ pub async fn wait_for_active(c: &Client, name: &str) {
 /// Poll DescribeTable until the table no longer exists (up to 60s).
 pub async fn wait_for_deleted(c: &Client, name: &str) {
     for _ in 0..60 {
-        match c.describe_table().table_name(name).send().await {
-            Err(e) => {
-                if err_code(&e) == Some("ResourceNotFoundException") {
-                    return;
-                }
+        if let Err(e) = c.describe_table().table_name(name).send().await {
+            if err_code(&e) == Some("ResourceNotFoundException") {
+                return;
             }
-            Ok(_) => {}
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }

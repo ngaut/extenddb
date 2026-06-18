@@ -5,7 +5,7 @@
 //!
 //! This crate intentionally exposes only the MySQL/TiDB SQLx surface ExtendDB
 //! uses. Keeping the upstream umbrella crate and proc macros out of the
-//! workspace prevents unused backend metadata from re-entering `Cargo.lock`.
+//! workspace prevents unused SQLx driver metadata from re-entering `Cargo.lock`.
 
 pub use sqlx_core::Either;
 pub use sqlx_core::acquire::Acquire;

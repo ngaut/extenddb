@@ -13,13 +13,11 @@ pub mod authz_cache;
 mod authz_request_context;
 pub mod console;
 mod handler;
-pub mod key_info_cache;
 pub mod management;
 mod metrics_endpoint;
 pub mod rate_limit;
 mod request_helpers;
 mod response;
-mod throttle_helpers;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -33,10 +31,8 @@ use axum::routing::{get, post};
 use extenddb_auth::{AuthCacheRegistry, AuthProvider};
 use extenddb_core::limits::LimitsConfig;
 use extenddb_core::metrics::MetricsCollector;
-use extenddb_core::throttle::ThrottleManager;
 
 pub use authz_cache::{AuthzCacheConfig, CachedAuthzStore, CachedSessionData};
-pub use key_info_cache::CachedTableKeyInfoStore;
 use serde_json::json;
 use tower::ServiceBuilder;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -54,19 +50,12 @@ pub struct AppState {
     pub version_info: Arc<str>,
     /// In-memory metrics collector for `DynamoDB` `CloudWatch`-style metrics.
     pub metrics: Arc<MetricsCollector>,
-    /// Whether TLS is enabled (affects cookie Secure flag).
-    pub tls_enabled: bool,
     /// Allowed directories for import file operations. Empty means imports
     /// are disabled (secure default).
     pub import_paths: Arc<[Arc<std::path::PathBuf>]>,
     /// Allowed directories for export file operations. Empty means exports
     /// are disabled (secure default).
     pub export_paths: Arc<[Arc<std::path::PathBuf>]>,
-    /// Frontend token bucket manager for backends that emulate capacity in the
-    /// HTTP layer. Backends with native distributed capacity control, such as
-    /// TiDB Resource Control, leave this unset so the hot request path does not
-    /// perform process-local admission bookkeeping.
-    pub throttle: Option<Arc<ThrottleManager>>,
     /// Auth/authz cache handles. Used by the management API to issue
     /// write-through invalidations after IAM mutations. Empty when caching
     /// is disabled.
@@ -74,16 +63,10 @@ pub struct AppState {
     /// Authorization cache used by the request hot path. The same underlying
     /// cache instance is referenced trait-object style by `auth_cache.authz`.
     pub authz_cache: Arc<CachedAuthzStore>,
-    /// `TableKeyInfo` cache used by the request hot path and engine batch /
-    /// transact paths. Invalidated by control-plane handlers after Create /
-    /// Update / Delete table.
-    pub table_key_info_cache: Arc<CachedTableKeyInfoStore>,
     /// Static configuration entries from the `.toml` file for the console
     /// settings page. Each entry is `(key, display_value)` — sensitive values
     /// are pre-redacted by the caller.
     pub config_entries: Vec<(String, String)>,
-    /// Backend capability context for runtime setting validation/display.
-    pub setting_context: management::ops_settings::RuntimeSettingContext,
     /// Runtime documentation store. `None` if `docs_dir` is not configured.
     pub docs_store: Option<console::docs_embed::DocsStore>,
     /// Backend runtime hooks for readiness checks.
@@ -98,36 +81,31 @@ pub struct ServerTlsConfig {
     pub key_path: PathBuf,
 }
 
-/// Build and start the HTTP server on a pre-bound listener.
+/// Build and start the HTTPS server on a pre-bound listener.
 ///
 /// The caller is responsible for binding the `TcpListener` before passing it in.
 /// This supports the bind-before-fork pattern: the socket is bound in the sync
 /// context before daemonizing, so port conflicts are reported to stderr before
 /// the parent process exits.
 ///
-/// When `tls` is `Some`, the server serves HTTPS using `axum-server` with rustls.
-/// When `tls` is `None`, the server serves plaintext HTTP.
 pub async fn start_server(
     listener: tokio::net::TcpListener,
     state: AppState,
     pid_file: Option<PathBuf>,
-    tls: Option<ServerTlsConfig>,
+    tls: ServerTlsConfig,
 ) -> Result<(), anyhow::Error> {
     // SP-WIRE-007: DynamoDB request body limit is 16 MB.
     const DYNAMODB_BODY_LIMIT: usize = 16 * 1024 * 1024;
 
-    let tls_enabled = state.tls_enabled;
     let catalog_store = state.catalog_store.clone();
     let auth_cache_for_mgmt = state.auth_cache.clone();
     let auth_cache_for_console = state.auth_cache.clone();
     let authz_cache_for_mgmt = state.authz_cache.clone();
-    let table_key_info_cache_for_mgmt = state.table_key_info_cache.clone();
     let version_info = state.version_info.clone();
     let docs_store = state.docs_store.clone();
     let listen_url = {
         let addr = listener.local_addr()?;
-        let scheme = if tls_enabled { "https" } else { "http" };
-        format!("{scheme}://{addr}")
+        format!("https://{addr}")
     };
     let config_entries = state.config_entries.clone();
     let shared = Arc::new(state);
@@ -165,10 +143,8 @@ pub async fn start_server(
     if let Some(catalog_store) = catalog_store {
         let mgmt_state = Arc::new(management::ManagementState {
             catalog_store: catalog_store.clone(),
-            setting_context: shared.setting_context,
             auth_cache: auth_cache_for_mgmt,
             authz_cache: authz_cache_for_mgmt,
-            table_key_info_cache: table_key_info_cache_for_mgmt,
         });
         let mgmt_router = management::router().with_state(mgmt_state);
         app = app.nest("/management", mgmt_router);
@@ -178,7 +154,6 @@ pub async fn start_server(
             version_info,
             listen_url,
             config_entries,
-            setting_context: shared.setting_context,
             catalog_store,
             docs_store: docs_store.clone(),
             auth_cache: auth_cache_for_console,
@@ -197,68 +172,51 @@ pub async fn start_server(
     // Apply security headers to all routes.
     let app = app.layer(security_layers);
 
-    // Add HSTS header only when TLS is enabled.
-    let app = if tls_enabled {
-        app.layer(SetResponseHeaderLayer::overriding(
-            axum::http::header::STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=63072000; includeSubDomains"),
-        ))
-    } else {
-        app
-    };
+    let app = app.layer(SetResponseHeaderLayer::overriding(
+        axum::http::header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    ));
 
     let local_addr = listener.local_addr()?;
 
-    if let Some(tls_cfg) = tls {
-        // rustls 0.23 requires an explicit CryptoProvider. Install aws-lc-rs
-        // as the default before creating any TLS config. Ignore the error if a
-        // provider was already installed, such as by sqlx.
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    // rustls 0.23 requires an explicit CryptoProvider. Install aws-lc-rs as the
+    // default before creating any TLS config. Ignore the error if a provider was
+    // already installed, such as by sqlx.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        tracing::info!("extenddb listening on {local_addr} (HTTPS)");
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
-            &tls_cfg.cert_path,
-            &tls_cfg.key_path,
-        )
-        .await
-        // The error intentionally does not include the file path to avoid
-        // leaking filesystem structure in logs. See docs/troubleshooting.md for
-        // the "Failed to load TLS certificates" entry.
-        .map_err(|e| anyhow::anyhow!("Failed to load TLS certificates: {e}"))?;
+    tracing::info!("extenddb listening on {local_addr} (HTTPS)");
+    let rustls_config =
+        axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert_path, &tls.key_path)
+            .await
+            // The error intentionally does not include the file path to avoid
+            // leaking filesystem structure in logs. See docs/troubleshooting.md for
+            // the "Failed to load TLS certificates" entry.
+            .map_err(|e| anyhow::anyhow!("Failed to load TLS certificates: {e}"))?;
 
-        let handle = axum_server::Handle::new();
-        let shutdown_handle = handle.clone();
-        let shutdown_pid = pid_file.clone();
-        tokio::spawn(async move {
-            shutdown_signal().await;
-            shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
-            // Log timeout but don't call std::process::exit: let the runtime
-            // shut down normally so destructors (including ZeroizeOnDrop) run.
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            tracing::warn!("Graceful shutdown timed out, forcing PID file cleanup");
-            cleanup_pid_file(shutdown_pid.as_deref());
-        });
+    let handle = axum_server::Handle::new();
+    let shutdown_handle = handle.clone();
+    let shutdown_pid = pid_file.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+        // Log timeout but don't call std::process::exit: let the runtime
+        // shut down normally so destructors (including ZeroizeOnDrop) run.
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        tracing::warn!("Graceful shutdown timed out, forcing PID file cleanup");
+        cleanup_pid_file(shutdown_pid.as_deref());
+    });
 
-        let std_listener = listener.into_std()?;
-        // Use a custom acceptor that peeks the first byte of each connection.
-        // If it's plain HTTP (not 0x16 TLS ClientHello), write a 301 redirect
-        // to HTTPS and reject the connection before the TLS handshake. This
-        // gives users a helpful redirect instead of a confusing TLS failure.
-        let redirect_acceptor = HttpsRedirectAcceptor { addr: local_addr };
-        axum_server::from_tcp_rustls(std_listener, rustls_config)?
-            .map(|tls| tls.acceptor(redirect_acceptor))
-            .handle(handle)
-            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-            .await?;
-    } else {
-        tracing::info!("extenddb listening on {local_addr}");
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(graceful_shutdown(pid_file.clone()))
+    let std_listener = listener.into_std()?;
+    // Use a custom acceptor that peeks the first byte of each connection.
+    // If it's plain HTTP (not 0x16 TLS ClientHello), write a 301 redirect
+    // to HTTPS and reject the connection before the TLS handshake. This gives
+    // users a helpful redirect instead of a confusing TLS failure.
+    let redirect_acceptor = HttpsRedirectAcceptor { addr: local_addr };
+    axum_server::from_tcp_rustls(std_listener, rustls_config)?
+        .map(|tls| tls.acceptor(redirect_acceptor))
+        .handle(handle)
+        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await?;
-    }
 
     // Normal shutdown path — clean up PID file after connections drain.
     cleanup_pid_file(pid_file.as_deref());
@@ -271,29 +229,17 @@ async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     if let Some(hooks) = &state.runtime_hooks
         && let Err(error) = hooks.health_check().await
     {
-        tracing::warn!(%error, "backend health check failed");
+        tracing::warn!(%error, "storage health check failed");
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             axum::Json(json!({
                 "status": "unhealthy",
-                "error": "backend health check failed"
+                "error": "storage health check failed"
             })),
         );
     }
 
     (StatusCode::OK, axum::Json(json!({"status": "healthy"})))
-}
-
-async fn graceful_shutdown(pid_file: Option<PathBuf>) {
-    shutdown_signal().await;
-    // Spawn a timeout task that cleans up the PID file if connections don't
-    // drain. This does not call std::process::exit, so the runtime shuts down
-    // normally and destructors (including ZeroizeOnDrop) run.
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        tracing::warn!("Graceful shutdown timed out after 5s, forcing PID file cleanup");
-        cleanup_pid_file(pid_file.as_deref());
-    });
 }
 
 /// Remove the PID file if it exists. Best-effort — log but don't fail.

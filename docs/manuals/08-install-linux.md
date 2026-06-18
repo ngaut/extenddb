@@ -110,7 +110,7 @@ Expected:
 ./target/release/extenddb serve --config extenddb.toml
 ```
 
-extenddb daemonizes automatically and logs to syslog.
+extenddb daemonizes automatically and logs to syslog. Use `--foreground` when running under a container or process supervisor.
 
 Check status:
 

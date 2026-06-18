@@ -31,16 +31,12 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
         );
     }
     let app_config = config::load(&args.config)?;
-    let backend = &app_config.storage._backend;
-    let expected_version = extenddb_storage::operations::catalog_version(backend)
-        .unwrap_or_else(|_| "unknown".to_string());
+    let expected_version = extenddb_storage_tidb::CATALOG_VERSION.to_string();
 
     // Parse connection string to get database name for display
-    let parts = extenddb_storage::operations::parse_connection_string(
-        backend,
-        app_config.storage.connection_config(),
-    )
-    .map_err(|e| anyhow::anyhow!("Failed to parse connection string: {e}"))?;
+    let parts =
+        extenddb_storage_tidb::parse_connection_string(app_config.storage.connection_config())
+            .map_err(|e| anyhow::anyhow!("Failed to parse connection string: {e}"))?;
 
     let mut errors = 0u32;
 
@@ -51,21 +47,19 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
 
     // Create settings and diagnostics store
     println!("--- Checking catalog connection...");
-    let store = match extenddb_storage::settings_store::create_settings_store(
-        backend,
-        app_config.storage.connection_config(),
-    )
-    .await
-    {
-        Ok(store) => {
-            println!("  OK: Connected to catalog.");
-            store
-        }
-        Err(e) => {
-            println!("  FAIL: Cannot connect to catalog database: {e}");
-            anyhow::bail!("Cannot proceed without catalog connection");
-        }
-    };
+    let store =
+        match extenddb_storage_tidb::create_settings_store(app_config.storage.connection_config())
+            .await
+        {
+            Ok(store) => {
+                println!("  OK: Connected to catalog.");
+                store
+            }
+            Err(e) => {
+                println!("  FAIL: Cannot connect to catalog database: {e}");
+                anyhow::bail!("Cannot proceed without catalog connection");
+            }
+        };
 
     // Check 2: Catalog version.
     println!("--- Checking catalog version...");
@@ -92,12 +86,10 @@ pub async fn run(args: VerifyArgs) -> anyhow::Result<()> {
     println!("--- Checking data database...");
 
     // Create diagnostics store (reuse for data DB test and table/index counts)
-    let diag_store = extenddb_storage::diagnostics_store::create_diagnostics_store(
-        backend,
-        app_config.storage.connection_config(),
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("Failed to create diagnostics store: {e}"))?;
+    let diag_store =
+        extenddb_storage_tidb::create_diagnostics_store(app_config.storage.connection_config())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create diagnostics store: {e}"))?;
 
     match diag_store.test_data_database_connection().await {
         Ok(db_name) => println!("  OK: Connected to data database '{db_name}'."),

@@ -107,7 +107,7 @@ pub struct TableKeyInfo {
 ///
 /// `table` always describes the base DynamoDB table. `index`, when present,
 /// describes the secondary index selected by Query or Scan. Keeping both parts
-/// together lets storage backends execute reads without re-fetching catalog
+/// together lets storage implementations execute reads without re-fetching catalog
 /// metadata or reconstructing the base-table key after index routing.
 #[derive(Debug, Clone)]
 pub struct TableReadInfo {

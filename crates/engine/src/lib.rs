@@ -64,6 +64,7 @@ pub use ttl::{handle_describe_time_to_live, handle_update_time_to_live};
 pub use update_item::handle_update_item;
 pub use update_table::handle_update_table;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -161,7 +162,7 @@ pub(crate) fn storage_other_to_dynamo(
 }
 
 pub(crate) fn storage_unavailable_to_dynamo(msg: String, context: &'static str) -> DynamoDbError {
-    tracing::error!(internal_error = %msg, context, "storage backend unavailable");
+    tracing::error!(internal_error = %msg, context, "storage unavailable");
     DynamoDbError::ServiceUnavailable("Service is temporarily unavailable".to_owned())
 }
 
@@ -275,7 +276,7 @@ mod tests {
     #[test]
     fn storage_other_to_dynamo_maps_typed_unavailable_to_service_unavailable() {
         let error = storage_other_to_dynamo(
-            StorageError::Unavailable("backend saturated".into()),
+            StorageError::Unavailable("storage saturated".into()),
             "test",
         );
 
@@ -337,11 +338,12 @@ impl DispatchResult {
 ///
 /// For single-table item operations (`GetItem`, `PutItem`, `DeleteItem`,
 /// `UpdateItem`, `Query`, `Scan`), the auth layer pre-fetches table metadata
-/// and stores it in `pre_fetched_read_info` or `pre_fetched_write_info`.
-/// Engine handlers MUST use these pre-fetched values instead of calling
-/// storage metadata APIs directly.
-/// New per-request catalog roundtrips require justification in the discussion
-/// file and principal reviewer approval.
+/// through `authorize_operation_metadata` and stores it in
+/// `pre_fetched_read_info` or `pre_fetched_write_info`. Engine handlers must
+/// use the `table_key_info`, `table_read_info`, and `table_write_info` helpers
+/// on this context; those helpers validate account/table/index matches before
+/// reusing pre-fetched metadata and own the fallback path for multi-table
+/// operations.
 pub struct OperationContext {
     pub storage: Arc<dyn extenddb_storage::StorageEngine>,
     pub limits: Arc<LimitsConfig>,
@@ -368,11 +370,6 @@ pub struct OperationContext {
     /// to issue write-through cache invalidations after the underlying state
     /// changes (e.g. `TagResource` invalidates the resource-tags cache).
     pub auth_cache: extenddb_auth::AuthCacheRegistry,
-    /// Optional cached `TableKeyInfo` lookup. When set, batch / transact /
-    /// multi-table engine handlers route through this instead of calling
-    /// `storage.table_key_info` directly. When unset (e.g. unit tests), the
-    /// engine falls back to direct storage lookups.
-    pub table_key_info_lookup: Option<Arc<dyn extenddb_storage::TableKeyInfoLookup>>,
 }
 
 impl OperationContext {
@@ -390,16 +387,13 @@ impl OperationContext {
                 return Ok(table.clone());
             }
         }
-        if let Some(ref lookup) = self.table_key_info_lookup {
-            return lookup.lookup(&self.account_id, table_name).await;
-        }
         self.storage
             .table_key_info(&self.account_id, table_name)
             .await
     }
 
     /// Return pre-fetched write metadata if available and matching the table,
-    /// otherwise fetch the backend's write metadata.
+    /// otherwise fetch storage write metadata.
     pub(crate) async fn table_write_info(
         &self,
         table_name: &str,
@@ -437,6 +431,55 @@ impl OperationContext {
             .table_read_info(&self.account_id, table_name, index_name)
             .await
     }
+
+    pub(crate) async fn table_key_infos(
+        &self,
+        table_names: &[String],
+    ) -> Result<
+        HashMap<String, extenddb_core::types::TableKeyInfo>,
+        extenddb_storage::error::StorageError,
+    > {
+        let infos = self
+            .storage
+            .table_key_infos(&self.account_id, table_names)
+            .await?;
+        table_info_map(table_names, infos)
+    }
+
+    pub(crate) async fn table_write_infos(
+        &self,
+        table_names: &[String],
+    ) -> Result<
+        HashMap<String, extenddb_core::types::TableKeyInfo>,
+        extenddb_storage::error::StorageError,
+    > {
+        let infos = self
+            .storage
+            .table_write_infos(&self.account_id, table_names)
+            .await?;
+        table_info_map(table_names, infos)
+    }
+}
+
+fn table_info_map(
+    requested: &[String],
+    infos: Vec<extenddb_core::types::TableKeyInfo>,
+) -> Result<
+    HashMap<String, extenddb_core::types::TableKeyInfo>,
+    extenddb_storage::error::StorageError,
+> {
+    let mut by_name = HashMap::with_capacity(infos.len());
+    for info in infos {
+        by_name.insert(info.table_name.clone(), info);
+    }
+    for table_name in requested {
+        if !by_name.contains_key(table_name) {
+            return Err(extenddb_storage::error::StorageError::TableNotFound(
+                table_name.clone(),
+            ));
+        }
+    }
+    Ok(by_name)
 }
 
 /// Dispatch an operation by name.

@@ -6,8 +6,8 @@
 //!
 //! `TidbCatalogStore` wraps a `MySqlPool` connected to the catalog database
 //! and implements the three operational traits defined in `extenddb_storage`.
-//! This decouples callers from direct `sqlx::MySqlPool` usage, enabling
-//! alternative storage backends.
+//! This decouples callers from direct `sqlx::MySqlPool` usage while keeping
+//! TiDB-specific SQL inside the TiDB crate.
 
 use extenddb_storage::management_store::{MetricsRow, OpError, OpResult};
 use futures::future::BoxFuture;
@@ -25,6 +25,7 @@ const COUNT_IP_FAILURES_SQL: &str = "SELECT COUNT(*) FROM login_attempts \
      AND attempted_at > DATE_SUB(CURRENT_TIMESTAMP(6), INTERVAL ? SECOND)";
 const INSERT_FAILED_LOGIN_SQL: &str =
     "INSERT INTO login_attempts (principal, source_ip) VALUES (?, ?)";
+const AUTH_CACHE_EPOCH_KEY: &str = "auth_cache_epoch";
 
 /// TiDB-backed catalog store for settings, metrics, and rate limiting.
 ///
@@ -160,6 +161,60 @@ impl extenddb_storage::management_store::SettingsStore for TidbCatalogStore {
                     tracing::error!("list_settings: {e}");
                     OpError::Internal("Database error".to_owned())
                 })
+        })
+    }
+
+    fn auth_cache_epoch(&self) -> futures::future::BoxFuture<'_, OpResult<u64>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT value FROM settings WHERE `key` = ?")
+                    .bind(AUTH_CACHE_EPOCH_KEY)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!("auth_cache_epoch: {e}");
+                        OpError::Internal("Database error".to_owned())
+                    })?;
+
+            let Some((value,)) = row else {
+                return Ok(0);
+            };
+            value.parse::<u64>().map_err(|e| {
+                tracing::error!("auth_cache_epoch parse: {e}");
+                OpError::Internal("Invalid auth cache epoch".to_owned())
+            })
+        })
+    }
+
+    fn bump_auth_cache_epoch(&self) -> futures::future::BoxFuture<'_, OpResult<u64>> {
+        let pool = self.pool.clone();
+        Box::pin(async move {
+            sqlx::query(
+                "INSERT INTO settings (`key`, value) VALUES (?, '1') \
+                 ON DUPLICATE KEY UPDATE value = CAST(CAST(value AS UNSIGNED) + 1 AS CHAR)",
+            )
+            .bind(AUTH_CACHE_EPOCH_KEY)
+            .execute(&pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("bump_auth_cache_epoch: {e}");
+                OpError::Internal("Database error".to_owned())
+            })?;
+
+            let row: (String,) = sqlx::query_as("SELECT value FROM settings WHERE `key` = ?")
+                .bind(AUTH_CACHE_EPOCH_KEY)
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| {
+                    tracing::error!("read bumped auth_cache_epoch: {e}");
+                    OpError::Internal("Database error".to_owned())
+                })?;
+
+            row.0.parse::<u64>().map_err(|e| {
+                tracing::error!("bumped auth_cache_epoch parse: {e}");
+                OpError::Internal("Invalid auth cache epoch".to_owned())
+            })
         })
     }
 

@@ -7,7 +7,7 @@
 
 `extenddb-auth` owns request authentication primitives and IAM-style policy
 evaluation. It has no storage or HTTP-server dependency beyond `HeaderMap`, so
-the server can compose it with any storage backend.
+the auth crate stays independent of TiDB and server wiring.
 
 The shipped runtime supports exactly one authentication provider:
 `auth.provider = "builtin"`. Startup rejects `auth.provider = "none"` and any
@@ -67,8 +67,8 @@ uses storage-owned authorization aggregates and the policy evaluator.
 ### CredentialStore
 
 The auth crate defines `CredentialStore` for access-key lookup. The server
-implements it against the selected storage backend, which keeps the auth crate
-free of `sqlx` and TiDB dependencies.
+implements it against TiDB-backed stores, which keeps the auth crate free of
+`sqlx` and TiDB dependencies.
 
 `StoredCredential` zeroizes secret material on drop. Long-lived keys and
 temporary session keys use the same lookup interface; session credentials carry
@@ -105,7 +105,7 @@ loads all authorization metadata through the server-side authorization cache:
 
 The cache fetches these inputs through split storage lookup methods and keeps
 parsed policy documents hot. This keeps the storage contract narrow while
-letting each backend keep native indexes on the underlying lookup tables.
+letting TiDB keep native indexes on the underlying lookup tables.
 
 The policy evaluator applies the IAM decision order:
 
@@ -171,19 +171,23 @@ layer is optional; pass-through mode preserves the same interfaces while making
 every lookup hit storage directly.
 
 Self-induced changes from management APIs and the console invalidate affected
-entries immediately. Off-instance changes are bounded by `auth.cache.ttl_seconds`
-unless a future multi-instance invalidation channel is enabled.
+entries immediately and bump `auth_cache_epoch` in TiDB. Other frontends poll
+that epoch and flush local auth caches when it changes; `auth.cache.ttl_seconds`
+is the fallback for direct catalog writes or epoch propagation failures.
 
 ## Server Integration
 
 At startup, `extenddb serve` accepts only `auth.provider = "builtin"`. It builds:
 
-- a backend-backed `CredentialStore`
+- a storage-backed `CredentialStore`
 - a `CachedCredentialStore`
 - `BuiltinAuthProvider`
-- a backend-backed `AuthorizationStore`
+- a storage-backed `AuthorizationStore`
 - `CachedAuthzStore`
-- `CachedTableKeyInfoStore`
+
+Single-table authorization metadata prefetch reads table metadata directly from
+`TableEngine`; the prefetched value is request-local and is reused by
+`OperationContext`.
 
 The request path is:
 

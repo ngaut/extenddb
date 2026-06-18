@@ -35,7 +35,7 @@ pub enum CallerIdentity {
 /// tries IAM user auth (`account_id/user_name:password`).
 ///
 /// Returns the caller identity on success, or an error response on failure.
-/// Enforces per-principal lockout and per-IP rate limiting via the storage backend.
+/// Enforces per-principal lockout and per-IP rate limiting via TiDB-backed stores.
 pub async fn authenticate(
     headers: &HeaderMap,
     store: &dyn extenddb_storage::CatalogStore,

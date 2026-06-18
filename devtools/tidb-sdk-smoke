@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run a live DynamoDB SDK smoke against a TiDB-backed ExtendDB endpoint.
 
-This is the customer-path smoke for TiDB backend work. It exercises the cases
+This is the customer-path smoke for TiDB storage work. It exercises the cases
 that are easy to miss with SQL-only checks: a no-index table, normal item IO,
 BatchWriteItem, TransactWriteItems, and ClientRequestToken idempotency.
 """
@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run a live DynamoDB SDK smoke against an ExtendDB endpoint. "
-            "Start ExtendDB with the TiDB backend before running this command."
+            "Start ExtendDB with TiDB storage before running this command."
         )
     )
     parser.add_argument(

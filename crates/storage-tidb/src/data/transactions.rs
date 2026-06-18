@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Transactional read/write implementations for the `TiDB` backend.
+//! Transactional read/write implementations for `TiDB` storage.
 
 use extenddb_core::expression::{self, ExpressionMaps};
 use extenddb_core::limits::LimitsConfig;

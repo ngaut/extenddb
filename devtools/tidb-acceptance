@@ -2,11 +2,11 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Fast TiDB backend acceptance loop.
+# Fast TiDB storage acceptance loop.
 #
 # This script collects the checks that repeatedly come up while hardening the
-# TiDB backend. Use `--changed` during iteration, `--smoke` for live TiDB-native
-# behavior, and `--full` before claiming a TiDB backend fix is ready.
+# TiDB storage. Use `--changed` during iteration, `--smoke` for live TiDB-native
+# behavior, and `--full` before claiming a TiDB storage fix is ready.
 
 set -euo pipefail
 exec < /dev/null

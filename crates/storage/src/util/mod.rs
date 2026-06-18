@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Utility functions for storage backends.
+//! Utility functions for storage implementations.
 //!
 //! Support generic functionality like ARN handling, key handling, item serialization, and
 //! id validation.

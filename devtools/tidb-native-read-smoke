@@ -2,7 +2,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Verify the TiDB-native default-read path used by the storage-tidb backend.
+# Verify the TiDB-native default-read path used by storage-tidb.
 #
 # The smoke creates a throwaway database, writes one DynamoDB-shaped JSON item,
 # waits for the requested stale-read window, then verifies that one TiDB session

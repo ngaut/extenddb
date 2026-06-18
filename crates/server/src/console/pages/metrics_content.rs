@@ -147,7 +147,7 @@ function calcAvail(bkts){
   const m={};bkts.forEach(b=>{const o=(b.dimensions||[]).find(d=>d.Operation);if(!o||!isDataOp(o.Operation))return;if(!m[b.timestamp])m[b.timestamp]={ok:0,err:0};if(b.metric==='SuccessfulRequestLatency')m[b.timestamp].ok+=b.count;if(b.metric==='UserErrors'||b.metric==='SystemErrors')m[b.timestamp].err+=b.sum;});
   const s=Object.keys(m).sort();return{labels:s.map(tsLabel),values:s.map(t=>{const tot=m[t].ok+m[t].err;return tot>0?((1-m[t].err/tot)*100):100;})};
 }
-const SEG_COLORS={auth:'#3b82f6',authz:'#8b5cf6',throttle:'#6b7280',dispatch:'#059669',response:'#f59e0b'};
+const SEG_COLORS={auth:'#3b82f6',authz:'#8b5cf6',dispatch:'#059669',response:'#f59e0b'};
 function renderSegments(segs){
   const el=document.getElementById('segment-bars');if(!el)return;
   if(!segs||!segs.length){el.innerHTML='<p style=\'color:#999;font-size:0.85rem\'>No segment data yet.</p>';return;}
@@ -155,7 +155,7 @@ function renderSegments(segs){
   segs.sort((a,b)=>a.operation.localeCompare(b.operation));
   for(const s of segs){
     const a=s.avg,tot=a.total_us||1;
-    const parts=[{n:'auth',v:a.auth_us},{n:'authz',v:a.authz_us},{n:'throttle',v:a.throttle_us},{n:'dispatch',v:a.dispatch_us},{n:'response',v:a.response_us}];
+    const parts=[{n:'auth',v:a.auth_us},{n:'authz',v:a.authz_us},{n:'dispatch',v:a.dispatch_us},{n:'response',v:a.response_us}];
     let bar='<div style=\'display:flex;height:20px;width:100%;border-radius:3px;overflow:hidden\' title=\'';
     bar+=parts.map(p=>p.n+': '+(p.v/1000).toFixed(1)+'ms ('+(p.v/tot*100).toFixed(0)+'%)').join(', ');
     bar+='\'>';

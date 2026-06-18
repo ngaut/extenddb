@@ -173,7 +173,7 @@ pub struct GetItemInput {
     pub table_name: String,
     #[serde(rename = "Key")]
     pub key: Item,
-    /// Passed through to the storage backend so each implementation can choose
+    /// Passed through to storage so each implementation can choose
     /// its native strong or default-read path.
     #[serde(rename = "ConsistentRead")]
     pub consistent_read: Option<bool>,

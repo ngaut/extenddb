@@ -43,7 +43,7 @@ TLS certificate.
 
 ### TiDB acceptance loop
 
-For TiDB backend work, use the focused acceptance loop before falling back to
+For TiDB storage work, use the focused acceptance loop before falling back to
 the full integration suite:
 
 ```bash
@@ -62,7 +62,7 @@ EXTENDDB_ADMIN_USER=admin \
 EXTENDDB_ADMIN_PASSWORD=<password-from-init> \
 devtools/tidb-acceptance --sdk-smoke
 
-# Run the full TiDB backend developer gate
+# Run the full TiDB storage developer gate
 devtools/tidb-acceptance --full
 
 # Run the final archive/customer gate against a running TiDB-backed ExtendDB
@@ -101,7 +101,7 @@ pass `--plugin-dir`; Homebrew `mysql-client` plugin directories are detected
 automatically when available.
 
 The customer-path SDK smoke uses `devtools/tidb-sdk-smoke`. Start ExtendDB with
-the TiDB backend first, then run `devtools/tidb-acceptance --sdk-smoke`. The
+TiDB storage first, then run `devtools/tidb-acceptance --sdk-smoke`. The
 smoke creates a no-index table, verifies PutItem/GetItem, BatchWriteItem,
 TransactWriteItems, idempotent transaction replay, idempotency mismatch
 rejection, and table cleanup. It prints per-step latency timings so acceptance

@@ -35,18 +35,22 @@ fn should_redact(key: &str) -> bool {
     REDACTED_KEYS.iter().any(|&pattern| lower.contains(pattern))
 }
 
-/// Known runtime settings with their default values.
-/// These are the settings that can be changed via `extenddb settings set`.
+/// TiDB-supported runtime settings with their default values, plus read-only
+/// catalog/runtime metadata.
 const RUNTIME_DEFAULTS: &[(&str, &str)] = &[
-    ("allow_credential_import", "false"),
+    (
+        "allow_credential_import",
+        ops_settings::ALLOW_CREDENTIAL_IMPORT_DEFAULT_VALUE,
+    ),
     ("catalog_version", "—"),
-    ("control_plane_delay_seconds", "0.25"),
     ("data_database_connection_string", "—"),
     ("data_database_name", "—"),
-    ("gsi_propagation_delay_ms", "500"),
     ("log_level", "info"),
     ("sqlx_log_level", "warn"),
-    ("throttling_enabled", "false"),
+    ("ttl_expiry_interval_ms", "1000"),
+    ("ttl_expiry_batch_size", "1000"),
+    ("ttl_expiry_table_scan_limit", "1024"),
+    ("ttl_expiry_drain_batches", "8"),
 ];
 
 /// GET /console/settings — read-only settings display (admin only).
@@ -121,9 +125,6 @@ pub async fn settings_page(State(state): State<Arc<ConsoleState>>, headers: Head
         .collect();
 
     for &(key, default) in RUNTIME_DEFAULTS {
-        if !runtime_default_visible(state.setting_context, key) {
-            continue;
-        }
         let ek = html::escape(key);
         let (value, source) = if let Some(&db_val) = db_map.get(key) {
             (db_val.to_owned(), "database")
@@ -149,10 +150,7 @@ pub async fn settings_page(State(state): State<Arc<ConsoleState>>, headers: Head
 
     // Show any DB settings not in RUNTIME_DEFAULTS (unexpected keys).
     for (key, value) in &db_rows {
-        if RUNTIME_DEFAULTS
-            .iter()
-            .any(|&(k, _)| k == key && runtime_default_visible(state.setting_context, key))
-        {
+        if RUNTIME_DEFAULTS.iter().any(|&(k, _)| k == key) {
             continue;
         }
         let ek = html::escape(key);
@@ -187,8 +185,4 @@ pub async fn settings_page(State(state): State<Arc<ConsoleState>>, headers: Head
         &session.csrf_token,
     ))
     .into_response()
-}
-
-fn runtime_default_visible(context: ops_settings::RuntimeSettingContext, key: &str) -> bool {
-    ops_settings::READONLY_KEYS.contains(&key) || ops_settings::setting_is_supported(context, key)
 }

@@ -12,7 +12,7 @@ extenddb/
 │   ├── core/                  Pure sync Rust: types, expressions, validation, errors
 │   ├── engine/                Async operation handlers
 │   ├── storage/               Storage trait definitions
-│   ├── storage-tidb/          Default TiDB backend
+│   ├── storage-tidb/          TiDB storage implementation
 │   ├── auth/                  Authentication and authorization
 │   ├── server/                HTTP server, management API, web console
 │   └── bin/                   CLI entry point
@@ -53,9 +53,9 @@ Both debug and release builds must pass before branch acceptance.
 ### Crate Boundaries
 
 - `core` is pure sync Rust — no async runtime, no database drivers, no HTTP framework
-- `storage` defines traits and backend-agnostic utilities (ARN, key parsing)
+- `storage` defines traits and shared storage utilities (ARN, key parsing)
 - `engine` contains async operation handlers that call storage traits
-- `storage-tidb` implements the default TiDB backend with native online DDL,
+- `storage-tidb` implements TiDB storage with native online DDL,
   secondary indexes, TTL, follower reads, Resource Control, and BR
 - `auth` handles authentication and authorization
 - `server` handles HTTP concerns
@@ -99,8 +99,8 @@ Every source file must carry:
 2. Register it in the `dispatch` function in `crates/engine/src/lib.rs`
 3. Add any new types to `crates/core/src/types/`
 4. Add storage trait methods to `crates/storage/src/lib.rs` if needed
-5. Implement the storage methods in every enabled backend crate. For the
-   default product path, implement and verify `crates/storage-tidb/src/`.
+5. Implement any required storage methods in `crates/storage/src/lib.rs` and
+   `crates/storage-tidb/src/`.
 6. Add Python integration tests in `tests/`
 7. Update the Usage Guide (`docs/manuals/03-usage-guide.md`)
 
@@ -160,11 +160,11 @@ The `run-tests` script automatically:
 - Provisions test credentials via `devtools/provision-test-credentials`
 - Creates JVM trust material for registered Maven/Gradle external suites when
   the target uses a self-signed TLS cert
-- Sets `control_plane_delay_seconds` to 0.05 for backends that use a simulated control-plane delay; TiDB does not expose this setting and relies on native online DDL
-- Configures backend-specific test settings for immediate control-plane visibility
-- Enables throttling for production-like behavior
+- Leaves TiDB online DDL and secondary-index visibility on the native path; no simulated control-plane delay is configured
+- Configures supported runtime settings needed by the selected test suites
+- Leaves throughput admission to TiDB Resource Control/resource groups
 - Configures import/export paths for file operation tests
-- Extracts and exports backend-specific lifecycle-test connection settings when the selected backend needs them
+- Exports TiDB lifecycle-test connection settings when those suites need them
 
 **Test artifacts** are written to `discussions/` with the code repo's HEAD commit hash:
 - `test-rust-<hash>.txt` — Rust unit test output
@@ -177,7 +177,7 @@ The `run-tests` script automatically:
 
 ### TiDB Acceptance Loop
 
-Use `devtools/tidb-acceptance` for TiDB backend changes before escalating to the
+Use `devtools/tidb-acceptance` for TiDB storage changes before escalating to the
 full customer-facing integration suites:
 
 ```bash
@@ -196,7 +196,7 @@ EXTENDDB_ADMIN_USER=admin \
 EXTENDDB_ADMIN_PASSWORD=<password-from-init> \
 devtools/tidb-acceptance --sdk-smoke
 
-# Run the full TiDB backend developer gate
+# Run the full TiDB storage developer gate
 devtools/tidb-acceptance --full
 
 # Run the final archive/customer gate against a running TiDB-backed ExtendDB
@@ -212,7 +212,7 @@ selected gate without executing it. `--full` runs shell checks,
 `git diff --check`, the live TiDB native-read smoke, `storage-tidb` tests and
 clippy, `extenddb --features tidb` tests and clippy, the standalone Rust SDK
 integration test compile, and documentation build. Each run writes a single
-artifact under `discussions/`, so TiDB backend proof is not lost in terminal
+artifact under `discussions/`, so TiDB storage proof is not lost in terminal
 scrollback.
 
 Use `--archive` for the final TiDB branch evidence. It runs the same developer
@@ -242,7 +242,7 @@ Configure non-default endpoints with `EXTENDDB_TIDB_HOST`, `EXTENDDB_TIDB_PORT`,
 Homebrew systems, the smoke auto-detects `mysql-client`'s
 `mysql_native_password` plugin directory when it is installed.
 
-Use `--sdk-smoke` after starting ExtendDB with the TiDB backend to prove the
+Use `--sdk-smoke` after starting ExtendDB with TiDB storage to prove the
 customer path, not just native SQL behavior. This invokes
 `devtools/tidb-sdk-smoke`, which creates a no-index table through the DynamoDB
 SDK, verifies PutItem/GetItem, BatchWriteItem, TransactWriteItems, idempotent
@@ -261,7 +261,7 @@ customer-path performance check. If SDK credentials are not already exported but
 | Comprehensive (Python) | Clean-room compatibility gap analysis tests under `tests/python/` |
 | Rust SDK integration | Standalone AWS SDK integration crate under `tests/rust/` |
 | External registry | Optional organization-specific suites registered in `external-suites.toml` |
-| CLI lifecycle | Binary lifecycle tests for the selected backend |
+| CLI lifecycle | Binary lifecycle tests against TiDB |
 
 ### Python Integration Tests
 
@@ -287,7 +287,7 @@ The `--parallel` flag enables pytest-xdist with `--dist loadfile`, which
 distributes entire test files across workers. This keeps module/class-scoped
 fixtures on a single worker while running independent files concurrently. The
 default worker count (1/3 of CPU cores, minimum 2) leaves headroom for the
-extenddb server and the active storage backend.
+extenddb server and TiDB.
 
 ### Comprehensive Tests
 

@@ -1,10 +1,7 @@
 # Copyright 2026 ExtendDB contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the TTL (Time To Live) subsystem.
-
-Covers UpdateTimeToLive, DescribeTimeToLive, and item expiry deletion.
-"""
+"""Tests for the TTL (Time To Live) subsystem."""
 
 from __future__ import annotations
 
@@ -17,6 +14,8 @@ import pytest
 from botocore.exceptions import ClientError
 
 from conftest import wait_for_active, wait_for_deleted
+
+
 @pytest.fixture()
 def ttl_table(dynamodb_client, unique_table_name):
     """Create a PAY_PER_REQUEST table for TTL tests."""
@@ -39,6 +38,8 @@ def ttl_table(dynamodb_client, unique_table_name):
             raise
     else:
         wait_for_deleted(dynamodb_client, unique_table_name)
+
+
 class TestUpdateTimeToLive:
     """UpdateTimeToLive operation tests."""
 
@@ -86,6 +87,8 @@ class TestUpdateTimeToLive:
                 },
             )
         assert exc_info.value.response["Error"]["Code"] == "ResourceNotFoundException"
+
+
 class TestDescribeTimeToLive:
     """DescribeTimeToLive operation tests."""
 
@@ -113,17 +116,13 @@ class TestDescribeTimeToLive:
                 TableName="nonexistent-table-xyz-999"
             )
         assert exc_info.value.response["Error"]["Code"] == "ResourceNotFoundException"
-class TestTtlExpiry:
-    """TTL item expiry tests.
 
-    These tests insert items with TTL attributes set to the past and
-    verify the TTL worker deletes them. The extenddb TTL worker runs every
-    60 seconds, so we wait up to 90 seconds for deletion.
-    """
+
+class TestTtlExpiry:
+    """TTL item expiry tests."""
 
     @pytest.mark.slow
     def test_expired_item_deleted(self, dynamodb_client, ttl_table):
-        """Item with TTL in the past is eventually deleted."""
         dynamodb_client.update_time_to_live(
             TableName=ttl_table,
             TimeToLiveSpecification={
@@ -131,7 +130,6 @@ class TestTtlExpiry:
                 "AttributeName": "expiry",
             },
         )
-        # Insert item with expiry in the past.
         past_epoch = int(time.time()) - 3600
         dynamodb_client.put_item(
             TableName=ttl_table,
@@ -141,25 +139,19 @@ class TestTtlExpiry:
                 "data": {"S": "should-be-deleted"},
             },
         )
-        # Wait for TTL worker to delete it (worker runs every 60s).
+
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             resp = dynamodb_client.get_item(
                 TableName=ttl_table, Key={"pk": {"S": "ttl-test-1"}}
             )
             if "Item" not in resp:
-                return  # Success — item was deleted.
+                return
             time.sleep(5)
         pytest.fail("TTL worker did not delete expired item within 90 seconds")
 
     @pytest.mark.slow
     def test_non_expired_item_not_deleted(self, dynamodb_client, ttl_table):
-        """Item with TTL in the future is NOT deleted.
-
-        Best-effort negative test: we verify the item still exists after a
-        short wait. This does not guarantee the TTL worker ran and chose to
-        skip the item — only that the item was not deleted within the window.
-        """
         dynamodb_client.update_time_to_live(
             TableName=ttl_table,
             TimeToLiveSpecification={
@@ -167,15 +159,14 @@ class TestTtlExpiry:
                 "AttributeName": "expiry",
             },
         )
-        future_epoch = int(time.time()) + 86400  # 24 hours from now
         dynamodb_client.put_item(
             TableName=ttl_table,
             Item={
                 "pk": {"S": "ttl-future"},
-                "expiry": {"N": str(future_epoch)},
+                "expiry": {"N": str(int(time.time()) + 86_400)},
             },
         )
-        # Wait a bit and verify item still exists.
+
         time.sleep(5)
         resp = dynamodb_client.get_item(
             TableName=ttl_table, Key={"pk": {"S": "ttl-future"}}
@@ -183,7 +174,6 @@ class TestTtlExpiry:
         assert "Item" in resp
 
     def test_item_without_ttl_attribute_not_deleted(self, dynamodb_client, ttl_table):
-        """Item missing the TTL attribute is not deleted."""
         dynamodb_client.update_time_to_live(
             TableName=ttl_table,
             TimeToLiveSpecification={
@@ -198,22 +188,15 @@ class TestTtlExpiry:
                 "data": {"S": "should-persist"},
             },
         )
+
         time.sleep(5)
         resp = dynamodb_client.get_item(
             TableName=ttl_table, Key={"pk": {"S": "no-ttl-attr"}}
         )
-        assert "Item" in resp
         assert resp["Item"]["data"]["S"] == "should-persist"
 
     @pytest.mark.slow
-    # EXTENDDB_TEST_ENDPOINT is required — devtools/run-tests validates this.
     def test_ttl_expiry_generates_stream_record(self, dynamodb_client):
-        """TTL item expiry generates a stream delete event.
-
-        Creates a table with streams enabled and TTL, inserts an expired item,
-        waits for the TTL worker to delete it, then verifies a REMOVE event
-        appears in the stream with the correct userIdentity.
-        """
         endpoint_url = os.environ.get("EXTENDDB_TEST_ENDPOINT", "").strip()
         kwargs: dict = dict(
             service_name="dynamodbstreams",
@@ -241,7 +224,6 @@ class TestTtlExpiry:
             )
             wait_for_active(dynamodb_client, table_name)
 
-            # Enable TTL.
             dynamodb_client.update_time_to_live(
                 TableName=table_name,
                 TimeToLiveSpecification={
@@ -250,7 +232,6 @@ class TestTtlExpiry:
                 },
             )
 
-            # Insert item with expiry in the past.
             past_epoch = int(time.time()) - 3600
             dynamodb_client.put_item(
                 TableName=table_name,
@@ -261,45 +242,34 @@ class TestTtlExpiry:
                 },
             )
 
-            # Wait for TTL worker to delete the item.
             deadline = time.monotonic() + 90
-            deleted = False
             while time.monotonic() < deadline:
                 resp = dynamodb_client.get_item(
                     TableName=table_name, Key={"pk": {"S": "ttl-stream-test"}}
                 )
                 if "Item" not in resp:
-                    deleted = True
                     break
                 time.sleep(5)
-
-            if not deleted:
+            else:
                 pytest.fail("TTL worker did not delete expired item within 90 seconds")
 
-            # Now check the stream for a REMOVE event.
             desc = dynamodb_client.describe_table(TableName=table_name)
             stream_arn = desc["Table"].get("LatestStreamArn")
             assert stream_arn, "Table should have a stream ARN"
 
-            # Get stream description and shards.
-            stream_desc = streams_client.describe_stream(
-                StreamArn=stream_arn
-            )
+            stream_desc = streams_client.describe_stream(StreamArn=stream_arn)
             shards = stream_desc["StreamDescription"]["Shards"]
-            assert len(shards) > 0, "Stream should have at least one shard"
+            assert shards, "Stream should have at least one shard"
 
-            # Read all records from all shards looking for a REMOVE event.
             ttl_remove_record = None
             for shard in shards:
-                shard_id = shard["ShardId"]
                 iter_resp = streams_client.get_shard_iterator(
                     StreamArn=stream_arn,
-                    ShardId=shard_id,
+                    ShardId=shard["ShardId"],
                     ShardIteratorType="TRIM_HORIZON",
                 )
                 shard_iter = iter_resp["ShardIterator"]
 
-                # Read up to 3 pages of records.
                 for _ in range(3):
                     if not shard_iter:
                         break
@@ -307,39 +277,26 @@ class TestTtlExpiry:
                         ShardIterator=shard_iter, Limit=100
                     )
                     for record in records_resp.get("Records", []):
-                        if record["eventName"] == "REMOVE":
-                            keys = record["dynamodb"].get("Keys", {})
-                            if keys.get("pk", {}).get("S") == "ttl-stream-test":
-                                ttl_remove_record = record
-                                break
+                        keys = record["dynamodb"].get("Keys", {})
+                        if (
+                            record["eventName"] == "REMOVE"
+                            and keys.get("pk", {}).get("S") == "ttl-stream-test"
+                        ):
+                            ttl_remove_record = record
+                            break
                     if ttl_remove_record:
                         break
                     shard_iter = records_resp.get("NextShardIterator")
                 if ttl_remove_record:
                     break
 
-            assert ttl_remove_record is not None, (
-                "Expected a REMOVE stream record for TTL-expired item 'ttl-stream-test'"
-            )
-
-            # Verify userIdentity on TTL-originated stream records.
+            assert ttl_remove_record is not None
             identity = ttl_remove_record.get("userIdentity")
-            assert identity is not None, (
-                "TTL REMOVE stream record must include userIdentity"
-            )
-            assert identity.get("Type") == "Service", (
-                f"userIdentity.Type should be 'Service', got {identity.get('Type')!r}"
-            )
-            assert identity.get("PrincipalId") == "dynamodb.amazonaws.com", (
-                f"userIdentity.PrincipalId should be 'dynamodb.amazonaws.com', "
-                f"got {identity.get('PrincipalId')!r}"
-            )
-
-            # Verify OldImage is present (NEW_AND_OLD_IMAGES view type).
+            assert identity is not None
+            assert identity.get("Type") == "Service"
+            assert identity.get("PrincipalId") == "dynamodb.amazonaws.com"
             old_image = ttl_remove_record["dynamodb"].get("OldImage")
-            assert old_image is not None, (
-                "TTL REMOVE record should include OldImage with NEW_AND_OLD_IMAGES"
-            )
+            assert old_image is not None
             assert old_image.get("pk", {}).get("S") == "ttl-stream-test"
         finally:
             try:

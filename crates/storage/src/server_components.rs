@@ -1,26 +1,19 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Backend factory infrastructure for creating server components.
-//!
-//! This module provides the factory pattern for creating storage backends.
-//! Backends register themselves via the inventory crate, allowing cmd_serve
-//! to remain backend-agnostic.
+//! Server component bundle returned by the concrete storage implementation.
 
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use extenddb_auth::CredentialStore;
 
-use crate::config::StorageConfig;
 use crate::hooks::ServerRuntimeHooks;
 use crate::{CatalogStore, StorageEngine};
 
 /// Components needed to run the extenddb server.
 ///
-/// Returned by backend factories. Contains all the trait objects needed
-/// by cmd_serve to start the HTTP server and spawn workers.
+/// Contains all trait objects needed by cmd_serve to start the HTTP server and
+/// spawn storage-owned workers.
 pub struct ServerComponents {
     /// Storage engine implementing all data/metadata operations
     pub engine: Arc<dyn StorageEngine>,
@@ -33,18 +26,15 @@ pub struct ServerComponents {
     /// constructing the auth provider.
     pub credential_store: Arc<dyn CredentialStore>,
 
-    /// Optional backend-specific runtime hooks for worker spawning and health checks
+    /// Optional storage-owned runtime hooks for worker spawning and health checks
     pub runtime_hooks: Option<Arc<dyn ServerRuntimeHooks>>,
 }
 
-/// Errors that can occur during backend initialization.
+/// Errors that can occur during storage initialization.
 #[derive(Debug)]
-pub enum BackendError {
-    /// Backend name not registered
-    UnknownBackend(String),
-
-    /// Failed to connect to backend database
-    ConnectionFailed { backend: String, details: String },
+pub enum StorageInitError {
+    /// Failed to connect to TiDB or an associated native service.
+    ConnectionFailed { target: String, details: String },
 
     /// Catalog schema version mismatch
     CatalogVersionMismatch { expected: String, found: String },
@@ -56,22 +46,11 @@ pub enum BackendError {
     InitializationFailed(String),
 }
 
-impl std::fmt::Display for BackendError {
+impl std::fmt::Display for StorageInitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownBackend(b) => {
-                let available: Vec<&str> = inventory::iter::<ServerComponentsRegistration>
-                    .into_iter()
-                    .map(|r| r.backend)
-                    .collect();
-                write!(
-                    f,
-                    "Unknown backend '{b}'. Available backends: {}",
-                    available.join(", ")
-                )
-            }
-            Self::ConnectionFailed { backend, details } => {
-                write!(f, "Failed to connect to {backend}: {details}")
+            Self::ConnectionFailed { target, details } => {
+                write!(f, "Failed to connect to {target}: {details}")
             }
             Self::CatalogVersionMismatch { expected, found } => write!(
                 f,
@@ -81,49 +60,9 @@ impl std::fmt::Display for BackendError {
                 f,
                 "Encryption key not found in settings table. Run 'extenddb init'"
             ),
-            Self::InitializationFailed(msg) => write!(f, "Backend initialization failed: {msg}"),
+            Self::InitializationFailed(msg) => write!(f, "Storage initialization failed: {msg}"),
         }
     }
 }
 
-impl std::error::Error for BackendError {}
-
-/// Factory function type for creating server components.
-///
-/// Takes a StorageConfig trait object and region string, returns a Future
-/// that resolves to ServerComponents or BackendError.
-pub type ServerComponentsFactory =
-    fn(
-        &dyn StorageConfig,
-        &str,
-    ) -> Pin<Box<dyn Future<Output = Result<ServerComponents, BackendError>> + Send>>;
-
-/// Registration for backend server components factory.
-///
-/// Backends submit this via inventory::submit! to register themselves.
-pub struct ServerComponentsRegistration {
-    /// Backend name.
-    pub backend: &'static str,
-
-    /// Factory function that creates the backend components
-    pub factory: ServerComponentsFactory,
-}
-
-inventory::collect!(ServerComponentsRegistration);
-
-/// Create server components for the specified backend.
-///
-/// Searches registered backends via inventory and calls the matching factory.
-/// Returns UnknownBackend error if the backend is not registered.
-pub async fn create_server_components(
-    backend: &str,
-    config: &dyn StorageConfig,
-    region: &str,
-) -> Result<ServerComponents, BackendError> {
-    for reg in inventory::iter::<ServerComponentsRegistration> {
-        if reg.backend == backend {
-            return (reg.factory)(config, region).await;
-        }
-    }
-    Err(BackendError::UnknownBackend(backend.to_string()))
-}
+impl std::error::Error for StorageInitError {}

@@ -63,12 +63,11 @@ test needs a deterministic flush.
 <option value="account">account — sweep one account across every cache</option>
 <option value="credential">credential — drop one access key</option>
 <option value="group_members">group_members — fan out to a list of users</option>
-<option value="table_key_info">table_key_info — drop one table's key info</option>
 <option value="resource_tags">resource_tags — drop one ARN's resource tags</option>
 <option value="all">all — flush every cache (requires confirmation)</option>
 </select>
 
-<div class="sel" data-scopes="account user role group_members table_key_info">
+<div class="sel" data-scopes="account user role group_members">
 <label for="account_id">account_id</label>
 <input id="account_id" name="account_id" type="text" autocomplete="off">
 </div>
@@ -91,11 +90,6 @@ test needs a deterministic flush.
 <div class="sel" data-scopes="credential">
 <label for="access_key_id">access_key_id</label>
 <input id="access_key_id" name="access_key_id" type="text" autocomplete="off">
-</div>
-
-<div class="sel" data-scopes="table_key_info">
-<label for="table_name">table_name</label>
-<input id="table_name" name="table_name" type="text" autocomplete="off">
 </div>
 
 <div class="sel" data-scopes="resource_tags">
@@ -163,8 +157,6 @@ pub struct InvalidateForm {
     #[serde(default)]
     pub access_key_id: String,
     #[serde(default)]
-    pub table_name: String,
-    #[serde(default)]
     pub arn: String,
     #[serde(default)]
     pub confirm: String,
@@ -231,7 +223,6 @@ pub async fn invalidate_cache(
         role_name: optional(&form.role_name),
         user_names,
         access_key_id: optional(&form.access_key_id),
-        table_name: optional(&form.table_name),
         arn: optional(&form.arn),
         confirm: Some(confirm_ok),
     };

@@ -91,7 +91,7 @@ async fn create_lsi_table(name: &str) {
             }
         }
     }
-    wait_for_active(&c, name).await;
+    wait_for_active(c, name).await;
 }
 
 /// Seed items that share the same LSI sort key value.
@@ -360,7 +360,7 @@ async fn create_hash_only_gsi_table(name: &str) {
             }
         }
     }
-    wait_for_active(&c, name).await;
+    wait_for_active(c, name).await;
 }
 
 /// Seed items that share the same GSI hash key.

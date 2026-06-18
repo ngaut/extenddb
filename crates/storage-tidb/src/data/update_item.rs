@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `update_item` implementation for the `TiDB` backend.
+//! `update_item` implementation for `TiDB` storage.
 
 use extenddb_core::expression::{self, Expr, ExpressionMaps, UpdateAction};
 use extenddb_core::types::{Item, KeyType, TableKeyInfo};

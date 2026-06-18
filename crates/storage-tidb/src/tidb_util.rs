@@ -371,10 +371,19 @@ pub(crate) async fn current_tidb_transaction_tso(
     // TiDB assigns `@@tidb_current_ts` to an active transaction. Reading TSO
     // helper functions outside a transaction can yield zero, which is not a
     // usable MVCC or BR snapshot timestamp.
-    sqlx::query_scalar("SELECT @@tidb_current_ts")
+    let raw: String = sqlx::query_scalar("SELECT CAST(@@tidb_current_ts AS CHAR)")
         .fetch_one(&mut **tx)
         .await
-        .map_err(|e| StorageError::Internal(format!("Database error: {e}")))
+        .map_err(|e| StorageError::Internal(format!("Database error: {e}")))?;
+    parse_tidb_tso(&raw)
+}
+
+fn parse_tidb_tso(raw: &str) -> Result<i64, StorageError> {
+    raw.trim().parse::<i64>().map_err(|e| {
+        StorageError::Internal(format!(
+            "TiDB returned invalid current timestamp {raw:?}: {e}"
+        ))
+    })
 }
 
 fn transaction_retry_delay(retries: usize) -> Duration {
@@ -558,7 +567,7 @@ mod tests {
         is_index_not_found_tidb_storage_error_for_index_on_table, is_retryable_tidb_storage_error,
         is_table_exists_tidb_error_text, is_table_not_found_tidb_sqlx_error,
         is_table_not_found_tidb_storage_error, is_table_not_found_tidb_storage_error_for_table,
-        is_tidb_snapshot_read_error_text, quote_tidb_resource_group_name,
+        is_tidb_snapshot_read_error_text, parse_tidb_tso, quote_tidb_resource_group_name,
         retry_tidb_idempotent_operation, tidb_as_of_epoch_clause, tidb_as_of_tso_clause,
     };
 
@@ -627,6 +636,15 @@ mod tests {
         ] {
             assert!(!is_retryable_tidb_storage_error(&error));
         }
+    }
+
+    #[test]
+    fn parses_tidb_current_ts_string() {
+        assert_eq!(
+            parse_tidb_tso("  470684210795315201  ").expect("valid tso"),
+            470_684_210_795_315_201
+        );
+        assert!(parse_tidb_tso("not-a-tso").is_err());
     }
 
     #[test]

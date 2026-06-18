@@ -310,7 +310,7 @@ async fn put_item_with_return_value_none() {
         .await
         .unwrap();
 
-    assert!(result.attributes().map_or(true, |a| a.is_empty()));
+    assert!(result.attributes().is_none_or(|a| a.is_empty()));
 }
 
 #[tokio::test]

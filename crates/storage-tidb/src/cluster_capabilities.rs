@@ -52,7 +52,7 @@ fn validate_version(version: TidbVersion) -> Result<(), StorageError> {
 
 fn unsupported_version_error(version: TidbVersion) -> StorageError {
     StorageError::Configuration(format!(
-        "TiDB backend requires TiDB >= {MIN_GLOBAL_NON_UNIQUE_INDEX_VERSION} because partitioned DynamoDB data tables use non-unique GLOBAL indexes for native secondary-index reads; detected {version}"
+        "TiDB storage requires TiDB >= {MIN_GLOBAL_NON_UNIQUE_INDEX_VERSION} because partitioned DynamoDB data tables use non-unique GLOBAL indexes for native secondary-index reads; detected {version}"
     ))
 }
 

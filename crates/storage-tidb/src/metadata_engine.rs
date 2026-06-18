@@ -150,6 +150,34 @@ async fn data_table_has_native_ttl(
     Ok(create_table_has_native_ttl(&create_table))
 }
 
+async fn user_table_ttl_lookup_needs_repair(
+    pool: &sqlx::MySqlPool,
+    table_id: &str,
+) -> Result<bool, StorageError> {
+    let data_table = data::data_table_name(table_id);
+    if data_table_has_native_ttl(pool, &data_table).await? {
+        return Ok(true);
+    }
+
+    let physical_table = data::physical_data_table_name(table_id);
+    let (has_column, has_index): (bool, bool) = sqlx::query_as(
+        "SELECT \
+            EXISTS(SELECT 1 FROM information_schema.columns \
+                   WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?), \
+            EXISTS(SELECT 1 FROM information_schema.statistics \
+                   WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?)",
+    )
+    .bind(&physical_table)
+    .bind(TTL_EXPIRES_AT_COLUMN)
+    .bind(&physical_table)
+    .bind(TTL_EXPIRES_AT_INDEX)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+    Ok(!has_column || !has_index)
+}
+
 async fn native_ttl_needs_repair(
     pool: &sqlx::MySqlPool,
     data_table: &str,
@@ -235,7 +263,7 @@ async fn drop_legacy_ttl_lookup_artifacts(
 ) -> Result<(), StorageError> {
     let data_table = data::data_table_name(table_id);
 
-    let sql = drop_indexes_sql(&data_table, &[TTL_EXPIRES_AT_INDEX, LEGACY_TTL_EPOCH_INDEX]);
+    let sql = drop_indexes_sql(&data_table, &[LEGACY_TTL_EPOCH_INDEX]);
     execute_tidb_idempotent_ddl(pool, "drop_legacy_ttl_lookup_artifacts_drop_indexes", &sql)
         .await?;
 
@@ -266,31 +294,46 @@ async fn add_ttl_generated_column(
     Ok(())
 }
 
-async fn configure_native_ttl(
+async fn remove_user_table_native_ttl_if_present(
+    pool: &sqlx::MySqlPool,
+    table_id: &str,
+) -> Result<(), StorageError> {
+    let data_table = data::data_table_name(table_id);
+    if data_table_has_native_ttl(pool, &data_table).await? {
+        let sql = format!("ALTER TABLE {data_table} REMOVE TTL");
+        execute_tidb_idempotent_ddl(pool, "remove_user_table_native_ttl", &sql).await?;
+    }
+    Ok(())
+}
+
+async fn add_ttl_lookup_index(pool: &sqlx::MySqlPool, table_id: &str) -> Result<(), StorageError> {
+    let data_table = data::data_table_name(table_id);
+    let sql = ttl_lookup_index_sql(&data_table);
+    execute_tidb_idempotent_ddl(pool, "add_ttl_lookup_index", &sql).await?;
+    Ok(())
+}
+
+async fn configure_user_table_ttl_lookup(
     pool: &sqlx::MySqlPool,
     table_id: &str,
     ttl_attribute: &str,
 ) -> Result<(), StorageError> {
+    remove_user_table_native_ttl_if_present(pool, table_id).await?;
     add_ttl_generated_column(pool, table_id, ttl_attribute).await?;
-
-    let data_table = data::data_table_name(table_id);
-    let enable_ttl = native_ttl_attribute_sql(&data_table);
-    execute_tidb_idempotent_ddl(pool, "configure_native_ttl", &enable_ttl).await?;
-    let enable_ttl_jobs = native_ttl_enable_sql(&data_table);
-    execute_tidb_idempotent_ddl(pool, "configure_native_ttl_enable_jobs", &enable_ttl_jobs).await?;
+    add_ttl_lookup_index(pool, table_id).await?;
     drop_legacy_ttl_lookup_artifacts(pool, table_id).await?;
 
     Ok(())
 }
 
-fn native_ttl_attribute_sql(data_table: &str) -> String {
-    format!(
-        "ALTER TABLE {data_table} TTL = `{TTL_EXPIRES_AT_COLUMN}` + INTERVAL 0 SECOND TTL_JOB_INTERVAL = '1h'"
-    )
-}
-
 fn fixed_native_ttl_attribute_sql(data_table: &str, ttl_expr: &str, job_interval: &str) -> String {
     format!("ALTER TABLE {data_table} TTL = {ttl_expr} TTL_JOB_INTERVAL = '{job_interval}'")
+}
+
+fn ttl_lookup_index_sql(data_table: &str) -> String {
+    format!(
+        "ALTER TABLE {data_table} ADD INDEX IF NOT EXISTS `{TTL_EXPIRES_AT_INDEX}` (`{TTL_EXPIRES_AT_COLUMN}`)"
+    )
 }
 
 fn native_ttl_enable_sql(data_table: &str) -> String {
@@ -528,7 +571,7 @@ impl TidbEngine {
         }
     }
 
-    pub(crate) async fn reconcile_native_ttl_transition(
+    pub(crate) async fn reconcile_user_ttl_transition(
         &self,
         table_id: &str,
         ttl_attribute: Option<&str>,
@@ -541,7 +584,9 @@ impl TidbEngine {
                         "TiDB TTL catalog status is ENABLING without an attribute for {table_id}"
                     ))
                 })?;
-                match configure_native_ttl(&self.data_pool, table_id, ttl_attribute).await {
+                match configure_user_table_ttl_lookup(&self.data_pool, table_id, ttl_attribute)
+                    .await
+                {
                     Ok(()) => match self.finalize_ttl_enable(table_id, ttl_attribute).await {
                         Ok(()) => Ok(()),
                         Err(err) => {
@@ -576,9 +621,9 @@ impl TidbEngine {
         }
     }
 
-    pub(crate) async fn repair_native_ttl(&self) -> Result<(), StorageError> {
+    pub(crate) async fn repair_ttl_artifacts(&self) -> Result<(), StorageError> {
         self.repair_fixed_native_ttl().await?;
-        self.repair_user_table_native_ttl().await?;
+        self.repair_user_table_ttl_lookup().await?;
         Ok(())
     }
 
@@ -627,7 +672,7 @@ impl TidbEngine {
         Ok(())
     }
 
-    async fn repair_user_table_native_ttl(&self) -> Result<(), StorageError> {
+    async fn repair_user_table_ttl_lookup(&self) -> Result<(), StorageError> {
         let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
             "SELECT table_id, ttl_attribute, ttl_status FROM tables \
              WHERE (ttl_attribute IS NOT NULL OR ttl_status <> 'DISABLED') \
@@ -641,7 +686,7 @@ impl TidbEngine {
             let physical_table_name = data::physical_data_table_name(&table_id);
             if table_has_active_native_ddl_job(
                 &self.data_pool,
-                "repair_user_table_native_ttl",
+                "repair_user_table_ttl_lookup",
                 &physical_table_name,
             )
             .await?
@@ -680,14 +725,13 @@ impl TidbEngine {
                 )));
             }
 
-            let data_table = data::data_table_name(&table_id);
             if ttl_status == TTL_STATUS_ENABLED
-                && !native_ttl_needs_repair(&self.data_pool, &data_table).await?
+                && !user_table_ttl_lookup_needs_repair(&self.data_pool, &table_id).await?
             {
                 continue;
             }
 
-            configure_native_ttl(&self.data_pool, &table_id, &ttl_attribute).await?;
+            configure_user_table_ttl_lookup(&self.data_pool, &table_id, &ttl_attribute).await?;
             if ttl_status == TTL_STATUS_ENABLING {
                 self.finalize_ttl_enable(&table_id, &ttl_attribute).await?;
             }
@@ -859,21 +903,17 @@ mod tests {
     use super::{
         CATALOG_FIXED_NATIVE_TTL, DATA_FIXED_NATIVE_TTL, create_table_has_disabled_ttl,
         create_table_has_native_ttl, drop_columns_sql, drop_indexes_sql,
-        fixed_native_ttl_attribute_sql, native_ttl_attribute_sql, native_ttl_enable_sql,
-        table_accepts_native_schema_change, table_identity_from_arn, tag_delete_sql, ttl_json_path,
+        fixed_native_ttl_attribute_sql, native_ttl_enable_sql, table_accepts_native_schema_change,
+        table_identity_from_arn, tag_delete_sql, ttl_json_path, ttl_lookup_index_sql,
         ttl_status_from_catalog,
     };
     use extenddb_core::types::TimeToLiveStatus;
 
     #[test]
-    fn native_ttl_configuration_reenables_ttl_jobs() {
+    fn user_table_ttl_uses_lookup_index_for_extenddb_expiry_worker() {
         assert_eq!(
-            native_ttl_attribute_sql("`_ddb_table`"),
-            "ALTER TABLE `_ddb_table` TTL = `_edb_ttl_expires_at` + INTERVAL 0 SECOND TTL_JOB_INTERVAL = '1h'"
-        );
-        assert_eq!(
-            native_ttl_enable_sql("`_ddb_table`"),
-            "ALTER TABLE `_ddb_table` TTL_ENABLE = 'ON'"
+            ttl_lookup_index_sql("`_ddb_table`"),
+            "ALTER TABLE `_ddb_table` ADD INDEX IF NOT EXISTS `_edb_ttl_expires_at_idx` (`_edb_ttl_expires_at`)"
         );
     }
 

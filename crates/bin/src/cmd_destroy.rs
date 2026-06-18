@@ -6,7 +6,8 @@
 //! Reads config, enumerates tables, requires `--yes` to confirm, drops both databases.
 
 use clap::Args;
-use extenddb_storage::bootstrapper::BootstrapOptions;
+use extenddb_storage::bootstrap::BootstrapOptions;
+use extenddb_storage_tidb::TidbBootstrapper;
 
 use crate::config;
 
@@ -38,8 +39,7 @@ pub async fn run(args: DestroyArgs) -> anyhow::Result<()> {
             args.config,
         );
     }
-    let app_config = config::load(&args.config)?;
-    let backend = &app_config.storage._backend;
+    let _app_config = config::load(&args.config)?;
 
     let bootstrap_options = BootstrapOptions {
         admin_user: args.storage_admin_user.clone(),
@@ -52,12 +52,7 @@ pub async fn run(args: DestroyArgs) -> anyhow::Result<()> {
     println!();
 
     // Create bootstrap store for catalog queries and database teardown.
-    let bootstrap = extenddb_storage::bootstrapper::create_bootstrapper(
-        backend,
-        &args.config,
-        bootstrap_options.clone(),
-    )
-    .await;
+    let bootstrap = TidbBootstrapper::from_config(&args.config, bootstrap_options.clone()).await;
 
     let mut data_db = String::new();
 
@@ -65,7 +60,7 @@ pub async fn run(args: DestroyArgs) -> anyhow::Result<()> {
         let catalog_db = bootstrap.catalog_database_name();
         let endpoint = bootstrap.endpoint_info();
         println!("Catalog database: {catalog_db}");
-        println!("{backend}:         {endpoint}");
+        println!("TiDB endpoint:    {endpoint}");
         println!();
 
         println!("--- Tables in catalog:");
@@ -103,19 +98,15 @@ pub async fn run(args: DestroyArgs) -> anyhow::Result<()> {
     // catalog DB we're about to drop).
     if !data_db.is_empty() {
         // Defense-in-depth: validate even though this came from the catalog.
-        config::validate_identifier(backend, &data_db, "data database name")?;
+        config::validate_identifier(&data_db, "data database name")?;
     }
 
     // Reconnect as admin for DDL operations (the catalog pool must be dropped
     // before we can DROP DATABASE).
     drop(bootstrap);
-    let bootstrap = extenddb_storage::bootstrapper::create_bootstrapper(
-        backend,
-        &args.config,
-        bootstrap_options,
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("Cannot connect as admin: {e:?}"))?;
+    let bootstrap = TidbBootstrapper::from_config(&args.config, bootstrap_options)
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot connect as admin: {e:?}"))?;
 
     bootstrap
         .drop_databases(&data_db)

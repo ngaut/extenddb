@@ -16,12 +16,8 @@ use extenddb_engine::OperationContext;
 use serde_json::Value;
 
 use crate::AppState;
-use crate::request_helpers::{authorize_request, extract_operation, extract_table_name};
+use crate::request_helpers::{authorize_operation_metadata, extract_operation, extract_table_name};
 use crate::response::{error_response, record_error_metrics, success_response};
-use crate::throttle_helpers::{
-    classify_data_operation, extract_partition_value, table_description_to_throughput,
-    update_throttle_buckets,
-};
 
 /// Main Virtual `DynamoDB` request handler.
 /// REQ-WIRE-001: Accept HTTP POST to `/`.
@@ -98,35 +94,13 @@ pub(crate) async fn handle_request(
     #[allow(clippy::cast_precision_loss)]
     let auth_us = auth_start.elapsed().as_micros() as f64;
 
-    let account_id: Arc<str> = match &identity {
-        extenddb_auth::AuthIdentity::User { account_id, .. }
-        | extenddb_auth::AuthIdentity::RoleSession { account_id, .. } => {
-            Arc::from(account_id.as_str())
-        }
-    };
-
     // --- Authz segment ---
     let authz_start = std::time::Instant::now();
-    let pre_fetched_read_info;
-    let pre_fetched_write_info;
-    {
-        if state.catalog_store.is_none() {
-            tracing::error!("Authorization required but catalog_store is not configured");
-            return error_response(
-                &DynamoDbError::AccessDeniedException(
-                    "User: is not authorized to perform this operation".to_owned(),
-                ),
-                &request_id,
-            );
-        };
-        match authorize_request(&state, &identity, &input, &operation, &account_id).await {
-            Ok(info) => {
-                pre_fetched_read_info = info.read_info;
-                pre_fetched_write_info = info.write_info;
-            }
+    let authorized_metadata =
+        match authorize_operation_metadata(&state, &identity, &input, &operation).await {
+            Ok(metadata) => metadata,
             Err(e) => return error_response(&e, &request_id),
-        }
-    }
+        };
     #[allow(clippy::cast_precision_loss)]
     let authz_us = authz_start.elapsed().as_micros() as f64;
 
@@ -135,83 +109,16 @@ pub(crate) async fn handle_request(
         storage: state.storage.clone(),
         limits: state.limits.clone(),
         region: state.region.clone(),
-        account_id,
+        account_id: authorized_metadata.account_id,
         import_paths: state.import_paths.clone(),
         export_paths: state.export_paths.clone(),
         request_body_bytes,
-        pre_fetched_read_info,
-        pre_fetched_write_info,
+        pre_fetched_read_info: authorized_metadata.read_info,
+        pre_fetched_write_info: authorized_metadata.write_info,
         auth_cache: state.auth_cache.clone(),
-        table_key_info_lookup: Some(
-            state.table_key_info_cache.clone() as Arc<dyn extenddb_storage::TableKeyInfoLookup>
-        ),
     };
 
     let table_name = extract_table_name(&input);
-
-    // --- Throttle segment ---
-    let throttle_start = std::time::Instant::now();
-    let partition_value = if let Some(throttle) = &state.throttle {
-        let (is_read_op, is_write_op) = classify_data_operation(&operation);
-        let partition_value = extract_partition_value(&input, &operation);
-        if let Some(ref tn) = table_name
-            && (is_read_op || is_write_op)
-        {
-            if !throttle.is_registered(&ctx.account_id, tn)
-                && let Ok(desc) = ctx
-                    .storage
-                    .describe_table(
-                        &ctx.account_id,
-                        extenddb_core::types::DescribeTableInput {
-                            table_name: tn.clone(),
-                        },
-                    )
-                    .await
-            {
-                let throughput = table_description_to_throughput(&desc);
-                throttle.register_table(&ctx.account_id, tn, throughput);
-            }
-
-            let result = throttle.check_capacity_with_partition(
-                &ctx.account_id,
-                tn,
-                is_read_op,
-                is_write_op,
-                partition_value.as_deref(),
-            );
-            if result != extenddb_core::throttle::ThrottleResult::Allowed {
-                let metric = if result == extenddb_core::throttle::ThrottleResult::ThrottledRead {
-                    extenddb_core::metrics::MetricName::ReadThrottleEvents
-                } else {
-                    extenddb_core::metrics::MetricName::WriteThrottleEvents
-                };
-                state
-                    .metrics
-                    .record(metric, 1.0, Some(tn), None, Some(&operation));
-                state.metrics.record(
-                    extenddb_core::metrics::MetricName::ThrottledRequests,
-                    1.0,
-                    Some(tn),
-                    None,
-                    Some(&operation),
-                );
-                return error_response(
-                    &DynamoDbError::ProvisionedThroughputExceededException(
-                        "The level of configured provisioned throughput for the table \
-                         was exceeded. Consider increasing your provisioning level \
-                         with the UpdateTable API."
-                            .to_owned(),
-                    ),
-                    &request_id,
-                );
-            }
-        }
-        partition_value
-    } else {
-        None
-    };
-    #[allow(clippy::cast_precision_loss)]
-    let throttle_us = throttle_start.elapsed().as_micros() as f64;
 
     // --- Dispatch segment ---
     let dispatch_start = std::time::Instant::now();
@@ -248,16 +155,6 @@ pub(crate) async fn handle_request(
     let response_start = std::time::Instant::now();
     let response = match dispatch_result {
         Ok(result) => {
-            if let Some(throttle) = &state.throttle {
-                update_throttle_buckets(
-                    throttle,
-                    &operation,
-                    &ctx.account_id,
-                    table_name.as_deref(),
-                    &result.body,
-                );
-            }
-
             let m = &result.metrics;
             if let Some(ref tn) = table_name {
                 if m.read_capacity_units > 0.0 {
@@ -288,15 +185,6 @@ pub(crate) async fn handle_request(
                         .metrics
                         .record_returned_bytes(tn, &operation, m.returned_bytes);
                 }
-                if let Some(throttle) = &state.throttle {
-                    throttle.consume_with_partition(
-                        &ctx.account_id,
-                        tn,
-                        m.read_capacity_units,
-                        m.write_capacity_units,
-                        partition_value.as_deref(),
-                    );
-                }
             }
 
             success_response(&result.body, &request_id)
@@ -321,7 +209,6 @@ pub(crate) async fn handle_request(
         extenddb_core::metrics::LatencySegments {
             auth_us,
             authz_us,
-            throttle_us,
             dispatch_us,
             response_us,
             total_us,
@@ -335,7 +222,6 @@ pub(crate) async fn handle_request(
         table = table_name.as_deref().unwrap_or("-"),
         auth_us = auth_us,
         authz_us = authz_us,
-        throttle_us = throttle_us,
         dispatch_us = dispatch_us,
         response_us = response_us,
         total_us = total_us,

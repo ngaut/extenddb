@@ -8,8 +8,6 @@ use std::sync::Arc;
 
 use clap::Args;
 use daemonize::Daemonize;
-use extenddb_core::limits::LimitsConfig;
-use extenddb_core::throttle::ThrottleManager;
 use extenddb_server::AppState;
 use syslog_tracing::{Facility, Options, Syslog};
 use tracing_subscriber::{
@@ -43,22 +41,6 @@ pub struct ServeArgs {
     foreground: bool,
 }
 
-fn frontend_throttle_manager(
-    limits: &LimitsConfig,
-    enabled: bool,
-    backend_native_capacity_control: bool,
-) -> Option<Arc<ThrottleManager>> {
-    if backend_native_capacity_control {
-        None
-    } else {
-        Some(Arc::new(ThrottleManager::new(
-            limits.per_account_max_rcu,
-            limits.per_account_max_wcu,
-            enabled,
-        )))
-    }
-}
-
 /// Bind the listening socket, daemonize, then start the tokio runtime.
 /// Binding before forking ensures port conflicts are reported to stderr
 /// before the parent process exits.
@@ -78,17 +60,10 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
     // Load config early so bind address is known before fork.
     let app_config = config::load(&args.config)?;
 
-    // TLS is mandatory. Reject explicit opt-out.
-    if !app_config.server.tls.enabled {
-        anyhow::bail!("TLS is mandatory. Remove `tls.enabled = false` from your config file.");
-    }
-
     // Auth is mandatory. Only "builtin" is supported.
     validate_auth_provider(&app_config.auth.provider)?;
 
-    // Validate backend support and get catalog version before binding the port.
-    let backend = &app_config.storage._backend;
-    let catalog_version = extenddb_storage::operations::catalog_version(backend)?;
+    let catalog_version = extenddb_storage_tidb::CATALOG_VERSION.to_string();
 
     let port = args.port.unwrap_or(app_config.server.port);
     let bind_addr = format!("{}:{}", app_config.server.bind_addr, port);
@@ -116,9 +91,8 @@ pub fn run(args: &ServeArgs) -> anyhow::Result<()> {
         bind_addr,
     );
     let banner_line2 = format!(
-        "  storage: {} ({})",
-        backend,
-        config::redact_password(backend, app_config.storage.connection_config()),
+        "  storage: TiDB ({})",
+        config::redact_password(app_config.storage.connection_config()),
     );
     if args.foreground {
         eprintln!("{banner_line1}");
@@ -224,8 +198,7 @@ async fn serve(
     // (for example, storage connection failure). The PID file was already
     // written by Daemonize in run().
     let pid_path = pid_file_path(&run_dir, port);
-    let backend = app_config.storage._backend.clone();
-    let result = serve_inner(app_config, std_listener, port, run_dir, backend, foreground).await;
+    let result = serve_inner(app_config, std_listener, port, run_dir, foreground).await;
     if let Err(ref e) = result {
         let _ = std::fs::remove_file(&pid_path);
         // Log fatal errors to syslog. After daemonize, stderr is /dev/null so
@@ -249,11 +222,9 @@ async fn serve_inner(
     std_listener: TcpListener,
     port: u16,
     run_dir: String,
-    backend: String,
     foreground: bool,
 ) -> anyhow::Result<()> {
-    let catalog_version = extenddb_storage::operations::catalog_version(&backend)
-        .unwrap_or_else(|_| "unknown".to_string());
+    let catalog_version = extenddb_storage_tidb::CATALOG_VERSION.to_string();
 
     // In foreground mode, daemonize was skipped so the PID file was never
     // written. Write it now so `extenddb status`/`stop` and `start_server`'s
@@ -320,12 +291,9 @@ async fn serve_inner(
         .try_init()
         .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {e}"))?;
 
-    // Create server components via factory pattern
-    let runtime_storage_config =
-        config::RuntimeStorageConfig::new(app_config.storage.as_trait(), &app_config.limits);
-    let components = extenddb_storage::create_server_components(
-        &backend,
-        &runtime_storage_config,
+    let components = extenddb_storage_tidb::create_server_components(
+        &app_config.storage.tidb,
+        &app_config.limits,
         &app_config.server.region,
     )
     .await?;
@@ -398,48 +366,49 @@ async fn serve_inner(
         })
     };
 
-    // Build the TableKeyInfo cache.
-    let table_key_info_cache: Arc<extenddb_server::CachedTableKeyInfoStore> =
-        Arc::new(if cache_enabled {
-            extenddb_server::CachedTableKeyInfoStore::new(
-                storage.clone(),
-                make_cache_cfg("table_key_info"),
-            )
-        } else {
-            extenddb_server::CachedTableKeyInfoStore::pass_through(
-                storage.clone(),
-                make_cache_cfg("table_key_info"),
-            )
-        });
-
     // Assemble the cache registry threaded into AppState for write-through
     // invalidations from the management API.
+    let settings_store: Arc<dyn extenddb_storage::management_store::SettingsStore> =
+        catalog_store.clone();
+    let epoch_bumper = Arc::new(workers::SettingsAuthCacheEpochBumper::new(
+        settings_store.clone(),
+    ));
     let auth_cache =
         extenddb_auth::AuthCacheRegistry::empty()
             .with_credential(cached_cred_store)
             .with_authz_invalidator(
                 authz_cache.clone() as Arc<dyn extenddb_auth::AuthzCacheInvalidator>
             )
-            .with_table_key_info_invalidator(table_key_info_cache.clone()
-                as Arc<dyn extenddb_auth::TableKeyInfoCacheInvalidator>);
+            .with_epoch_bumper(epoch_bumper);
+    let initial_auth_cache_epoch = match settings_store.auth_cache_epoch().await {
+        Ok(epoch) => epoch,
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                "failed to read initial distributed auth cache epoch; starting from 0"
+            );
+            0
+        }
+    };
+    let auth_cache_epoch_poller = auth_cache.clone();
 
     let data_db_info = runtime_hooks
         .as_ref()
-        .and_then(|h| h.backend_info())
+        .and_then(|h| h.storage_info())
         .unwrap_or_else(|| "(unknown)".to_owned());
 
     // REQ-LOG-001: Startup banner with effective configuration.
     // REQ-LOG-002: Connection strings redact passwords.
     let log_output = if foreground { "stderr" } else { "syslog" };
     tracing::info!(
-        "extenddb {} (catalog {}) starting — bind={}:{}, region={}, auth={}, catalog_db={}, data_db={}, log_output={}, log_level={}",
+        "extenddb {} (catalog {}) starting — bind={}:{}, region={}, auth={}, tidb_catalog={}, data_db={}, log_output={}, log_level={}",
         env!("CARGO_PKG_VERSION"),
         catalog_version,
         app_config.server.bind_addr,
         port,
         app_config.server.region,
         app_config.auth.provider,
-        config::redact_password(&backend, app_config.storage.connection_config()),
+        config::redact_password(app_config.storage.connection_config()),
         data_db_info,
         log_output,
         app_config.logging.level,
@@ -450,8 +419,6 @@ async fn serve_inner(
 
     // Create metrics collector early so workers can record health.
     let metrics = Arc::new(extenddb_core::metrics::MetricsCollector::new());
-
-    let tls_enabled = app_config.server.tls.enabled;
 
     // Resolve import and export path lists.
     let resolve_paths = |raw_paths: &[String],
@@ -496,10 +463,6 @@ async fn serve_inner(
     // Build static config entries for the console settings page.
     // Must be called before `app_config.limits` is moved.
     let config_entries = config::build_config_entries(&app_config);
-    let setting_context =
-        extenddb_server::management::ops_settings::RuntimeSettingContext::from_storage_config(
-            app_config.storage.as_trait(),
-        );
 
     // Load runtime documentation from docs_dir if configured.
     let docs_store = app_config.docs_dir.as_ref().and_then(|raw| {
@@ -519,30 +482,6 @@ async fn serve_inner(
 
     let limits = Arc::new(app_config.limits);
 
-    let backend_native_capacity_control = app_config
-        .storage
-        .as_trait()
-        .uses_backend_native_capacity_control();
-    let config_throttling = app_config.server.throttling_enabled.unwrap_or(false);
-    let requested_throttling = catalog_store
-        .get_setting("throttling_enabled")
-        .await
-        .ok()
-        .flatten()
-        .map_or(config_throttling, |v| v == "true");
-    if backend_native_capacity_control && requested_throttling {
-        tracing::warn!(
-            "Ignoring throttling_enabled=true because backend '{backend}' uses native distributed capacity control"
-        );
-    }
-    let initial_throttling = workers::effective_frontend_throttling(
-        requested_throttling,
-        backend_native_capacity_control,
-    );
-
-    let throttle =
-        frontend_throttle_manager(&limits, initial_throttling, backend_native_capacity_control);
-
     let state = AppState {
         storage,
         auth,
@@ -560,15 +499,11 @@ async fn serve_inner(
             .as_str(),
         ),
         metrics: metrics.clone(),
-        tls_enabled,
         import_paths,
         export_paths,
-        throttle: throttle.clone(),
         auth_cache,
         authz_cache,
-        table_key_info_cache,
         config_entries,
-        setting_context,
         docs_store,
         runtime_hooks: runtime_hooks.clone(),
     };
@@ -579,32 +514,19 @@ async fn serve_inner(
         reload_handle.clone(),
         app_config.logging.level.clone(),
     ));
-    // Poll throttling_enabled only when the selected backend uses frontend
-    // token buckets. TiDB uses native Resource Control and should not keep a
-    // process-local admission worker alive.
-    if let Some(throttle) = throttle {
-        tokio::spawn(workers::poll_throttling_enabled(
-            catalog_store.clone(),
-            throttle,
-            config_throttling,
-            requested_throttling,
-            initial_throttling,
-            backend_native_capacity_control,
-        ));
-    }
+    tokio::spawn(workers::poll_auth_cache_epoch(
+        settings_store,
+        auth_cache_epoch_poller,
+        initial_auth_cache_epoch,
+    ));
     // Spawn background tasks for in-memory metrics pruning and flushing.
-    // Database retention is backend-specific: native-retention backends use
-    // database TTL, while other backends spawn concrete retention workers from
-    // their runtime hooks.
+    // TiDB owns database retention through native TTL and runtime hooks.
     tokio::spawn(workers::metrics_prune_worker(metrics.clone()));
     tokio::spawn(workers::metrics_flush_worker(
         metrics.clone(),
         catalog_store.clone(),
     ));
-    // Warn when requests use approximate consumed capacity.
-    tokio::spawn(workers::capacity_warning_worker());
-
-    // Spawn backend-specific workers via runtime hooks
+    // Spawn TiDB-owned workers via runtime hooks.
     if let Some(hooks) = &runtime_hooks {
         let worker_ctx = extenddb_storage::WorkerContext {
             metrics: metrics.clone(),
@@ -615,15 +537,13 @@ async fn serve_inner(
         hooks.spawn_workers(&worker_ctx).await;
     }
 
-    let tls_config = if tls_enabled {
+    let tls_config = {
         let cert_path = crate::config::expand_tilde(&app_config.server.tls.cert_path);
         let key_path = crate::config::expand_tilde(&app_config.server.tls.key_path);
-        Some(extenddb_server::ServerTlsConfig {
+        extenddb_server::ServerTlsConfig {
             cert_path: std::path::PathBuf::from(cert_path),
             key_path: std::path::PathBuf::from(key_path),
-        })
-    } else {
-        None
+        }
     };
 
     extenddb_server::start_server(
@@ -639,9 +559,8 @@ async fn serve_inner(
 
 #[cfg(test)]
 mod tests {
-    use super::{ServeArgs, frontend_throttle_manager, validate_auth_provider};
+    use super::{ServeArgs, validate_auth_provider};
     use clap::Parser;
-    use extenddb_core::limits::LimitsConfig;
 
     /// Test wrapper so clap has a top-level `Parser` to drive `ServeArgs`.
     #[derive(Parser)]
@@ -654,18 +573,6 @@ mod tests {
         TestCli::try_parse_from(argv)
             .expect("ServeArgs should parse from valid argv")
             .args
-    }
-
-    #[test]
-    fn native_capacity_backends_do_not_allocate_frontend_throttle_manager() {
-        let limits = LimitsConfig::default();
-        assert!(frontend_throttle_manager(&limits, true, true).is_none());
-    }
-
-    #[test]
-    fn frontend_capacity_backends_keep_token_bucket_manager() {
-        let limits = LimitsConfig::default();
-        assert!(frontend_throttle_manager(&limits, false, false).is_some());
     }
 
     #[test]

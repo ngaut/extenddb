@@ -3,6 +3,7 @@
 
 //! TiDB connection configuration.
 
+use extenddb_storage::config::NativeBackupConfig;
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::Deserialize;
 use url::Url;
@@ -71,6 +72,32 @@ fn default_connection_string() -> String {
 
 fn default_pool_size() -> u32 {
     20
+}
+
+impl TidbStorageConfig {
+    pub fn catalog_pool_size(&self) -> u32 {
+        self.catalog_pool_size.unwrap_or(self.pool_size)
+    }
+
+    pub fn native_backup_config(&self) -> NativeBackupConfig {
+        NativeBackupConfig {
+            binary: self.backup.binary.clone(),
+            component: self.backup.component.clone(),
+            coordinator_endpoint: self.backup.pd_endpoint.clone(),
+            storage_uri: self.backup.storage_uri.clone(),
+            log_storage_uri: self.backup.log_storage_uri.clone(),
+            send_credentials_to_storage_nodes: self.backup.send_credentials_to_tikv,
+        }
+    }
+
+    pub fn native_capacity_resource_group(&self) -> Option<&str> {
+        self.resource_group.as_deref()
+    }
+
+    pub fn native_default_read_staleness_seconds(&self) -> Option<u32> {
+        self.default_read_staleness_seconds
+            .filter(|seconds| *seconds > 0)
+    }
 }
 
 /// Parsed components of a `TiDB` connection string.
@@ -195,71 +222,11 @@ pub fn redact_connection_string(conn: &str) -> String {
     format!("{}:***@{}", &conn[..colon], &conn[at + 1..])
 }
 
-// ── StorageConfig trait implementation ────────────────────────────────
-
-impl extenddb_storage::config::StorageConfig for TidbStorageConfig {
-    fn connection_config(&self) -> &str {
-        &self.connection_string
-    }
-
-    fn max_connections(&self) -> u32 {
-        self.pool_size
-    }
-
-    fn max_catalog_connections(&self) -> u32 {
-        self.catalog_pool_size.unwrap_or(self.pool_size)
-    }
-
-    fn native_backup_config(&self) -> Option<extenddb_storage::config::NativeBackupConfig> {
-        Some(extenddb_storage::config::NativeBackupConfig {
-            binary: self.backup.binary.clone(),
-            component: self.backup.component.clone(),
-            coordinator_endpoint: self.backup.pd_endpoint.clone(),
-            storage_uri: self.backup.storage_uri.clone(),
-            log_storage_uri: self.backup.log_storage_uri.clone(),
-            send_credentials_to_storage_nodes: self.backup.send_credentials_to_tikv,
-        })
-    }
-
-    fn uses_backend_native_control_plane(&self) -> bool {
-        true
-    }
-
-    fn uses_backend_native_secondary_indexes(&self) -> bool {
-        true
-    }
-
-    fn uses_backend_native_capacity_control(&self) -> bool {
-        true
-    }
-
-    fn native_capacity_resource_group(&self) -> Option<&str> {
-        self.resource_group.as_deref()
-    }
-
-    fn native_default_read_staleness_seconds(&self) -> Option<u32> {
-        self.default_read_staleness_seconds
-            .filter(|seconds| *seconds > 0)
-    }
-
-    fn clone_box(&self) -> Box<dyn extenddb_storage::config::StorageConfig> {
-        Box::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any
-    where
-        Self: 'static,
-    {
-        self
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         TidbStorageConfig, connection_url, parse_connection_string, redact_connection_string,
     };
-    use extenddb_storage::config::StorageConfig;
 
     #[test]
     fn parses_percent_encoded_credentials() {
@@ -292,15 +259,6 @@ mod tests {
     fn redaction_uses_the_last_userinfo_separator() {
         let redacted = redact_connection_string("mysql://extenddb:p@ss@localhost:4000/db");
         assert_eq!(redacted, "mysql://extenddb:***@localhost:4000/db");
-    }
-
-    #[test]
-    fn tidb_uses_backend_native_capabilities() {
-        let config = TidbStorageConfig::default();
-
-        assert!(config.uses_backend_native_control_plane());
-        assert!(config.uses_backend_native_secondary_indexes());
-        assert!(config.uses_backend_native_capacity_control());
     }
 
     #[test]

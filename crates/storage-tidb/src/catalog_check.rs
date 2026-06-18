@@ -1,28 +1,45 @@
-// Copyright 2026 DynamoDB Open contributors
+// Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! TiDB implementation of `OperationsEngine`.
+//! TiDB catalog-check implementation.
 
 use std::collections::{HashMap, HashSet};
 
 use extenddb_core::types::{AttributeDefinition, KeySchemaElement};
-use extenddb_storage::error::StorageError;
-use extenddb_storage::operations::{
-    CatalogCheckFix, CatalogCheckIssue, CatalogCheckReport, CatalogCheckSection, ConnectionParts,
-    OperationsEngine,
+use extenddb_storage::catalog_check::{
+    CatalogCheckFix, CatalogCheckIssue, CatalogCheckReport, CatalogCheckSection,
 };
-use futures::future::BoxFuture;
+use extenddb_storage::error::StorageError;
 
 use crate::data::{
     DATA_TABLE_METADATA_LIKE_BIND_CLAUSE, DATA_TABLE_METADATA_LIKE_BIND_PATTERN, data_table_name,
     native_index_key_tuple_columns, native_index_name, physical_data_table_name,
     physical_item_collection_table_name,
 };
-use crate::metadata_engine::{create_table_has_disabled_ttl, create_table_has_native_ttl};
+use crate::metadata_engine::create_table_has_native_ttl;
 use crate::tidb_util::{execute_tidb_idempotent_ddl, tidb_pool_options};
 
-/// TiDB operations engine for ddbo CLI commands.
-pub struct TidbOperationsEngine;
+/// Validate a TiDB identifier for format!-based DDL.
+///
+/// Rejects backticks, null bytes, and non-ASCII characters.
+pub fn validate_identifier(name: &str, label: &str) -> Result<(), StorageError> {
+    if name.contains('`') {
+        return Err(StorageError::Internal(format!(
+            "{label} must not contain backticks"
+        )));
+    }
+    if name.contains('\0') {
+        return Err(StorageError::Internal(format!(
+            "{label} must not contain null bytes"
+        )));
+    }
+    if !name.is_ascii() {
+        return Err(StorageError::Internal(format!(
+            "{label} must contain only ASCII characters"
+        )));
+    }
+    Ok(())
+}
 
 type NativeIndexArtifactRow = (
     String,
@@ -159,7 +176,7 @@ fn stale_catalog_transition_issues(
         .collect()
 }
 
-async fn tidb_catalog_check(
+pub async fn catalog_check(
     connection_config: &str,
     fix: bool,
 ) -> Result<CatalogCheckReport, StorageError> {
@@ -287,7 +304,7 @@ async fn tidb_catalog_check(
     sections.push(check_tidb_catalog_transitions(&catalog_pool, &data_pool).await?);
     sections.push(check_tidb_catalog_lookup_indexes(&catalog_pool).await?);
     sections.push(check_tidb_native_index_artifacts(&catalog_pool, &data_pool, &actual).await?);
-    sections.push(check_tidb_native_ttl_artifacts(&catalog_pool, &data_pool, &actual).await?);
+    sections.push(check_user_ttl_lookup_artifacts(&catalog_pool, &data_pool, &actual).await?);
 
     Ok(CatalogCheckReport { sections })
 }
@@ -460,11 +477,14 @@ async fn check_tidb_native_index_artifacts(
     ))
 }
 
-async fn check_tidb_native_ttl_artifacts(
+async fn check_user_ttl_lookup_artifacts(
     catalog_pool: &sqlx::MySqlPool,
     data_pool: &sqlx::MySqlPool,
     actual_tables: &HashSet<String>,
 ) -> Result<CatalogCheckSection, StorageError> {
+    const TTL_EXPIRES_AT_COLUMN: &str = "_edb_ttl_expires_at";
+    const TTL_EXPIRES_AT_INDEX: &str = "_edb_ttl_expires_at_idx";
+
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT table_id, table_name FROM tables \
          WHERE ttl_status = 'ENABLED' AND table_status IN ('ACTIVE', 'UPDATING')",
@@ -473,11 +493,47 @@ async fn check_tidb_native_ttl_artifacts(
     .await
     .map_err(|e| StorageError::Internal(e.to_string()))?;
 
+    let sql = format!(
+        "SELECT table_name, column_name FROM information_schema.columns \
+         WHERE table_schema = DATABASE() AND table_name {DATA_TABLE_METADATA_LIKE_BIND_CLAUSE}",
+    );
+    let actual_columns: HashSet<(String, String)> = sqlx::query_as::<_, (String, String)>(&sql)
+        .bind(DATA_TABLE_METADATA_LIKE_BIND_PATTERN)
+        .fetch_all(data_pool)
+        .await
+        .map_err(|e| StorageError::Internal(e.to_string()))?
+        .into_iter()
+        .collect();
+
+    let sql = format!(
+        "SELECT table_name, index_name FROM information_schema.statistics \
+         WHERE table_schema = DATABASE() AND table_name {DATA_TABLE_METADATA_LIKE_BIND_CLAUSE}",
+    );
+    let actual_indexes: HashSet<(String, String)> = sqlx::query_as::<_, (String, String)>(&sql)
+        .bind(DATA_TABLE_METADATA_LIKE_BIND_PATTERN)
+        .fetch_all(data_pool)
+        .await
+        .map_err(|e| StorageError::Internal(e.to_string()))?
+        .into_iter()
+        .collect();
+
     let mut issues = Vec::new();
     for (table_id, table_name) in rows {
         let physical_table = physical_data_table_name(&table_id);
         if !actual_tables.contains(&physical_table) {
             continue;
+        }
+        if !actual_columns.contains(&(physical_table.clone(), TTL_EXPIRES_AT_COLUMN.to_owned())) {
+            issues.push(
+                catalog_check_issue(&table_name)
+                    .with_detail(format!("missing TTL lookup column {TTL_EXPIRES_AT_COLUMN}")),
+            );
+        }
+        if !actual_indexes.contains(&(physical_table.clone(), TTL_EXPIRES_AT_INDEX.to_owned())) {
+            issues.push(
+                catalog_check_issue(&table_name)
+                    .with_detail(format!("missing TTL lookup index {TTL_EXPIRES_AT_INDEX}")),
+            );
         }
         let (_, create_table): (String, String) =
             sqlx::query_as(&format!("SHOW CREATE TABLE {}", data_table_name(&table_id)))
@@ -485,90 +541,18 @@ async fn check_tidb_native_ttl_artifacts(
                 .await
                 .map_err(|e| StorageError::Internal(e.to_string()))?;
         let create_table = create_table.to_ascii_uppercase();
-        if !create_table_has_native_ttl(&create_table) {
-            issues.push(
-                catalog_check_issue(&table_name)
-                    .with_detail("catalog TTL is ENABLED but native TiDB TTL is absent"),
-            );
-        } else if create_table_has_disabled_ttl(&create_table) {
-            issues.push(
-                catalog_check_issue(&table_name)
-                    .with_detail("catalog TTL is ENABLED but TiDB TTL_ENABLE is OFF"),
-            );
+        if create_table_has_native_ttl(&create_table) {
+            issues.push(catalog_check_issue(&table_name).with_detail(
+                "native TiDB TTL is present on a user table; user TTL must expire through ExtendDB",
+            ));
         }
     }
 
     Ok(CatalogCheckSection::new(
-        "Checking TiDB native TTL artifacts",
-        "All TTL-enabled tables have native TiDB TTL enabled.",
+        "Checking user-table TTL lookup artifacts",
+        "All TTL-enabled user tables expire through ExtendDB-owned lookup artifacts.",
         issues,
     ))
-}
-
-impl OperationsEngine for TidbOperationsEngine {
-    fn parse_connection_string(&self, s: &str) -> Result<ConnectionParts, StorageError> {
-        let parts = crate::config::parse_connection_string(s)
-            .map_err(|e| StorageError::Internal(e.to_string()))?;
-
-        // Convert ConnParts to ConnectionParts
-        Ok(ConnectionParts {
-            host: parts.host,
-            port: parts.port,
-            user: parts.user,
-            password: parts.password,
-            database: parts.database,
-        })
-    }
-
-    fn redact_connection_string(&self, s: &str) -> String {
-        crate::config::redact_connection_string(s)
-    }
-
-    fn validate_identifier(&self, name: &str, label: &str) -> Result<(), StorageError> {
-        // TiDB identifier validation for format!-based DDL.
-        // Rejects backticks, null bytes, and non-ASCII characters.
-        if name.contains('`') {
-            return Err(StorageError::Internal(format!(
-                "{label} must not contain backticks"
-            )));
-        }
-        if name.contains('\0') {
-            return Err(StorageError::Internal(format!(
-                "{label} must not contain null bytes"
-            )));
-        }
-        if !name.is_ascii() {
-            return Err(StorageError::Internal(format!(
-                "{label} must contain only ASCII characters"
-            )));
-        }
-        Ok(())
-    }
-
-    fn catalog_version(&self) -> String {
-        crate::CATALOG_VERSION.to_string()
-    }
-
-    fn is_sensitive_key(&self, key: &str) -> bool {
-        let lower = key.to_lowercase();
-        [
-            "connection_string",
-            "password",
-            "secret",
-            "token",
-            "encryption_key",
-        ]
-        .iter()
-        .any(|pattern| lower.contains(pattern))
-    }
-
-    fn catalog_check<'a>(
-        &'a self,
-        connection_config: &'a str,
-        fix: bool,
-    ) -> BoxFuture<'a, Result<CatalogCheckReport, StorageError>> {
-        Box::pin(tidb_catalog_check(connection_config, fix))
-    }
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ use extenddb_core::types::{StreamViewType, TableKeyInfo};
 
 /// Return the stream view type if the table has streams enabled.
 ///
-/// Reads the stream specification from the cached `TableKeyInfo` — no extra
+/// Reads the stream specification from the request's `TableKeyInfo`; no extra
 /// SQL round-trip required.
 pub fn stream_view_type(key_info: &TableKeyInfo) -> Option<StreamViewType> {
     let spec = key_info.stream_specification.as_ref()?;

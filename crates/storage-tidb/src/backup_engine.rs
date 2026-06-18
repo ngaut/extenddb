@@ -6,7 +6,7 @@
 //! TiDB has native physical backup/restore through BR. This module deliberately
 //! does not keep a logical `backup_items` copy path: if a requested DynamoDB
 //! shape cannot be represented by BR without changing semantics, the TiDB
-//! backend returns an explicit validation error.
+//! storage layer returns an explicit validation error.
 
 use std::ffi::OsString;
 
@@ -162,7 +162,7 @@ pub(crate) struct TidbNativeBackupConfig {
 }
 
 impl TidbNativeBackupConfig {
-    pub(crate) fn from_storage_config(config: NativeBackupConfig) -> Self {
+    pub(crate) fn from_native_backup_config(config: NativeBackupConfig) -> Self {
         Self {
             binary: non_empty_string(config.binary).unwrap_or_else(|| "tiup".to_owned()),
             component: match config.component {
@@ -1203,7 +1203,7 @@ mod tests {
 
     #[test]
     fn builds_tiup_br_backup_command() {
-        let cfg = TidbNativeBackupConfig::from_storage_config(NativeBackupConfig {
+        let cfg = TidbNativeBackupConfig::from_native_backup_config(NativeBackupConfig {
             coordinator_endpoint: Some("127.0.0.1:2379".to_owned()),
             storage_uri: Some("s3://bucket/extenddb".to_owned()),
             send_credentials_to_storage_nodes: Some(false),
@@ -1243,7 +1243,7 @@ mod tests {
 
     #[test]
     fn builds_direct_br_restore_command() {
-        let cfg = TidbNativeBackupConfig::from_storage_config(NativeBackupConfig {
+        let cfg = TidbNativeBackupConfig::from_native_backup_config(NativeBackupConfig {
             binary: Some("br".to_owned()),
             component: Some(String::new()),
             coordinator_endpoint: Some("pd:2379".to_owned()),

@@ -3,7 +3,7 @@
 ## Scope
 
 Configuration is loaded by the `extenddb` binary from TOML, environment
-variables, and CLI flags. The supported storage backend is TiDB.
+variables, and CLI flags. Storage configuration is TiDB-specific.
 
 Precedence:
 
@@ -23,15 +23,6 @@ CLI flags > EXTENDDB__ environment variables > config file > defaults
 | `docs_dir` | Optional rendered documentation directory. |
 
 TLS is mandatory and configured under `[server.tls]`.
-
-### `[storage]`
-
-```toml
-[storage]
-backend = "tidb"
-```
-
-`tidb` is the only supported value.
 
 ### `[storage.tidb]`
 
@@ -70,13 +61,17 @@ Runtime settings live in the catalog and can be changed without restart:
 | `log_level` | Runtime log verbosity. |
 | `sqlx_log_level` | SQL query trace verbosity. |
 | `allow_credential_import` | Enables/disables credential import through management APIs. |
+| `ttl_expiry_interval_ms` | User-table TTL worker polling interval. |
+| `ttl_expiry_batch_size` | User-table TTL worker per-batch item delete cap. |
+| `ttl_expiry_table_scan_limit` | User-table TTL worker per-batch table candidate cap; scans advance by table-id cursor and wrap around. |
+| `ttl_expiry_drain_batches` | User-table TTL worker backlog drain cap; full batches trigger immediate follow-up batches up to this limit. |
 
 TiDB storage behavior is configured through TiDB and `[storage.tidb]`, not
 through runtime compatibility toggles.
 
 ## Validation
 
-Config validation should reject unsupported backends and invalid TiDB settings
+Config validation should reject removed selectors and invalid TiDB settings
 early, before daemonizing. Avoid silently accepting removed or ignored keys.
 
 ## Startup Flow
@@ -84,6 +79,6 @@ early, before daemonizing. Avoid silently accepting removed or ignored keys.
 1. Load config file.
 2. Apply environment and CLI overrides.
 3. Validate server, auth, TLS, and TiDB storage settings.
-4. Create TiDB backend stores and runtime hooks.
+4. Create TiDB storage stores and runtime hooks.
 5. Build server state from trait objects.
 6. Start the HTTPS server and background tasks.

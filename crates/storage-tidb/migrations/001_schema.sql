@@ -1,6 +1,6 @@
 -- Copyright 2026 ExtendDB contributors
 -- SPDX-License-Identifier: Apache-2.0
--- Consolidated catalog schema for extenddb (catalog version 0.0.28).
+-- Consolidated catalog schema for extenddb.
 -- This is the complete schema applied on fresh installs.
 
 -- Accounts — multi-account support (REQ-AUTH-005).
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS tables (
 
 CREATE INDEX idx_tables_control_plane_work
     ON tables (status_transition_at, table_name, table_status);
+
+CREATE INDEX idx_tables_ttl_work
+    ON tables (ttl_status, table_id, table_status);
 
 -- DynamoDB stream generations. This intentionally stands apart from the live
 -- tables row so disabled or deleted table streams remain readable for the
@@ -294,4 +297,5 @@ CREATE TABLE IF NOT EXISTS backup_tags (
 ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 -- Seed settings.
-INSERT IGNORE INTO settings (`key`, value) VALUES ('catalog_version', '0.0.29');
+INSERT IGNORE INTO settings (`key`, value) VALUES ('catalog_version', '0.0.31');
+INSERT IGNORE INTO settings (`key`, value) VALUES ('auth_cache_epoch', '0');

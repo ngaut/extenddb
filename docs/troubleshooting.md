@@ -163,8 +163,8 @@ state is ready.
 ## Streams Capture Errors
 
 If a write succeeds but stream capture reports an error, inspect TiDB
-connectivity and the shared stream-record table. TiDB uses MVCC commit
-timestamps plus a per-transaction ordinal for stream sequence numbers.
+connectivity and the shared stream-record table. TiDB uses transaction TSO
+values plus a per-transaction ordinal for stream sequence numbers.
 
 ## Logs
 

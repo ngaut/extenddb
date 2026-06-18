@@ -51,13 +51,6 @@ pub async fn handle_create_table(
         .await
         .map_err(storage_err_to_dynamo)?;
 
-    // Drop any cached TableKeyInfo (typically a negative-cached "not found"
-    // from a prior describe attempt) so requests against the new table see
-    // it immediately.
-    ctx.auth_cache
-        .invalidate_table_key_info(&ctx.account_id, &table_name)
-        .await;
-
     // The CreateTable request itself ran through authorize_request, which
     // populates resource_tags for this ARN. At that point the tags row didn't
     // exist yet, so the cache holds an empty TagMap. Drop it so subsequent
@@ -143,7 +136,7 @@ pub(crate) fn storage_err_to_dynamo(e: extenddb_storage::error::StorageError) ->
                 return crate::storage_unavailable_to_dynamo(msg, "storage internal error");
             }
             // Log the raw message for debugging but do not expose storage
-            // backend details (for example SQL engine error text) to the client.
+            // details (for example SQL engine error text) to the client.
             // REQ-ERR: tenet 4 — only DynamoDB-shaped errors cross the wire.
             tracing::error!(internal_error = %msg, "storage internal error");
             DynamoDbError::InternalServerError("Internal server error".to_owned())

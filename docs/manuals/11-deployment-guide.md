@@ -2,8 +2,8 @@
 
 > See [NOTICE](../NOTICE.md) for important disclaimers.
 
-This guide covers deploying extenddb in environments beyond local development.
-The supported storage backend is TiDB.
+This guide covers deploying extenddb with TiDB in environments beyond local
+development.
 
 ## Architecture Overview
 
@@ -11,14 +11,15 @@ extenddb is a single Rust binary that connects to TiDB. All durable state lives
 in TiDB; extenddb itself is stateless aside from short-lived request state. This means:
 
 - Multiple extenddb instances can share one TiDB catalog/data topology
-- Backend-native HA, backup, and replication tools provide durability
-- extenddb can run anywhere the configured storage backend is reachable
+- TiDB-native HA, backup, and replication tools provide durability
+- extenddb can run anywhere TiDB is reachable
 
 ## Deployment Models
 
 ### Single-Node
 
-extenddb and the storage backend on the same host. Simplest setup, suitable for development, CI, and small workloads.
+extenddb and TiDB on the same host. Simplest setup, suitable for development,
+CI, and small workloads.
 
 ```
 ┌─────────────────────────┐
@@ -55,9 +56,6 @@ extenddb init \
 Configure the connection string in `extenddb.toml`:
 
 ```toml
-[storage]
-backend = "tidb"
-
 [storage.tidb]
 connection_string = "mysql://extenddb:<password>@tidb.example.com:4000/extenddb_catalog"
 pool_size = 20
@@ -73,9 +71,6 @@ the ExtendDB catalog and data databases.
 The standard build uses TiDB's MySQL-compatible endpoint:
 
 ```toml
-[storage]
-backend = "tidb"
-
 [storage.tidb]
 connection_string = "mysql://extenddb:<password>@tidb.example.com:4000/extenddb_catalog"
 pool_size = 20
@@ -105,31 +100,17 @@ COPY . .
 RUN cargo build -j12 --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates tini && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /src/target/release/extenddb /usr/local/bin/extenddb
 COPY extenddb.toml /etc/extenddb/extenddb.toml
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
 EXPOSE 8000
-ENTRYPOINT ["tini", "--"]
-CMD ["/usr/local/bin/entrypoint.sh"]
+CMD ["extenddb", "serve", "--config", "/etc/extenddb/extenddb.toml", "--foreground"]
 ```
 
-extenddb always daemonizes (there is no foreground mode). In a container, the parent process exits after forking, which causes the container runtime to stop the container. Use `tini` as PID 1 and a wrapper script that starts extenddb and waits on the daemon process:
+Use `--foreground` (alias `--no-daemon`) in containers and process supervisors so the extenddb process stays attached and logs to stderr. Daemon mode remains the default for direct host installs:
 
 ```bash
-#!/bin/sh
-# entrypoint.sh
-extenddb serve --config /etc/extenddb/extenddb.toml
-# Wait on the daemon PID — the PID file location depends on run_dir in extenddb.toml
-# Default: ~/.extenddb/run/extenddb-<port>.pid
-PID_FILE="${HOME}/.extenddb/run/extenddb-8000.pid"
-if [ -f "$PID_FILE" ]; then
-  tail --pid="$(cat "$PID_FILE")" -f /dev/null
-else
-  echo "extenddb failed to start — PID file not found at $PID_FILE" >&2
-  exit 1
-fi
+extenddb serve --config /etc/extenddb/extenddb.toml --foreground
 ```
 
 For Kubernetes, run `extenddb init` as an init container or a one-time Job, then deploy extenddb as a Deployment with the generated `extenddb.toml` mounted as a ConfigMap or Secret.
@@ -139,7 +120,7 @@ For Kubernetes, run `extenddb init` as an init container or a one-time Job, then
 extenddb requires no internet connectivity. All functionality is self-contained in the binary. Build on a connected host, transfer the binary and `extenddb.toml` to the air-gapped environment, and run.
 
 Requirements in the air-gapped environment:
-- A supported storage backend reachable from the extenddb host
+- A TiDB cluster reachable from the extenddb host
 - The `extenddb` binary (statically linked or with matching libc)
 
 ## Production Checklist
@@ -153,7 +134,7 @@ Requirements in the air-gapped environment:
 
 ### Transport
 
-- [ ] TLS is enabled by default. Verify it is not disabled in `extenddb.toml`
+- [ ] TLS certificate and key paths are configured for production
 - [ ] Replace the self-signed certificate with a CA-signed certificate
 - [ ] Enable TLS on the TiDB SQL endpoint when traffic leaves localhost or a trusted private network
 
@@ -163,14 +144,14 @@ Requirements in the air-gapped environment:
 - [ ] Firewall: allow only necessary ports (extenddb port and TiDB SQL/PD ports needed by the deployment)
 - [ ] Consider a reverse proxy (nginx, HAProxy) for TLS termination, rate limiting, and access logging
 
-### Storage Backend
+### TiDB Storage
 
-- [ ] Use a dedicated backend user for extenddb with minimal privileges
+- [ ] Use a dedicated TiDB user for extenddb with minimal privileges
 - [ ] Size TiDB SQL nodes for the active frontend count. Each frontend creates strong data, default-read data, engine catalog, and catalog-store/auth pools.
-- [ ] Enable backend transport encryption
+- [ ] Enable TiDB transport encryption
 - [ ] Set up automated backups with TiDB BR or TiDB cluster-level PITR
-- [ ] Use TiDB Resource Control/resource groups for distributed capacity governance instead of `throttling_enabled`
-- [ ] Monitor backend disk usage, connection count, replication health, and query performance
+- [ ] Use TiDB Resource Control/resource groups for distributed capacity governance
+- [ ] Monitor TiDB disk usage, connection count, replication health, and query performance
 
 ### Monitoring
 
@@ -221,10 +202,10 @@ sudo systemctl start extenddb
 
 Multiple extenddb instances can connect to the same catalog. However:
 
-- extenddb does not cache database state in-process — every request reads directly from the storage backend
-- This means multiple instances see consistent data without cache invalidation
-- The storage backend's connection pool and transaction model handle concurrent access
-- Ensure each instance's backend-specific pool footprint fits the backend's connection limits
+- extenddb does not cache table metadata or item data across requests; request-local metadata and data reads go to TiDB
+- Auth and authorization caches are per instance; IAM changes bump a TiDB-backed cache epoch that other frontends poll before falling back to cache TTL
+- TiDB connection pools and transactions handle concurrent access
+- Ensure each instance's TiDB pool footprint fits TiDB connection limits
 - TiDB capacity control is cluster-native. Process-local token buckets are disabled for TiDB because each frontend would otherwise admit its own burst.
 
 ## Performance Tuning
@@ -249,7 +230,7 @@ sessions and any other applications using the cluster.
 Key TiDB settings and practices for ExtendDB workloads:
 
 - Use TiDB Resource Control/resource groups for cluster-wide API capacity.
-- Keep TiDB native TTL enabled for catalog, stream, idempotency-token, and user-table TTL cleanup.
+- Keep TiDB native TTL enabled for fixed-retention catalog/data tables; user-table TTL cleanup is performed by ExtendDB frontends through TiDB transactions.
 - Use BR or TiDB cluster-level PITR for backup and recovery.
 - Keep catalog and data databases in the same TiDB cluster so TSO snapshots, online DDL, TTL, and BR share one timeline.
 - Monitor TiDB SQL session count, PD scheduling, Region distribution, DDL jobs, TTL jobs, BR jobs, and slow queries.

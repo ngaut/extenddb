@@ -10,16 +10,16 @@
 ./target/release/extenddb serve --config extenddb.toml
 ```
 
-extenddb always runs as a daemon. On startup it:
+extenddb runs as a daemon by default. Pass `--foreground` (alias `--no-daemon`) to keep it attached for containers and process supervisors. On startup it:
 
 1. Reads `extenddb.toml` configuration
 2. Binds the TCP socket (port conflicts are reported before forking)
-3. Forks to background
-4. Initializes syslog logging
-5. Connects to the configured storage backend (catalog + data databases)
+3. Forks to background in daemon mode, or stays attached in foreground mode
+4. Initializes syslog logging in daemon mode, or stderr logging in foreground mode
+5. Connects to TiDB (catalog + data databases)
 6. Verifies catalog version matches the binary
 7. Starts the HTTP server
-8. Spawns background tasks (log level polling, backend-specific retention and metrics tasks)
+8. Spawns background tasks (log level polling, TiDB retention, cache-epoch polling, and metrics tasks)
 
 ### Checking Status
 
@@ -49,8 +49,8 @@ curl --cacert ~/.extenddb/tls/cert.pem https://127.0.0.1:8000/health
 # {"status":"healthy"}
 ```
 
-The endpoint returns `503` with `{"status":"unhealthy"}` if the selected
-storage backend cannot serve through one of the pools owned by this frontend.
+The endpoint returns `503` with `{"status":"unhealthy"}` if TiDB cannot serve
+through one of the pools owned by this frontend.
 
 ## Configuration Reference
 
@@ -63,18 +63,12 @@ These settings require a server restart to take effect.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `bind_addr` | `127.0.0.1` | Network interface to bind |
-| `port` | `8000` | HTTP port |
+| `port` | `8000` | HTTPS port |
 | `region` | `us-east-1` | AWS region for ARN generation |
-
-#### [storage]
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `backend` | `tidb` | Storage backend |
 
 #### [storage.tidb]
 
-Default backend for the standard binary build.
+TiDB catalog connection and runtime pool settings.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -102,7 +96,7 @@ until they reconnect, so restart ExtendDB after changing the setting.
 
 #### [storage.tidb.backup]
 
-TiDB backup and restore uses native BR, not a logical row-copy table. Configure these fields before using `CreateBackup` with the TiDB backend.
+TiDB backup and restore uses native BR, not a logical row-copy table. Configure these fields before using `CreateBackup` with TiDB storage.
 `CreateBackup` returns after BR completes and publishes the backup as
 `AVAILABLE`; incomplete native backup attempts are not exposed as durable
 catalog rows. ExtendDB passes `--ignore-stats=false` to BR table backups, so
@@ -126,7 +120,7 @@ lifecycle rules. ExtendDB does not run a frontend-side file deleter for BR data.
 |-----|---------|-------------|
 | `pd_endpoint` | unset | PD endpoint passed to BR, for example `127.0.0.1:2379` |
 | `storage_uri` | unset | Base URI for BR snapshot backups (`local://`, S3, GCS, Azure Blob, or compatible storage supported by BR) |
-| `log_storage_uri` | unset | Reserved for future cluster-level BR log backup orchestration; table-level PITR is not exposed by the TiDB backend |
+| `log_storage_uri` | unset | Reserved for future cluster-level BR log backup orchestration; table-level PITR is not exposed by TiDB storage |
 | `binary` | `tiup` | Executable used to run BR |
 | `component` | `br` | Component/subcommand after `binary`; set to `""` when `binary` is a direct `br` executable |
 | `send_credentials_to_tikv` | unset | Maps to BR `--send-credentials-to-tikv`; set `false` for IAM-role based S3 access |
@@ -139,7 +133,7 @@ lifecycle rules. ExtendDB does not run a frontend-side file deleter for BR data.
 
 #### [auth.cache]
 
-In-memory stale-while-revalidate caches eliminate the per-request catalog roundtrip for credentials, IAM policies, principal/resource tags, and table key info. Self-induced changes (admin API and console mutations) propagate instantly via write-through invalidation; off-instance changes take up to `ttl_seconds` to propagate.
+In-memory stale-while-revalidate caches eliminate the per-request catalog roundtrip for credentials, IAM policies, and principal/resource tags. Table metadata is read from TiDB on the request path instead of being cached in-process. Self-induced auth changes (admin API and console mutations) propagate instantly via write-through invalidation and bump a TiDB-backed cache epoch so other frontends flush local auth caches without waiting for `ttl_seconds`.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -155,13 +149,12 @@ Statistics are exposed at `/management/auth-cache-metrics` (JSON, admin-authenti
 
 - **Single-key invalidations** (e.g. `DeleteAccessKey`, `PutUserPolicy`) drop the cached entry immediately; the next request sees the post-mutation state.
 - **Fanout invalidations** (e.g. `DeleteAccount`, `DeleteRole` session sweep, `DeleteGroup` member fanout) are **asynchronous** — there is a small window (~ms) between the API returning success and the matching entries being evicted. For hard cutover (e.g. revoking a compromised key), prefer the single-key path (`DeleteAccessKey`) over the cascade.
-- **Off-instance changes** (multi-node deployments, or direct catalog writes) wait up to `ttl_seconds` to be observed locally.
+- **Off-instance changes** from another ExtendDB frontend bump `auth_cache_epoch`; this frontend polls the epoch and flushes local auth caches. Direct catalog writes that bypass ExtendDB still rely on `ttl_seconds`.
 
 #### [server.tls]
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `enabled` | `true` | TLS is mandatory. The server refuses to start with `enabled = false`. |
 | `cert_path` | `~/.extenddb/tls/cert.pem` | PEM certificate file |
 | `key_path` | `~/.extenddb/tls/key.pem` | PEM private key file |
 
@@ -180,7 +173,7 @@ All defaults match real DynamoDB limits. Override only for testing edge cases.
 | `level` | `info` | Initial log level (overridden by runtime setting) |
 | `format` | `pretty` | Log format: `pretty` or `json` |
 
-Logging always goes to syslog (facility: daemon, ident: extenddb).
+Daemon-mode logging goes to syslog (facility: daemon, ident: extenddb). Foreground mode writes logs to stderr.
 
 ### Environment Variable Overrides
 
@@ -201,7 +194,12 @@ Managed via `extenddb settings set`. Changes take effect within 30 seconds witho
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `log_level` | `info` | Log level: trace, debug, info, warn, error |
+| `sqlx_log_level` | `warn` | SQL query log level: trace, debug, info, warn, error |
 | `allow_credential_import` | `true` | Whether `import-access-key` is allowed |
+| `ttl_expiry_interval_ms` | `1000` | Delay between user-table TTL expiry worker polling cycles |
+| `ttl_expiry_batch_size` | `1000` | Maximum expired user items deleted per cleanup batch |
+| `ttl_expiry_table_scan_limit` | `1024` | Maximum TTL-enabled table candidates scanned per cleanup batch; the worker advances a table-id cursor and wraps around |
+| `ttl_expiry_drain_batches` | `8` | Maximum back-to-back cleanup batches per poll when each batch fills, allowing aggressive backlog drain under high write throughput |
 
 ```bash
 # View current settings
@@ -462,7 +460,7 @@ Sessions expire after 8 hours. Click "Logout" to end immediately.
 
 ### Syslog
 
-All server logging goes to syslog (facility: daemon, ident: extenddb).
+Daemon-mode server logging goes to syslog (facility: daemon, ident: extenddb). Foreground mode writes logs to stderr.
 
 **Linux:**
 
@@ -540,7 +538,7 @@ Another process is using the port. Find it with `ss -tlnp | grep :8000` and stop
 Error: error communicating with database
 ```
 
-Check that the configured storage backend is running and the connection string in `extenddb.toml` is correct.
+Check that TiDB is running and the connection string in `extenddb.toml` is correct.
 
 **Catalog version mismatch:**
 

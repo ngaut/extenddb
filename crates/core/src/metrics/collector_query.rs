@@ -13,8 +13,8 @@ use super::types::{
     Dimension, MetricName, MetricSnapshot, MetricsQuery, OperationSegments, Percentiles, TimeWindow,
 };
 
-/// Accumulator for per-operation segment sums: (auth, authz, throttle, dispatch, response, total, count).
-type SegmentAccum = (f64, f64, f64, f64, f64, f64, u64);
+/// Accumulator for per-operation segment sums: (auth, authz, dispatch, response, total, count).
+type SegmentAccum = (f64, f64, f64, f64, f64, u64);
 
 impl MetricsCollector {
     /// Query metrics and return snapshots.
@@ -175,32 +175,28 @@ impl MetricsCollector {
             let e = by_op.entry(p.operation.clone()).or_default();
             e.0 += p.segments.auth_us;
             e.1 += p.segments.authz_us;
-            e.2 += p.segments.throttle_us;
-            e.3 += p.segments.dispatch_us;
-            e.4 += p.segments.response_us;
-            e.5 += p.segments.total_us;
-            e.6 += 1;
+            e.2 += p.segments.dispatch_us;
+            e.3 += p.segments.response_us;
+            e.4 += p.segments.total_us;
+            e.5 += 1;
         }
         by_op
             .into_iter()
-            .map(
-                |(op, (auth, authz, throttle, dispatch, response, total, count))| {
-                    #[allow(clippy::cast_precision_loss)]
-                    let c = count as f64;
-                    OperationSegments {
-                        operation: op,
-                        count,
-                        avg: super::types::LatencySegments {
-                            auth_us: auth / c,
-                            authz_us: authz / c,
-                            throttle_us: throttle / c,
-                            dispatch_us: dispatch / c,
-                            response_us: response / c,
-                            total_us: total / c,
-                        },
-                    }
-                },
-            )
+            .map(|(op, (auth, authz, dispatch, response, total, count))| {
+                #[allow(clippy::cast_precision_loss)]
+                let c = count as f64;
+                OperationSegments {
+                    operation: op,
+                    count,
+                    avg: super::types::LatencySegments {
+                        auth_us: auth / c,
+                        authz_us: authz / c,
+                        dispatch_us: dispatch / c,
+                        response_us: response / c,
+                        total_us: total / c,
+                    },
+                }
+            })
             .collect()
     }
 }

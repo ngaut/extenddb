@@ -352,7 +352,7 @@ async fn enable_point_in_time_recovery() {
     if !is_real_dynamodb() {
         assert!(
             update.is_err(),
-            "ExtendDB should not report PITR enabled until a backend implements real PITR"
+            "ExtendDB should not report PITR enabled until TiDB storage exposes real table-level PITR"
         );
         c.delete_table().table_name(&table).send().await.ok();
         return;
@@ -385,8 +385,8 @@ async fn restore_table_to_point_in_time() {
     let table = format!("PITRRestore_{}", ts());
     make_table(&table).await;
 
-    // ExtendDB intentionally does not emulate table-level PITR restore when a
-    // backend cannot perform it as a native online restore into a live target.
+    // ExtendDB intentionally does not emulate table-level PITR restore because
+    // TiDB does not expose it as a native online restore into a live target.
     let restored = format!("PITRRestored_{}", ts());
     let err = c
         .restore_table_to_point_in_time()

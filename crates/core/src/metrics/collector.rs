@@ -262,28 +262,6 @@ impl MetricsCollector {
         );
     }
 
-    /// Record a TTL deletion.
-    pub fn record_ttl_deletion(&self, table_name: &str) {
-        self.record(
-            MetricName::TimeToLiveDeletedItemCount,
-            1.0,
-            Some(table_name),
-            None,
-            None,
-        );
-    }
-
-    /// Record TTL deletion staleness (seconds past expiry).
-    pub fn record_ttl_staleness(&self, table_name: &str, staleness_secs: f64) {
-        self.record(
-            MetricName::TtlDeletionStaleness,
-            staleness_secs,
-            Some(table_name),
-            None,
-            None,
-        );
-    }
-
     /// Record an HTTP request (dimensions: operation).
     pub fn record_request_count(&self, operation: &str) {
         self.record(MetricName::RequestCount, 1.0, None, None, Some(operation));
@@ -376,6 +354,39 @@ impl MetricsCollector {
             None,
             Some(&worker_str),
         );
+    }
+
+    /// Record one DynamoDB TTL expiry worker cycle.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn record_ttl_expiry_cycle(
+        &self,
+        expired_items: usize,
+        candidate_tables: usize,
+        oldest_expired_age_seconds: Option<i64>,
+    ) {
+        self.record(
+            MetricName::TtlExpiredItemCount,
+            expired_items as f64,
+            None,
+            None,
+            Some("TtlExpiry"),
+        );
+        self.record(
+            MetricName::TtlCandidateTableCount,
+            candidate_tables as f64,
+            None,
+            None,
+            Some("TtlExpiry"),
+        );
+        if let Some(age) = oldest_expired_age_seconds {
+            self.record(
+                MetricName::TtlOldestExpiredAgeSeconds,
+                age.max(0) as f64,
+                None,
+                None,
+                Some("TtlExpiry"),
+            );
+        }
     }
 
     /// Record per-segment latency breakdown for a request.

@@ -4,9 +4,9 @@
 
 ## Overview
 
-extenddb (ExtendDB) is a standalone DynamoDB-compatible API server written in Rust. It receives DynamoDB wire protocol requests over HTTP/HTTPS, authenticates and authorizes them via SigV4 and a local IAM policy engine, executes operation logic in a storage-agnostic engine, and delegates persistence to TiDB.
+extenddb (ExtendDB) is a standalone DynamoDB-compatible API server written in Rust. It receives DynamoDB wire protocol requests over HTTP/HTTPS, authenticates and authorizes them via SigV4 and a local IAM policy engine, executes operation logic in a SQL-free engine, and delegates persistence to TiDB.
 
-extenddb runs as a daemon process, logging to syslog. It is designed for any environment where DynamoDB semantics are needed — local development, CI pipelines, self-hosted production, multi-cloud, or air-gapped deployments. Developers and applications point their AWS SDKs at extenddb and get identical DynamoDB behavior.
+extenddb runs in daemon mode by default with syslog logging, and also supports `serve --foreground` for containers and process supervisors. It is designed for any environment where DynamoDB semantics are needed — local development, CI pipelines, self-hosted production, multi-cloud, or air-gapped deployments. Developers and applications point their AWS SDKs at extenddb and get identical DynamoDB behavior.
 
 ## Cargo Workspace
 
@@ -17,8 +17,8 @@ extenddb/
 ├── crates/
 │   ├── core/              Pure sync Rust: types, expressions, validation, errors
 │   ├── engine/            Async operation handlers (PutItem, Query, etc.)
-│   ├── storage/           Storage trait definitions and backend-agnostic utilities
-│   ├── storage-tidb/      TiDB backend implementation
+│   ├── storage/           Storage trait definitions and shared storage types
+│   ├── storage-tidb/      TiDB storage implementation
 │   ├── auth/              AuthProvider trait, SigV4 verification, IAM policy engine
 │   ├── server/            HTTP server (axum), management API, web console
 │   └── bin/               CLI entry point, config loading, daemon lifecycle
@@ -68,28 +68,27 @@ The `dispatch` function routes `X-Amz-Target` operation names to handlers.
 
 ### storage
 
-Trait definitions for the storage layer. Thirteen storage traits partition backend responsibilities:
+Trait definitions and shared storage types. The crate exposes two object-safe
+runtime contracts:
 
-- **TableEngine**: Table lifecycle (create, delete, describe, list, update)
-- **DataEngine**: Item CRUD (put, get, update, delete, query, scan, batch, transact)
-- **MetadataEngine**: Settings, TTL configuration, tagging
-- **StreamEngine**: Stream record persistence and retrieval
-- **WorkerStore**: Background worker coordination
-- **BackupEngine**: Backup and restore operations
-- **ManagementStore**: IAM and account management
-- **AdminStore**: Admin user and credential management
-- **SettingsStore**: Runtime settings persistence
-- **MetricsStore**: Metrics collection and retrieval
-- **RateLimitStore**: Rate limiting state
-- **AuthorizationStore**: Authorization policy, boundary, session, and tag metadata
-- **Bootstrapper**: Initial database setup
+- **StorageEngine**: DynamoDB data-plane and table operations, combining
+  `TableEngine`, `DataEngine`, `MetadataEngine`, `StreamEngine`,
+  `BackupEngine`, and `WorkerStore`.
+- **CatalogStore**: IAM, authorization metadata, settings, metrics, and login
+  lockout state, combining the management-store traits with
+  `AuthorizationStore`.
 
-Traits use `BoxFuture` for object safety. The runtime implementation is TiDB,
-and `RuntimeHooks` allows TiDB-owned workers to start outside the server crate.
+Traits use `BoxFuture` where object safety is required. The runtime
+implementation is TiDB, and `ServerRuntimeHooks` allows TiDB-owned workers to
+start outside the server crate. The trait boundary exists to keep SQL and TiDB
+driver details out of `engine` and `server`; it is not a plugin registry or an
+extension point for alternate built-in storage implementations. TiDB bootstrap,
+migration, destroy, verify, and catalog-check commands are concrete
+`storage-tidb` code.
 
 ### storage-tidb
 
-TiDB implementation of the storage traits using the sqlx MySQL driver. It uses TiDB-compatible SQL, MySQL-style connection strings, `ON DUPLICATE KEY UPDATE` upserts, and TiDB/MySQL error classification. TiDB data tables are partitioned with `PARTITION BY KEY(pk)`, and DynamoDB secondary indexes are generated-column native `GLOBAL` indexes on those partitioned tables. TiDB pre-splits hot shared and user data key ranges with native split/scatter DDL, sets `merge_option=deny` on those tables so PD preserves empty split Regions, and repairs that table attribute at startup because TiDB BR and TiCDC can skip table-attribute DDL. TiDB write pools set the session transaction mode to pessimistic so conditional writes and `SELECT FOR UPDATE` use TiDB's distributed row-locking behavior even on clusters upgraded from older defaults. TiDB default-read pools use native `closest-adaptive` follower read for DynamoDB reads that did not request `ConsistentRead=true`; operators can additionally enable TiDB session-level stale read on that pool with `storage.tidb.default_read_staleness_seconds`. Strong reads and writes use the strong data pool. It is the default backend for the standard binary build.
+TiDB implementation of the storage traits using the sqlx MySQL driver. It uses TiDB-compatible SQL, MySQL-style connection strings, `ON DUPLICATE KEY UPDATE` upserts, and TiDB/MySQL error classification. TiDB data tables are partitioned with `PARTITION BY KEY(pk)`, and DynamoDB secondary indexes are generated-column native `GLOBAL` indexes on those partitioned tables. TiDB pre-splits hot shared and user data key ranges with native split/scatter DDL, sets `merge_option=deny` on those tables so PD preserves empty split Regions, and repairs that table attribute at startup because TiDB BR and TiCDC can skip table-attribute DDL. TiDB write pools set the session transaction mode to pessimistic so conditional writes and `SELECT FOR UPDATE` use TiDB's distributed row-locking behavior even on clusters upgraded from older defaults. TiDB default-read pools use native `closest-adaptive` follower read for DynamoDB reads that did not request `ConsistentRead=true`; operators can additionally enable TiDB session-level stale read on that pool with `storage.tidb.default_read_staleness_seconds`. Strong reads and writes use the strong data pool. This is the standard runtime storage implementation.
 
 TiDB backups use BR as the physical backup data plane. ExtendDB stores backup
 metadata in the catalog and delegates snapshot data to BR storage; it does not
@@ -118,7 +117,7 @@ HTTP/HTTPS server built on axum + tower. Responsibilities:
 - DynamoDB wire protocol endpoint (`POST /`)
 - Management REST API (`/management/*`)
 - Web console (`/console/*`) with CSRF protection and security headers
-- Backend-aware health check (`/health`) and JSON metrics (`/metrics`) with DynamoDB CloudWatch-style metric names and dimensions
+- TiDB-aware health check (`/health`) and JSON metrics (`/metrics`) with DynamoDB CloudWatch-style metric names and dimensions
 - TLS via rustls (self-signed or CA-signed certificates)
 - Request ID generation, CRC32 checksums, content-type headers
 - Graceful shutdown on SIGTERM/SIGINT
@@ -130,8 +129,8 @@ Thin binary that wires everything together:
 - CLI parsing (clap): `serve`, `init`, `destroy`, `verify`, `migrate`, `status`, `settings`, `manage`, `version`
 - Configuration loading (TOML + env vars)
 - Daemon lifecycle (bind socket → fork → syslog → serve)
-- Background tasks (log level polling, throttling polling, backend-specific runtime hooks, metrics persistence)
-- Backend diagnostics (`catalog-check`) through the selected storage backend's operations engine
+- Background tasks (log level polling, auth-cache epoch polling, TiDB runtime hooks, metrics persistence)
+- TiDB catalog/data diagnostics (`catalog-check`)
 
 ## Request Lifecycle
 
@@ -147,16 +146,16 @@ Thin binary that wires everything together:
 
 ## Daemon Lifecycle
 
-extenddb always runs as a daemon. There is no foreground mode.
+extenddb runs as a daemon by default. `extenddb serve --foreground` (alias `--no-daemon`) skips daemonization, writes logs to stderr, and still writes the PID file so `status` and `stop` keep working.
 
 1. Parse CLI arguments and load configuration
 2. Bind TCP socket (port conflicts reported before forking)
-3. Fork to background via `daemonize`
-4. Initialize syslog logging
-5. Connect to the configured storage backend (catalog + data databases)
+3. In daemon mode, fork to background via `daemonize`; in foreground mode, keep the current process attached
+4. Initialize syslog logging in daemon mode or stderr logging in foreground mode
+5. Connect to TiDB catalog and data databases
 6. Verify catalog version matches binary expectation
 7. Start axum server on the pre-bound socket
-8. Spawn background tasks (log level polling, throttling polling, backend-specific retention, metrics persistence)
+8. Spawn background tasks (log level polling, auth-cache epoch polling, TiDB retention/hooks, metrics persistence)
 9. On SIGTERM/SIGINT: drain connections (5s timeout), exit
 
 ## Catalog Model
@@ -166,13 +165,15 @@ extenddb uses a catalog/data storage architecture:
 - **Catalog database** (e.g., `extenddb_catalog`): Stores table metadata, account/user/group/role/policy definitions, access keys, settings, stream metadata, and metrics. Shared across all accounts.
 - **Data database** (e.g., `extenddb_catalog_data`): Stores user items, native secondary-index state, and stream records. TiDB stores item rows once and uses generated columns plus native secondary indexes.
 
-The backend-specific catalog version is stored in the `settings` table as `catalog_version` and checked at startup. Version mismatches prevent the server from starting until migrations are run. TiDB also records the data database connection string in the catalog, and both TiDB databases must remain in the same TiDB cluster so native timestamps, online DDL, TTL, and BR operate on one global timeline. Startup validates this with TiDB's native `information_schema.cluster_info` topology view when available; if a TiDB edition hides that view, catalog and data must use the same SQL endpoint and user.
+The TiDB catalog version is stored in the `settings` table as `catalog_version` and checked at startup. Version mismatches prevent the server from starting until migrations are run. TiDB also records the data database connection string in the catalog, and both TiDB databases must remain in the same TiDB cluster so native timestamps, online DDL, TTL, and BR operate on one global timeline. Startup validates this with TiDB's native `information_schema.cluster_info` topology view when available; if a TiDB edition hides that view, catalog and data must use the same SQL endpoint and user.
 
 ## Storage Boundary
 
 ### Storage
 
-The TiDB backend implements thirteen storage traits (see **storage** section above). The traits use `BoxFuture` for object safety and keep SQL driver details out of the engine and server crates.
+TiDB implements the `StorageEngine` and `CatalogStore` contracts described
+above. The underlying traits use `BoxFuture` for object safety and keep SQL
+driver details out of the engine and server crates.
 
 ### Authentication
 
@@ -196,7 +197,7 @@ Unparseable policies fail closed — a corrupted Deny policy results in access d
 
 ### Transport
 
-TLS is supported via rustls. `extenddb init` generates a self-signed certificate; production deployments should use CA-signed certificates. When TLS is enabled, HSTS headers are sent automatically.
+TLS is mandatory and implemented with rustls. `extenddb init` generates a self-signed certificate; production deployments should use CA-signed certificates. HSTS headers are sent automatically.
 
 ### Web Console Security
 
@@ -207,7 +208,7 @@ TLS is supported via rustls. `extenddb init` generates a self-signed certificate
 
 ### Input Validation
 
-All user-supplied strings are validated at the engine layer before reaching storage. Expression parsing enforces configurable expression string, substitution-map, token, and depth limits. Policy documents are size-capped before JSON parsing. Storage uses parameterized queries for values; backend-specific DDL paths validate and quote identifiers before formatting.
+All user-supplied strings are validated at the engine layer before reaching storage. Expression parsing enforces configurable expression string, substitution-map, token, and depth limits. Policy documents are size-capped before JSON parsing. Storage uses parameterized queries for values; TiDB DDL paths validate and quote identifiers before formatting.
 
 ## Web Console
 
@@ -248,28 +249,27 @@ The documentation browser at `/console/docs` is accessible without login. All ot
 Two configuration surfaces:
 
 - **`extenddb.toml`**: Static configuration requiring a restart (bind address, port, database connection, auth provider, TLS, log format)
-- **Settings table**: Runtime configuration via `extenddb settings set` (log level, backend-specific control plane delay, credential import toggle). A background poller picks up changes every 30 seconds.
+- **Settings table**: Runtime configuration via `extenddb settings set` (log level, SQLx log level, credential import toggle, TTL worker tuning). Background workers poll relevant settings without restart.
 
 Configuration precedence: CLI flags > environment variables > config file > defaults.
 
 ## DynamoDB Streams
 
-extenddb implements DynamoDB Streams for change data capture. Stream records are captured atomically with data writes inside the backend transaction. Both the DynamoDB API and Streams API are served on the same port.
+extenddb implements DynamoDB Streams for change data capture. Stream records are captured atomically with data writes inside the TiDB transaction. Both the DynamoDB API and Streams API are served on the same port.
 
 Supported operations: `ListStreams`, `DescribeStream`, `GetShardIterator`, `GetRecords`.
 
 Stream records and disabled/deleted stream generation metadata are retained for
-24 hours. Backends with native TTL, such as TiDB, delegate retention to the
-database and repair fixed TTL jobs at startup; backends without native TTL clean
-up expired records with a background worker.
+24 hours. TiDB native TTL owns retention, and startup repair keeps the fixed TTL
+jobs in the expected state.
 
 ## Deployment Models
 
-extenddb is a single-binary server that connects to a configured storage backend. Deployment options include:
+extenddb is a single-binary server that connects to TiDB. Deployment options include:
 
-- **Single-node**: extenddb + storage backend on the same host (development, small workloads)
-- **Separated**: extenddb on an application server, storage backend on a dedicated database server or managed service
-- **Containerized**: Docker/Kubernetes with the storage backend as a sidecar or external service
+- **Single-node**: extenddb + TiDB on the same host (development, small workloads)
+- **Separated**: extenddb on an application server, TiDB on dedicated database servers or managed service
+- **Containerized**: Docker/Kubernetes with TiDB as an external service
 - **Air-gapped**: No internet connectivity required; all functionality is self-contained
 
 TiDB provides durability, replication, and physical backup capabilities through its PD/TiKV topology and BR. `/health` is readiness-oriented and checks the live TiDB pools before reporting healthy.

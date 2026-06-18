@@ -10,14 +10,14 @@ code path from the JSON management API. Both paths share the same
 console pages live in a different module tree. These tests assert that
 console-driven mutations propagate to the auth/authz cache instantly,
 just like the management API path (verified by
-``tests/test_cache_coherence.py``).
+``tests/rust/src/cache_coherence.rs``).
 
 If a console handler ever forgets to call the matching ``invalidate_*``
 hook, the mutation it performs will appear to "not stick" until
 ``auth.cache.ttl_seconds`` elapses — these tests reproduce that lag and
 fail.
 
-Prerequisites mirror tests/test_cache_coherence.py.
+Prerequisites mirror the Rust cache-coherence integration tests.
 """
 
 from __future__ import annotations
@@ -433,7 +433,6 @@ def test_console_cache_invalidate_all_requires_typed_confirmation(
             "user_names": "",
             "role_name": "",
             "access_key_id": "",
-            "table_name": "",
             "arn": "",
             "confirm": "wrong",
         },
@@ -451,11 +450,10 @@ def test_console_cache_invalidate_all_requires_typed_confirmation(
             "user_names": "",
             "role_name": "",
             "access_key_id": "",
-            "table_name": "",
             "arn": "",
             "confirm": "INVALIDATE",
         },
     )
     assert r.status_code == 200, r.text[:200]
-    for label in ("authz", "table_key_info", "credentials"):
+    for label in ("authz", "credentials"):
         assert label in r.text

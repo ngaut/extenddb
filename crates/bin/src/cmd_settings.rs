@@ -14,9 +14,7 @@ use extenddb_storage::management_store::SettingsStore;
 use crate::config;
 
 // Re-use validation constants from the ops layer.
-use extenddb_server::management::ops_settings::{
-    READONLY_KEYS, RuntimeSettingContext, validate_setting,
-};
+use extenddb_server::management::ops_settings::{READONLY_KEYS, validate_setting};
 
 #[derive(Args)]
 pub struct SettingsArgs {
@@ -48,26 +46,20 @@ pub async fn run(args: SettingsArgs) -> anyhow::Result<()> {
         );
     }
     let app_config = config::load(&args.config)?;
-    let setting_context = RuntimeSettingContext::from_storage_config(app_config.storage.as_trait());
     if let SettingsAction::Set { key, value } = &args.action {
-        validate_setting(setting_context, key, value)
+        validate_setting(key, value)
             .map_err(|e| anyhow::anyhow!(format_management_setting_error(e)))?;
     }
 
-    let backend = &app_config.storage._backend;
-    let store = extenddb_storage::settings_store::create_settings_store(
-        backend,
-        app_config.storage.connection_config(),
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("Failed to create settings store: {e}"))?;
+    let store =
+        extenddb_storage_tidb::create_settings_store(app_config.storage.connection_config())
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create settings store: {e}"))?;
 
     match args.action {
         SettingsAction::List => list(store.as_ref()).await,
         SettingsAction::Get { key } => get(store.as_ref(), &key).await,
-        SettingsAction::Set { key, value } => {
-            set(store.as_ref(), setting_context, &key, &value).await
-        }
+        SettingsAction::Set { key, value } => set(store.as_ref(), &key, &value).await,
     }
 }
 
@@ -102,17 +94,12 @@ async fn get(store: &dyn SettingsStore, key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn set(
-    store: &dyn SettingsStore,
-    context: RuntimeSettingContext,
-    key: &str,
-    value: &str,
-) -> anyhow::Result<()> {
+async fn set(store: &dyn SettingsStore, key: &str, value: &str) -> anyhow::Result<()> {
     if READONLY_KEYS.contains(&key) {
         anyhow::bail!("Setting '{key}' is read-only and cannot be changed via this command.");
     }
 
-    validate_setting(context, key, value)
+    validate_setting(key, value)
         .map_err(|e| anyhow::anyhow!(format_management_setting_error(e)))?;
 
     store

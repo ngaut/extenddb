@@ -3,7 +3,7 @@
 
 //! Login rate limiting and account lockout.
 //!
-//! All state lives in the storage backend so multiple ExtendDB instances
+//! All state lives in TiDB so multiple ExtendDB instances
 //! sharing a catalog see a consistent view. No in-process caching.
 
 use extenddb_storage::management_store::RateLimitStore;

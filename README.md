@@ -7,9 +7,9 @@ A DynamoDB-compatible API adapter, ExtendDB speaks the DynamoDB wire protocol �
 ## Use Cases
 
 - **Local development** — run DynamoDB workloads on your laptop with zero cloud dependency
-- **CI/CD pipelines** — deterministic integration tests against a DynamoDB-compatible backend
+- **CI/CD pipelines** — deterministic integration tests against a DynamoDB-compatible endpoint
 - **Self-hosted deployments** — run DynamoDB workloads on your own infrastructure (on-premises, private cloud, edge)
-- **Multi-cloud** — use DynamoDB semantics on any cloud that runs a supported storage backend
+- **Multi-cloud** — use DynamoDB semantics on any cloud that runs TiDB
 - **Air-gapped environments** — DynamoDB functionality with no internet connectivity
 
 ## Features
@@ -21,7 +21,7 @@ A DynamoDB-compatible API adapter, ExtendDB speaks the DynamoDB wire protocol �
 - CSRF protection, security headers, session management
 - JSON metrics endpoint with DynamoDB CloudWatch-style metric names and dimensions
 - Daemon mode with syslog logging, plus `--foreground` for container and supervisor environments
-- TiDB-first storage backend with native online DDL, secondary indexes, TTL,
+- TiDB storage with native online DDL, secondary indexes, TTL,
   follower reads, bounded stale reads, snapshot reads, and BR backup/restore
 
 ## Quick Start
@@ -89,7 +89,7 @@ extenddb settings --config extenddb.toml set log_level debug
 
 ## TLS
 
-TLS is mandatory. `extenddb init` generates a self-signed certificate at `~/.extenddb/tls/cert.pem`. The server refuses to start with TLS disabled.
+TLS is mandatory. `extenddb init` generates a self-signed certificate at `~/.extenddb/tls/cert.pem`.
 
 To use the self-signed cert with AWS CLI and SDKs, set `AWS_CA_BUNDLE`:
 
@@ -179,7 +179,7 @@ crates/
   core/             — types, validation, expressions (pure sync Rust, no async)
   engine/           — operation handlers
   storage/          — storage trait definitions
-  storage-tidb/     — TiDB backend
+  storage-tidb/     — TiDB storage implementation
   auth/             — SigV4 verification, IAM policy engine
   server/           — HTTP server, management API, web console
   bin/              — CLI, config, daemon lifecycle

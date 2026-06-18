@@ -14,26 +14,8 @@
 
 use std::sync::Arc;
 
-use futures::future::BoxFuture;
-
 use crate::CachedCredentialStore;
-
-/// Invalidation hooks for the `TableKeyInfo` cache.
-///
-/// Implemented by `extenddb-server`'s `CachedTableKeyInfoStore` and held in
-/// the registry as `Arc<dyn TableKeyInfoCacheInvalidator>` to avoid a
-/// circular crate dependency.
-pub trait TableKeyInfoCacheInvalidator: Send + Sync {
-    fn invalidate<'a>(
-        &'a self,
-        account_id: &'a str,
-        table_name: &'a str,
-    ) -> futures::future::BoxFuture<'a, ()>;
-
-    /// Drop every cached entry. Used by the manual `cache invalidate
-    /// all` admin endpoint.
-    fn invalidate_all(&self);
-}
+use futures::future::BoxFuture;
 
 /// Invalidation hooks for the authorization cache.
 ///
@@ -121,22 +103,30 @@ pub trait AuthzCacheInvalidator: Send + Sync {
     fn invalidate_all(&self);
 }
 
+/// Best-effort distributed invalidation signal.
+///
+/// Implemented by the binary/server wiring using the catalog settings store.
+/// The auth crate owns the registry but stays independent of storage crates.
+pub trait AuthCacheEpochBumper: Send + Sync {
+    fn bump_auth_cache_epoch<'a>(&'a self) -> BoxFuture<'a, ()>;
+}
+
 /// Holds shared handles to every auth/authz cache instance.
 ///
 /// Used by the management API to issue write-through invalidations after
 /// admin mutations.
 ///
 /// Construction note: the registry is built during server bootstrap. The
-/// storage backend factory creates the credential cache (which lives in
-/// this crate); the server crate creates the authorization cache (which
-/// lives there) and registers it through `with_authz_invalidator`. This
-/// lets the registry sit in `extenddb-auth` without requiring a circular
-/// dependency on `extenddb-server`.
+/// TiDB component wiring creates the credential cache (which lives in this
+/// crate); the server crate creates the authorization cache (which lives there)
+/// and registers it through `with_authz_invalidator`. This lets the registry
+/// sit in `extenddb-auth` without requiring a circular dependency on
+/// `extenddb-server`.
 #[derive(Clone, Default)]
 pub struct AuthCacheRegistry {
     pub credential: Option<Arc<CachedCredentialStore>>,
     pub authz: Option<Arc<dyn AuthzCacheInvalidator>>,
-    pub table_key_info: Option<Arc<dyn TableKeyInfoCacheInvalidator>>,
+    epoch_bumper: Option<Arc<dyn AuthCacheEpochBumper>>,
 }
 
 impl AuthCacheRegistry {
@@ -162,22 +152,16 @@ impl AuthCacheRegistry {
         self
     }
 
-    /// Set the table-key-info cache handle.
+    /// Set the distributed epoch bumper.
     #[must_use]
-    pub fn with_table_key_info_invalidator(
-        mut self,
-        invalidator: Arc<dyn TableKeyInfoCacheInvalidator>,
-    ) -> Self {
-        self.table_key_info = Some(invalidator);
+    pub fn with_epoch_bumper(mut self, bumper: Arc<dyn AuthCacheEpochBumper>) -> Self {
+        self.epoch_bumper = Some(bumper);
         self
     }
 
-    /// Invalidate the cached `TableKeyInfo` for `(account_id, table_name)`.
-    /// Called by control-plane handlers (`CreateTable`, `UpdateTable`,
-    /// `DeleteTable`, etc.) after the catalog mutation succeeds.
-    pub async fn invalidate_table_key_info(&self, account_id: &str, table_name: &str) {
-        if let Some(c) = &self.table_key_info {
-            c.invalidate(account_id, table_name).await;
+    async fn signal_distributed_invalidation(&self) {
+        if let Some(bumper) = &self.epoch_bumper {
+            bumper.bump_auth_cache_epoch().await;
         }
     }
 
@@ -191,12 +175,14 @@ impl AuthCacheRegistry {
         if let Some(c) = &self.credential {
             c.invalidate(access_key_id).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_user_policies(&self, account_id: &str, user_name: &str) {
         if let Some(c) = &self.authz {
             c.invalidate_user_policies(account_id, user_name).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_user_group_policies(&self, account_id: &str, user_name: &str) {
@@ -204,6 +190,7 @@ impl AuthCacheRegistry {
             c.invalidate_user_group_policies(account_id, user_name)
                 .await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     /// Fan out a group-membership-affecting event to the cached
@@ -214,36 +201,42 @@ impl AuthCacheRegistry {
             c.invalidate_users_group_policies(account_id, user_names)
                 .await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_user_boundary(&self, account_id: &str, user_name: &str) {
         if let Some(c) = &self.authz {
             c.invalidate_user_boundary(account_id, user_name).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_user_tags(&self, account_id: &str, user_name: &str) {
         if let Some(c) = &self.authz {
             c.invalidate_user_tags(account_id, user_name).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_role_policies(&self, account_id: &str, role_name: &str) {
         if let Some(c) = &self.authz {
             c.invalidate_role_policies(account_id, role_name).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_role_boundary(&self, account_id: &str, role_name: &str) {
         if let Some(c) = &self.authz {
             c.invalidate_role_boundary(account_id, role_name).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_role_tags(&self, account_id: &str, role_name: &str) {
         if let Some(c) = &self.authz {
             c.invalidate_role_tags(account_id, role_name).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_session(&self, account_id: &str, role_name: &str, session_name: &str) {
@@ -251,12 +244,14 @@ impl AuthCacheRegistry {
             c.invalidate_session(account_id, role_name, session_name)
                 .await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     pub async fn invalidate_resource_tags(&self, arn: &str) {
         if let Some(c) = &self.authz {
             c.invalidate_resource_tags(arn).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     /// Invalidate every cached session-data entry for `role_name`. Called
@@ -265,6 +260,7 @@ impl AuthCacheRegistry {
         if let Some(c) = &self.authz {
             c.invalidate_role_sessions(account_id, role_name).await;
         }
+        self.signal_distributed_invalidation().await;
     }
 
     /// Invalidate every cached entry — across every authz subcache and the
@@ -286,19 +282,25 @@ impl AuthCacheRegistry {
                 "credential cache invalidate_account failed; relying on TTL"
             );
         }
+        self.signal_distributed_invalidation().await;
     }
 
-    /// Drop every cached entry across every cache (authz subcaches,
-    /// credentials, table-key-info). Used by the manual `cache
-    /// invalidate all` admin endpoint. No-op for any cache that is
-    /// disabled. Callers MUST gate this on explicit confirmation; it
+    /// Drop every cached entry across authz subcaches and credentials. Used by
+    /// the manual `cache invalidate all` admin endpoint. No-op for any cache
+    /// that is disabled. Callers MUST gate this on explicit confirmation; it
     /// causes a reload storm against the catalog as the next requests
     /// re-populate from cold.
-    pub fn invalidate_all_caches(&self) {
+    pub async fn invalidate_all_caches(&self) {
+        self.invalidate_all_local();
+        self.signal_distributed_invalidation().await;
+    }
+
+    /// Drop every local cached entry without bumping the distributed epoch.
+    ///
+    /// Used by frontends reacting to an epoch bump from another process; bumping
+    /// again here would create a feedback loop.
+    pub fn invalidate_all_local(&self) {
         if let Some(c) = &self.authz {
-            c.invalidate_all();
-        }
-        if let Some(c) = &self.table_key_info {
             c.invalidate_all();
         }
         if let Some(c) = &self.credential {
@@ -320,5 +322,45 @@ impl AuthCacheRegistry {
                 "credential cache invalidate_principal failed; relying on TTL"
             );
         }
+        self.signal_distributed_invalidation().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{AuthCacheEpochBumper, AuthCacheRegistry};
+    use futures::future::BoxFuture;
+
+    struct CountingBumper {
+        bumps: Arc<AtomicUsize>,
+    }
+
+    impl AuthCacheEpochBumper for CountingBumper {
+        fn bump_auth_cache_epoch<'a>(&'a self) -> BoxFuture<'a, ()> {
+            let bumps = self.bumps.clone();
+            Box::pin(async move {
+                bumps.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn invalidations_bump_epoch_but_epoch_flush_does_not() {
+        let bumps = Arc::new(AtomicUsize::new(0));
+        let registry = AuthCacheRegistry::empty().with_epoch_bumper(Arc::new(CountingBumper {
+            bumps: bumps.clone(),
+        }));
+
+        registry.invalidate_user_policies("acct", "alice").await;
+        assert_eq!(bumps.load(Ordering::SeqCst), 1);
+
+        registry.invalidate_all_local();
+        assert_eq!(bumps.load(Ordering::SeqCst), 1);
+
+        registry.invalidate_all_caches().await;
+        assert_eq!(bumps.load(Ordering::SeqCst), 2);
     }
 }

@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
@@ -36,7 +35,7 @@ struct BatchGetProjection {
 /// Handle a `BatchGetItem` request.
 ///
 /// Reads items from one or more tables by primary key. Each table's keys are
-/// fetched through the storage backend's batch read path. `DynamoDB` limits:
+/// fetched through the storage batch read path. `DynamoDB` limits:
 /// max 100 keys total, max 16 MB response size.
 ///
 /// # Errors
@@ -335,22 +334,9 @@ async fn batch_get_table_infos(
 ) -> Result<HashMap<String, TableKeyInfo>, DynamoDbError> {
     let mut table_names = request_items.keys().cloned().collect::<Vec<_>>();
     table_names.sort();
-
-    let results = join_all(table_names.iter().map(|table_name| async move {
-        (
-            table_name.clone(),
-            ctx.table_key_info(table_name)
-                .await
-                .map_err(storage_err_to_dynamo),
-        )
-    }))
-    .await;
-
-    let mut table_infos = HashMap::with_capacity(results.len());
-    for (table_name, result) in results {
-        table_infos.insert(table_name, result?);
-    }
-    Ok(table_infos)
+    ctx.table_key_infos(&table_names)
+        .await
+        .map_err(storage_err_to_dynamo)
 }
 
 #[cfg(test)]

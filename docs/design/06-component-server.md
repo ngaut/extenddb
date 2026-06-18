@@ -16,11 +16,9 @@ crates/server/src/
 ├── authorization.rs          # IAM authorization helpers
 ├── request_helpers.rs        # Request parsing helpers
 ├── response.rs               # DynamoDB JSON/error response formatting
-├── metrics_endpoint.rs       # Prometheus metrics endpoint
-├── rate_limit.rs             # Local rate-limit helpers
-├── throttle_helpers.rs       # Backend-aware frontend capacity tracking
+├── metrics_endpoint.rs       # DynamoDB-style JSON metrics endpoint
+├── rate_limit.rs             # TiDB-backed login rate-limit helpers
 ├── authz_cache.rs            # Authorization cache wrapper
-├── key_info_cache.rs         # Table key-info cache wrapper
 ├── management/               # Management API endpoints
 └── console/                  # Web console and rendered-docs UI
 ```
@@ -29,45 +27,42 @@ crates/server/src/
 
 ### 3.1 Storage Wiring
 
-`AppState` stores the selected backend as `Arc<dyn StorageEngine>`, matching
-auth's `Arc<dyn AuthProvider>` shape:
+`AppState` stores the TiDB-backed storage engine as `Arc<dyn StorageEngine>`,
+matching auth's `Arc<dyn AuthProvider>` shape:
 
 - **Storage uses object-safe dynamic dispatch.** The server and engine do not
-  carry database driver types; the binary creates the TiDB backend and hands the
-  server one trait object.
+  carry database driver types; the binary creates the TiDB storage
+  implementation and hands the server one trait object.
 - **Storage traits use explicit `BoxFuture` signatures.** This keeps the
   traits object-safe without `#[async_trait]`. Data-plane methods bind the
   returned future lifetime to borrowed request metadata, so implementations can
-  await native backend calls without cloning keys, expression maps, resolved
+  await native TiDB calls without cloning keys, expression maps, resolved
   index info, or transaction batches.
 - **Auth also uses dynamic dispatch (`Arc<dyn>`).** Auth is called once per
-  request, involves HMAC-SHA256 crypto that dwarfs any vtable cost, and
-  benefits from runtime pluggability.
-- **Middleware remains backend-agnostic.** `RequestIdLayer`, `LoggingLayer`,
-  `MetricsLayer`, `RequestSizeLayer`, and compression do not touch storage.
-  Only the main request handler and `OperationContext` receive the storage
-  trait object.
-- **Testing:** Tests can provide a mock `Arc<dyn StorageEngine>` or a real
-  backend registration without threading generic parameters through handlers.
+  request and involves HMAC-SHA256 crypto that dwarfs any vtable cost. The
+  standard runtime uses `BuiltinAuthProvider`.
+- **Middleware remains storage-free.** `RequestIdLayer`, `LoggingLayer`,
+  `MetricsLayer`, `RequestSizeLayer`, and compression do not touch TiDB. Only
+  the main request handler and `OperationContext` receive the storage trait
+  object.
+- **Testing:** Tests can provide a mock `Arc<dyn StorageEngine>` or real TiDB
+  wiring without threading generic parameters through handlers.
 
 ```rust
 use axum::Router;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceBuilder;
-
-pub struct ServerConfig {
-    pub bind_addr: String,
-    pub port: u16,
-    pub tls: Option<TlsConfig>,
-    pub max_request_size: usize,
-    pub shutdown_drain_secs: u64,
-    pub rate_limit_rps: Option<f64>,
-}
 
 pub struct AppState {
     pub storage: Arc<dyn StorageEngine>,
     pub auth: Arc<dyn AuthProvider>,
     pub limits: Arc<LimitsConfig>,
+    pub region: Arc<str>,
+    pub server_addr: String,
+    pub catalog_store: Option<Arc<dyn CatalogStore>>,
+    pub auth_cache: Option<Arc<AuthCacheRegistry>>,
+    pub authz_cache: Arc<AuthzCache>,
     pub metrics: Arc<MetricsCollector>,
 }
 
@@ -80,7 +75,10 @@ pub struct AppState {
 pub async fn start_server(
     listener: tokio::net::TcpListener,
     state: AppState,
+    pid_file: Option<PathBuf>,
+    tls: ServerTlsConfig,
 ) -> Result<(), anyhow::Error> {
+    const DYNAMODB_BODY_LIMIT: usize = 16 * 1024 * 1024;
     let shared_state = Arc::new(state);
 
     let app = Router::new()
@@ -91,7 +89,7 @@ pub async fn start_server(
             ServiceBuilder::new()
                 .layer(middleware::request_id::RequestIdLayer)
                 .layer(middleware::logging::LoggingLayer)
-                .layer(middleware::request_size::RequestSizeLayer::new(config.max_request_size))
+                .layer(middleware::request_size::RequestSizeLayer::new(DYNAMODB_BODY_LIMIT))
                 .layer(middleware::metrics::MetricsLayer::new(shared_state.metrics.clone()))
         )
         .with_state(shared_state);
@@ -125,8 +123,8 @@ async fn shutdown_signal() {
 DynamoDB uses a single endpoint (`POST /`) with the operation name in the `X-Amz-Target` header.
 
 ```rust
-/// Axum's `State` extractor receives shared server state. The storage backend
-/// inside the state is already erased behind `Arc<dyn StorageEngine>`.
+/// Axum's `State` extractor receives shared server state. The TiDB-backed
+/// storage engine inside the state is erased behind `Arc<dyn StorageEngine>`.
 async fn handle_dynamodb_request(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -151,17 +149,12 @@ async fn handle_dynamodb_request(
     };
 
     // 4. Authorize. AuthorizationStore fetches policy, boundary, session, and
-    // tag metadata as one backend-shaped request-path lookup.
+    // tag metadata as one storage-shaped request-path lookup.
     if let Err(e) = check_authorization(&state.storage, &identity, &operation, &input).await {
         return error_response(e);
     }
 
-    // 5. Check capacity / rate limits
-    if let Err(e) = check_capacity(&state, &operation, &input).await {
-        return error_response(e);
-    }
-
-    // 6. Dispatch to operation handler
+    // 5. Dispatch to operation handler
     let request_id = generate_request_id();
     let ctx = OperationContext {
         request_id: request_id.clone(),
@@ -172,7 +165,7 @@ async fn handle_dynamodb_request(
 
     let result = dispatch(&operation, input, &ctx).await;
 
-    // 7. Format response
+    // 6. Format response
     match result {
         Ok(response_body) => success_response(response_body, &request_id),
         Err(e) => error_response_with_id(e, &request_id),
@@ -268,10 +261,10 @@ Middleware is implemented as tower `Layer`s, composed in order:
 ```
 Request
   → RequestIdLayer        (assign UUID, add to response headers)
-  → RequestSizeLayer      (reject if body > max_request_size)
+  → RequestSizeLayer      (reject if body > DynamoDB's 16 MB body limit)
   → LoggingLayer          (log request start, response status + latency)
   → MetricsLayer          (record per-operation counters and latency histograms)
-  → [Auth + Capacity are handled inline in the handler, not as layers,
+  → [Auth and operation dispatch are handled inline in the handler,
      because they need access to the parsed operation name and request body]
 Response
   → CompressionLayer      (gzip if Accept-Encoding: gzip)
@@ -289,7 +282,7 @@ Auth needs the raw body bytes for SigV4 signature computation, and the operation
 GET /health → 200 OK {"status": "healthy"}
 ```
 
-Returns 200 when the server is accepting requests. Can optionally check storage backend connectivity.
+Returns 200 when the server is accepting requests. Can optionally check TiDB connectivity.
 
 ### 7.2 Metrics
 
@@ -323,7 +316,7 @@ schema that uses DynamoDB CloudWatch-style metric names and dimensions.
                   "sum": 1234.0, "count": 5, "min": 200.0, "max": 410.0 } ],
   "segments": [ { "operation": "GetItem", "count": 50,
                   "avg": { "auth_us": 12.0, "authz_us": 4.0,
-                            "throttle_us": 1.0, "dispatch_us": 280.0,
+                            "dispatch_us": 280.0,
                             "response_us": 8.0, "total_us": 305.0 } } ],
   "source":  "database"
 }
@@ -333,7 +326,7 @@ schema that uses DynamoDB CloudWatch-style metric names and dimensions.
 - `buckets` (`Vec<MetricsBucket>`): time-series at the requested granularity
   (omitted in the in-memory fallback path).
 - `segments` (`Vec<OperationSegments>`): per-operation latency breakdown
-  (auth / authz / throttle / dispatch / response in microseconds), in-memory only.
+  (auth / authz / dispatch / response in microseconds), in-memory only.
 - `source`: `"database"` when served from the persistent `MetricsStore`,
   `"memory"` when served from the in-process `MetricsCollector` fallback.
 
@@ -343,10 +336,8 @@ DynamoDB CloudWatch-aligned:
 - `ConsumedReadCapacityUnits`, `ConsumedWriteCapacityUnits`
 - `SuccessfulRequestLatency` (microseconds)
 - `SystemErrors`, `UserErrors`
-- `ThrottledRequests`, `ReadThrottleEvents`, `WriteThrottleEvents`
 - `ConditionalCheckFailedRequests`, `TransactionConflict`
 - `ReturnedItemCount`, `ReturnedBytes`
-- `TimeToLiveDeletedItemCount`, `TtlDeletionStaleness`
 
 ExtendDB-internal:
 - `RequestCount` (HTTP request count, dimension: `Operation`)
@@ -505,7 +496,8 @@ needed for admin, account, IAM, role, and settings operations.
 
 ## 9. TLS Configuration
 
-When TLS is enabled, the server uses `axum_server` (a separate crate from `axum` that adds rustls support). The non-TLS path uses `axum::serve` directly.
+TLS is mandatory. The server uses `axum_server` (a separate crate from `axum`
+that adds rustls support) and installs HSTS on every response.
 
 ```rust
 pub struct TlsConfig {
@@ -513,7 +505,7 @@ pub struct TlsConfig {
     pub key_path: PathBuf,
 }
 
-/// TLS variant of start_server. Uses `axum_server::bind_rustls` instead of
+/// start_server uses `axum_server` with rustls.
 /// `axum::serve` because axum's built-in serve doesn't support TLS directly.
 pub async fn start_tls_server(
     config: ServerConfig,
@@ -539,43 +531,19 @@ pub async fn start_tls_server(
 }
 ```
 
-## 10. Rate Limiting
+## 10. Login Rate Limiting
 
-Two levels of rate limiting, both using token bucket:
-
-- **Global rate limit**: Configurable requests per second across all operations
-- **Per-table rate limit**: Configurable requests per second per table name
+Management-console login protection is backed by TiDB state, so account
+lockout and per-IP failure counters remain consistent when multiple ExtendDB
+frontends share one catalog.
 
 ```rust
-pub struct RateLimiter {
-    global: Option<TokenBucket>,
-    /// Per-table rate limit buckets. Uses moka cache with max-size eviction
-    /// to prevent unbounded growth as new table names are seen. Evicted entries
-    /// simply reset their token bucket on next access (conservative — may
-    /// briefly allow a burst after eviction, but prevents memory leaks).
-    per_table: moka::sync::Cache<String, Arc<TokenBucket>>,
-    per_table_rps: f64,
-}
-
-impl RateLimiter {
-    pub fn check(&self, table_name: Option<&str>) -> Result<(), DynamoDbError> {
-        if let Some(ref global) = self.global {
-            if !global.try_acquire() {
-                return Err(DynamoDbError::throttling_error("Rate exceeded"));
-            }
-        }
-        if let Some(name) = table_name {
-            if self.per_table_rps > 0.0 {
-                let bucket = self.per_table.get_with(name.to_string(), || {
-                    Arc::new(TokenBucket::new(self.per_table_rps))
-                });
-                if !bucket.try_acquire() {
-                    return Err(DynamoDbError::throttling_error("Rate exceeded"));
-                }
-            }
-        }
-        Ok(())
-    }
+pub async fn check_login_allowed(
+    store: &dyn RateLimitStore,
+    principal: &str,
+    source_ip: Option<&str>,
+) -> Result<(), String> {
+    // Counts recent failures in TiDB and rejects locked principals or hot IPs.
 }
 ```
 
@@ -583,43 +551,13 @@ impl RateLimiter {
 
 The server records consumed capacity for DynamoDB-compatible responses. Capacity
 enforcement belongs to TiDB Resource Control/resource groups, because it must be
-cluster-owned when multiple ExtendDB frontends share one TiDB backend.
+cluster-owned when multiple ExtendDB frontends share one TiDB cluster.
 
-```rust
-use std::sync::Mutex;
-use std::time::Instant;
-
-pub struct ThroughputTracker {
-    /// Per-partition buckets (partition key hash → bucket)
-    partition_buckets: DashMap<u64, TokenBucket>,
-    /// Per-table buckets (table name → bucket)
-    table_buckets: DashMap<String, TokenBucket>,
-}
-
-pub struct TokenBucket {
-    /// Mutex is appropriate here — token bucket operations are fast (no I/O),
-    /// so lock contention is negligible even at high throughput.
-    state: Mutex<TokenBucketState>,
-    max_tokens: f64,
-    refill_rate: f64,  // tokens per second
-}
-
-struct TokenBucketState {
-    tokens: f64,
-    last_refill: Instant,
-}
-```
-
-The handler computes consumed RCU/WCU from the operation result. When the
-selected backend allows frontend throttling and the `throttling_enabled` runtime
-setting is enabled, the handler deducts tokens and returns
-`ProvisionedThroughputExceededException` on exhaustion. When the backend declares
-native capacity control, the same consumed-capacity metrics are recorded but
-admission is left to the storage cluster, and the server does not allocate a
-frontend throttle manager for that deployment.
-For TiDB, an optional `storage.tidb.resource_group` static setting is passed
-back to the storage factory so pooled SQL sessions bind to TiDB Resource Control
-with `SET RESOURCE GROUP`.
+The handler computes consumed RCU/WCU from the operation result. For TiDB, the
+same consumed-capacity metrics are recorded but admission is left to the storage
+cluster. An optional `storage.tidb.resource_group` static setting is passed into
+TiDB component wiring so pooled SQL sessions bind to TiDB Resource Control with
+`SET RESOURCE GROUP`.
 
 ---
 

@@ -38,8 +38,6 @@ pub use auth::CallerIdentity;
 pub struct ManagementState {
     /// Catalog store implementing operational storage traits.
     pub catalog_store: Arc<dyn extenddb_storage::CatalogStore>,
-    /// Backend capability context for runtime setting validation.
-    pub setting_context: ops_settings::RuntimeSettingContext,
     /// Auth/authz cache registry. Used by mutation handlers to issue
     /// write-through invalidations so self-induced IAM changes propagate
     /// instantly within the local instance.
@@ -48,9 +46,6 @@ pub struct ManagementState {
     /// endpoint to expose per-sub-cache counters. The same instance is held
     /// trait-object-style in `auth_cache.authz` for invalidation calls.
     pub authz_cache: Arc<crate::CachedAuthzStore>,
-    /// Concrete TableKeyInfo cache handle, used by the auth-cache-metrics
-    /// endpoint. Same instance is held in `auth_cache.table_key_info`.
-    pub table_key_info_cache: Arc<crate::CachedTableKeyInfoStore>,
 }
 
 /// Build the management API router.

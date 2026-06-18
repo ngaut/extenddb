@@ -4,18 +4,87 @@
 //! Background workers spawned by `extenddb serve`.
 //!
 //! Each function runs as a `tokio::spawn`-ed task for the lifetime of the
-//! server process. Workers handle log-level polling, control-plane transitions,
-//! TTL cleanup, table size refresh, stream record expiry, idempotency token
-//! cleanup, capacity warning, and in-memory metrics pruning.
+//! server process. Workers handle log-level polling, distributed auth-cache
+//! invalidation, control-plane transitions, native TiDB retention repair,
+//! and in-memory metrics pruning.
 //!
 //! Workers are generic over storage traits so they are decoupled from concrete
-//! backend engine and catalog-store types.
+//! TiDB engine and catalog-store types.
 
 use std::sync::Arc;
 
-use extenddb_core::throttle::ThrottleManager;
+use extenddb_auth::{AuthCacheEpochBumper, AuthCacheRegistry};
 use extenddb_storage::management_store::{MetricsStore, SettingsStore};
+use futures::future::BoxFuture;
 use tracing_subscriber::{EnvFilter, reload};
+
+pub(crate) struct SettingsAuthCacheEpochBumper {
+    store: Arc<dyn SettingsStore>,
+}
+
+impl SettingsAuthCacheEpochBumper {
+    pub(crate) fn new(store: Arc<dyn SettingsStore>) -> Self {
+        Self { store }
+    }
+}
+
+impl AuthCacheEpochBumper for SettingsAuthCacheEpochBumper {
+    fn bump_auth_cache_epoch<'a>(&'a self) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            match self.store.bump_auth_cache_epoch().await {
+                Ok(epoch) => {
+                    tracing::debug!(epoch, "auth cache epoch bumped");
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = ?error,
+                        "failed to bump distributed auth cache epoch; relying on TTL"
+                    );
+                }
+            }
+        })
+    }
+}
+
+/// Poll the distributed auth-cache epoch and flush local caches when another
+/// frontend changes IAM/auth state.
+pub(crate) async fn poll_auth_cache_epoch(
+    store: Arc<dyn SettingsStore>,
+    auth_cache: AuthCacheRegistry,
+    initial_epoch: u64,
+) {
+    use std::time::Duration;
+
+    const POLL_INTERVAL: Duration = Duration::from_secs(1);
+    let mut current_epoch = initial_epoch;
+
+    loop {
+        tokio::time::sleep(POLL_INTERVAL).await;
+
+        let new_epoch = match store.auth_cache_epoch().await {
+            Ok(epoch) => epoch,
+            Err(error) => {
+                tracing::debug!(
+                    error = ?error,
+                    "failed to poll distributed auth cache epoch"
+                );
+                continue;
+            }
+        };
+
+        if new_epoch == current_epoch {
+            continue;
+        }
+
+        tracing::info!(
+            old_epoch = current_epoch,
+            new_epoch,
+            "distributed auth cache epoch changed; flushing local auth caches"
+        );
+        auth_cache.invalidate_all_local();
+        current_epoch = new_epoch;
+    }
+}
 
 /// Poll the `log_level` and `sqlx_log_level` settings from the database
 /// and reload the tracing filter when either changes.
@@ -92,95 +161,6 @@ pub(crate) async fn poll_log_level(
     }
 }
 
-/// Poll the `throttling_enabled` runtime setting and update the frontend
-/// `ThrottleManager` when it changes. Backends with native distributed
-/// capacity control keep the frontend limiter disabled even if the setting is
-/// true.
-pub(crate) fn effective_frontend_throttling(
-    requested_enabled: bool,
-    backend_native_capacity_control: bool,
-) -> bool {
-    requested_enabled && !backend_native_capacity_control
-}
-
-pub(crate) async fn poll_throttling_enabled(
-    store: Arc<dyn SettingsStore>,
-    throttle: Arc<ThrottleManager>,
-    config_enabled: bool,
-    initial_requested_enabled: bool,
-    initial_effective_enabled: bool,
-    backend_native_capacity_control: bool,
-) {
-    use std::time::Duration;
-
-    const POLL_INTERVAL: Duration = Duration::from_secs(30);
-    let mut current_effective = initial_effective_enabled;
-    let mut current_requested = initial_requested_enabled;
-
-    loop {
-        tokio::time::sleep(POLL_INTERVAL).await;
-
-        let requested_enabled = match store.get_setting("throttling_enabled").await {
-            Ok(Some(v)) => v == "true",
-            Ok(None) => config_enabled,
-            Err(_) => {
-                tracing::debug!("Failed to query throttling_enabled setting");
-                continue;
-            }
-        };
-        let new_effective_enabled =
-            effective_frontend_throttling(requested_enabled, backend_native_capacity_control);
-
-        if backend_native_capacity_control
-            && requested_enabled
-            && current_requested != requested_enabled
-        {
-            tracing::warn!(
-                "Ignoring throttling_enabled=true because the selected storage backend uses native distributed capacity control"
-            );
-        }
-
-        if new_effective_enabled != current_effective {
-            tracing::warn!(
-                "Throttling {} (from settings table)",
-                if new_effective_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            );
-            throttle.set_enabled(new_effective_enabled);
-            current_effective = new_effective_enabled;
-        }
-        current_requested = requested_enabled;
-    }
-}
-
-/// Background worker that periodically logs a warning when requests use
-/// approximate consumed capacity information.
-///
-/// `ConsumedCapacity` returns plausible stubs, not real values. This worker
-/// reads and resets the counter on a fixed interval and emits a single log line
-/// summarizing usage since the last tick.
-pub(crate) async fn capacity_warning_worker() {
-    use extenddb_engine::capacity_helpers::CAPACITY_REQUEST_COUNT;
-    use std::time::Duration;
-
-    const WARNING_INTERVAL: Duration = Duration::from_secs(3600);
-
-    loop {
-        tokio::time::sleep(WARNING_INTERVAL).await;
-
-        let count = CAPACITY_REQUEST_COUNT.swap(0, std::sync::atomic::Ordering::Relaxed);
-        if count > 0 {
-            tracing::warn!(
-                "{count} request(s) used approximate consumed capacity information in the last {} seconds",
-                WARNING_INTERVAL.as_secs(),
-            );
-        }
-    }
-}
-
 /// Periodically prune metrics data points older than 1 day.
 pub(crate) async fn metrics_prune_worker(metrics: Arc<extenddb_core::metrics::MetricsCollector>) {
     use extenddb_core::metrics::QuerySource;
@@ -200,7 +180,7 @@ pub(crate) async fn metrics_prune_worker(metrics: Arc<extenddb_core::metrics::Me
 ///
 /// Drains data points older than 60 seconds, aggregates them into 1-minute
 /// buckets, and upserts via the `MetricsStore` trait. Database retention is
-/// backend-specific and implemented by the selected storage backend.
+/// TiDB-specific and implemented by storage runtime hooks.
 pub(crate) async fn metrics_flush_worker(
     metrics: Arc<extenddb_core::metrics::MetricsCollector>,
     store: Arc<dyn MetricsStore>,
@@ -256,21 +236,5 @@ pub(crate) async fn metrics_flush_worker(
         #[allow(clippy::cast_precision_loss)]
         let cycle_us = cycle_start.elapsed().as_micros() as f64;
         metrics.record_worker_success(QuerySource::MetricsFlush, cycle_us);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::effective_frontend_throttling;
-
-    #[test]
-    fn native_capacity_control_disables_frontend_throttling() {
-        assert!(!effective_frontend_throttling(true, true));
-    }
-
-    #[test]
-    fn process_local_capacity_control_honors_requested_setting() {
-        assert!(effective_frontend_throttling(true, false));
-        assert!(!effective_frontend_throttling(false, false));
     }
 }

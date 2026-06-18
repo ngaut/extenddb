@@ -11,7 +11,7 @@ extenddb uses a catalog/data database topology per deployment:
 - **Catalog database** (e.g., `extenddb_catalog`): All metadata — table definitions, indexes, accounts, IAM entities, settings, stream metadata, and schema history.
 - **Data database** (e.g., `extenddb_catalog_data`): User item data plus native secondary-index state. TiDB stores item rows once and uses generated columns plus native secondary indexes.
 
-The data database connection string is stored in the catalog's `settings` table under the key `data_database_connection_string`. Catalog and data databases must stay in the same TiDB cluster so snapshot timestamps, online DDL, native TTL, and BR backup/restore all refer to one global timeline. At startup, the TiDB backend compares `information_schema.cluster_info` from the catalog and data pools when TiDB exposes that native topology table. On TiDB editions that hide cluster topology metadata, ExtendDB accepts the split only when both databases use the same SQL endpoint and user; separate endpoints or users require visible TiDB topology metadata so the backend can prove they belong to one cluster.
+The data database connection string is stored in the catalog's `settings` table under the key `data_database_connection_string`. Catalog and data databases must stay in the same TiDB cluster so snapshot timestamps, online DDL, native TTL, and BR backup/restore all refer to one global timeline. At startup, ExtendDB compares `information_schema.cluster_info` from the catalog and data pools when TiDB exposes that native topology table. On TiDB editions that hide cluster topology metadata, ExtendDB accepts the split only when both databases use the same SQL endpoint and user; separate endpoints or users require visible TiDB topology metadata so startup can prove they belong to one cluster.
 
 ### Catalog Tables
 
@@ -41,10 +41,10 @@ The data database connection string is stored in the catalog's `settings` table 
 
 ### Data Tables
 
-Each DynamoDB table `T` in account `A` maps to backend-owned physical storage in
+Each DynamoDB table `T` in account `A` maps to TiDB-owned physical storage in
 the data database. The logical shape is a partition-key slot, an optional
-sort-key slot, the complete item document, and a backend-native primary key over
-the key slots. Physical column types are backend-specific:
+sort-key slot, the complete item document, and a TiDB-native primary key over
+the key slots. Physical column types are TiDB-specific:
 
 - TiDB stores the hash-key slot as raw `VARBINARY(2048)`, sort-key slots as
   typed `VARBINARY(1024)` or `DECIMAL(65, 30)` columns, and the complete item in
@@ -66,8 +66,9 @@ slower compatibility path. Initial indexes are included in the physical TiDB
 online `IF NOT EXISTS` DDL before activation, and later GSI changes use TiDB
 online DDL. Reconciliation checks TiDB's native DDL job queue before submitting
 table DDL, so another frontend leaves a queued or running schema job with
-TiDB's DDL owner instead of duplicating it. Startup native TTL repair follows
-the same DDL-job-aware rule for fixed-retention tables and user `_ddb_*` tables.
+TiDB's DDL owner instead of duplicating it. Startup repair follows the same
+DDL-job-aware rule for fixed-retention native TTL tables and user-table TTL
+lookup artifacts.
 The TiDB catalog control-plane queue is indexed by due time first
 (`status_transition_at, table_name, table_status`) to match the distributed
 poller's next-eligible-work scan.
@@ -115,7 +116,7 @@ Applied after reads to return only requested attributes. Supports nested paths. 
 
 ### KeyConditionExpression
 
-Parsed by the engine and translated to SQL WHERE clauses by the storage backend. Supports partition key equality and sort key conditions (equality, range, `begins_with`, `between`).
+Parsed by the engine and translated to TiDB SQL WHERE clauses by the storage layer. Supports partition key equality and sort key conditions (equality, range, `begins_with`, `between`).
 
 ## Authentication Model
 
@@ -126,7 +127,7 @@ extenddb uses SigV4 signature verification with a local IAM credential store. Th
 Full SigV4 signature verification:
 
 1. Extract `Authorization` header components (credential, signed headers, signature)
-2. Look up access key in the credential store (database-backed, credential lookup per request; encryption key cached at startup)
+2. Look up access key through the credential cache backed by TiDB; the encryption key is cached at startup
 3. Reconstruct the canonical request and string-to-sign
 4. Derive the signing key: `HMAC-SHA256(HMAC-SHA256(HMAC-SHA256(HMAC-SHA256("AWS4" + secret, date), region), service), "aws4_request")`
 5. Compare computed signature with the provided signature (constant-time comparison)
@@ -148,15 +149,15 @@ Policy conditions support all IAM condition operators: `StringEquals`, `StringNo
 
 Access key secrets are encrypted at rest using AES-256-GCM. The encryption key is generated during `extenddb init` and stored in the `encryption_keys` table. Each access key record stores the encrypted secret and a unique nonce.
 
-Credential lookups (access key → encrypted secret) read directly from the database on every request — there is no in-process cache for credentials. The encryption key used to decrypt secrets is cached at startup because it is immutable after `extenddb init` (see Caching Design below).
+Credential lookups (access key -> encrypted secret) use an in-process stale-while-revalidate cache backed by TiDB. The encryption key used to decrypt secrets is cached at startup because it is immutable after `extenddb init` (see Caching Design below).
 
 ## DynamoDB Streams Internals
 
 ### Record Capture
 
-Stream records are captured atomically with data writes. The engine constructs a `StreamCapture` struct with stream ARN, view type, and region metadata. The storage backend assigns the shard and sequence number and persists the stream record in the same backend transaction as the data write.
+Stream records are captured atomically with data writes. The engine constructs a `StreamCapture` struct with stream ARN, view type, and region metadata. The TiDB storage layer assigns the shard and sequence number and persists the stream record in the same transaction as the data write.
 
-For UpdateItem, the `new_image` is not known until after `apply_update` runs inside the transaction, so the storage backend constructs the full `StreamRecord` after the update.
+For UpdateItem, the `new_image` is not known until after `apply_update` runs inside the transaction, so the TiDB storage layer constructs the full `StreamRecord` after the update.
 
 ### Shard Model
 
@@ -170,8 +171,9 @@ cycles never mix records across stream generations.
 TiDB schemas store stream rows under an `AUTO_RANDOM` clustered
 `record_id`, so highly concurrent stream inserts are scattered by TiDB instead
 of appending inside one shard key range. Sequence numbers are monotonically
-increasing, sortable strings within a shard; TiDB derives them from native MVCC
-commit timestamps with a per-transaction ordinal suffix.
+increasing, sortable strings within a shard; TiDB derives them from the
+transaction TSO with a per-transaction ordinal suffix, avoiding privileged MVCC
+inspection.
 
 ### Iterator Types
 
@@ -185,18 +187,18 @@ Iterators expire after 15 minutes of inactivity.
 ### Retention
 
 Stream records and disabled/deleted stream generation metadata are retained for
-24 hours. TiDB uses native table TTL for retention; backends without native TTL
-use a background cleanup task.
+24 hours. TiDB native table TTL owns retention, and startup repair keeps the TTL
+jobs in the expected state.
 
 ## Architecture Decision Records
 
 ### SQL Injection Defense
 
-All user-supplied strings are validated before storage uses them. Storage uses parameterized queries for values; backend-specific DDL paths validate and quote identifiers before formatting. See `docs/adr/sql-injection-defense.md`.
+All user-supplied strings are validated before storage uses them. Storage uses parameterized queries for values; TiDB DDL paths validate and quote identifiers before formatting. See `docs/adr/sql-injection-defense.md`.
 
 ### BoxFuture vs async_trait
 
-Storage traits use `BoxFuture` for object safety, allowing dynamic dispatch of storage backends. Auth traits use `#[async_trait]` for the same reason. The per-request allocation cost is negligible compared to I/O and crypto operations.
+Storage traits use `BoxFuture` for object safety across crate boundaries. The runtime implementation is TiDB; the trait boundary keeps SQL and TiDB driver details out of `engine` and `server`. Auth traits use `#[async_trait]` for the same reason. The per-request allocation cost is negligible compared to I/O and crypto operations.
 
 ### Condition Evaluation Inside Transactions
 
@@ -204,44 +206,51 @@ Condition expressions are evaluated inside the storage transaction (after `SELEC
 
 ## Capacity Calculation
 
-extenddb calculates consumed capacity matching real DynamoDB:
+extenddb calculates consumed capacity with DynamoDB request-unit formulas where
+the request path has the required item-size information:
 
 - **Read capacity**: Item size rounded up to 4 KB. Eventually consistent reads cost 0.5 RCU per 4 KB. Strongly consistent reads cost 1.0 RCU per 4 KB. Transactional reads cost 2.0 RCU per 4 KB.
 - **Write capacity**: Item size rounded up to 1 KB. Standard writes cost 1.0 WCU per 1 KB. Transactional writes cost 2.0 WCU per 1 KB.
-- **Table-level and index-level**: When `ReturnConsumedCapacity` is `INDEXES`, capacity is broken down per table and per index.
+- **Table-level**: `TOTAL` and `INDEXES` return aggregate consumed capacity.
+  `INDEXES` includes the DynamoDB `Table` breakdown shape, but ExtendDB does not
+  emit per-index capacity maps because TiDB native secondary indexes do not expose
+  per-index request-unit attribution.
 
 Item size includes attribute names and values, matching DynamoDB's size calculation rules.
 
 Capacity enforcement is TiDB-native. ExtendDB relies on TiDB Resource
 Control/resource groups for distributed flow control and scheduling, so multiple
 ExtendDB frontends share one storage-owned quota instead of each admitting its
-own local burst.
+own local burst. TiDB Resource Control owns queuing and rejection behavior;
+ExtendDB does not translate that path into DynamoDB `ProvisionedThroughputExceededException`
+responses.
 
 ## Caching Design
 
-extenddb caches a small set of operational settings in memory to avoid per-request database queries on hot paths. Catalog state (table metadata, auth policies, tags, GSI definitions) is never cached.
+extenddb caches authentication, authorization, tag, and operational settings in memory to avoid repeated TiDB catalog reads on hot paths. TiDB remains the source of truth. Table metadata is fetched from TiDB for the request that needs it and reused only inside that request.
 
 ### What Is Cached
 
-| Setting | Mechanism | Refresh | Justification |
-|---------|-----------|---------|---------------|
+| Data | Mechanism | Refresh | Justification |
+|------|-----------|---------|---------------|
 | `encryption_key` | `Arc<str>` loaded at startup | Never (immutable after `extenddb init`) | Decryption key for access key secrets; generated once, never changes |
+| Credentials and role sessions | Auth cache | Hard TTL, soft TTL refresh, write-through invalidation, TiDB epoch poll | Avoids repeated credential catalog reads during SigV4 verification |
+| IAM policy and principal metadata | Authz cache | Hard TTL, soft TTL refresh, write-through invalidation, TiDB epoch poll | Avoids repeated policy and group/role metadata joins |
+| Resource tags | Authz cache | Hard TTL, soft TTL refresh, write-through invalidation, TiDB epoch poll | Supports ABAC without a tag lookup on every request |
 | `log_level` / `log_destination` | Tracing filter reload | Background poller every 30s | Observability tuning; stale value only delays log level changes |
 
-All cached values are operational tuning knobs where a briefly-stale value does not affect correctness.
+Auth and authorization caches fail closed: missing, malformed, or expired state must deny access rather than grant it. Self-induced management and console mutations issue write-through invalidations and bump `auth_cache_epoch`; sibling frontends poll that TiDB row and flush local auth caches when it changes. TTL remains the fallback if epoch propagation fails.
 
 ### What Is NOT Cached (and Why)
 
-Catalog state is never cached because correctness requires every request to see the current state:
+Table metadata and item data are not cached across requests by the server:
 
-- **Table metadata** (key schema, attribute definitions, status, billing mode): A stale cache could serve the wrong key schema after a table is deleted and recreated with the same name but different schema. The new table has a different `table_id`, different key schema, and different indexes — stale cache serves wrong schema, writes corrupt data, reads return garbage.
-- **IAM policies and credentials**: A revoked Deny policy still cached as absent creates a security gap. A deleted access key still cached as valid allows unauthorized access.
-- **Tags**: Tag-based authorization (`aws:ResourceTag/*`) requires current tag values.
-- **GSI definitions**: Stale GSI metadata could route reads or writes through the wrong backend-specific index shape.
+- **Table metadata** (table id, key schema, attribute definitions, status, stream settings, and GSI definitions) is read from TiDB during request authorization or bulk operation setup, then carried through `OperationContext` for that request.
+- **Item data** is read and written directly through TiDB.
 
 ### The Table-Name-Reuse Problem
 
-The fundamental reason catalog state cannot be cached safely:
+The fundamental reason table metadata cannot be cached across requests safely:
 
 1. Client calls `DeleteTable("Orders")`
 2. Client immediately calls `CreateTable("Orders")` with a different key schema
@@ -250,15 +259,15 @@ The fundamental reason catalog state cannot be cached safely:
 5. Writes use wrong column layout → data corruption
 6. Reads return items with wrong attribute interpretation → garbage
 
-No safe TTL exists because delete-recreate can happen within milliseconds. Cross-instance invalidation through backend-native change notifications would be a prerequisite for any future catalog caching.
+No safe TTL exists because delete-recreate can happen within milliseconds. TiDB lookups make the current table identity the normal path and avoid cross-instance table-metadata invalidation.
 
 ### Multi-Instance Considerations
 
-extenddb does not enforce single-instance-per-catalog. Multiple extenddb instances may share the same catalog. Any in-process cache of catalog state would be invisible to other instances. Backend buffer pools provide memory-resident access to hot rows, making application-level caching unnecessary for most workloads.
+extenddb does not enforce single-instance-per-catalog. Multiple extenddb instances may share the same catalog. Auth and authorization caches are per instance but use the shared TiDB `auth_cache_epoch` as a coarse invalidation signal; table metadata is read from TiDB instead of cross-request server cache. TiDB buffer pools provide memory-resident access to hot rows, making a server-side table metadata cache unnecessary for most workloads.
 
 ### Future Considerations
 
-Caching of operational settings is currently unconditional. If issues arise (e.g., a setting change must take effect immediately for safety reasons), a runtime toggle (`extenddb settings set caching_enabled false`) should be added. Catalog caching remains prohibited without a cross-instance invalidation design and explicit human approval.
+Auth and authorization caching can be disabled with `[auth.cache].enabled = false`, which puts those caches in pass-through mode. Cross-request table metadata caching remains prohibited without a cross-instance invalidation design and explicit human approval.
 
 ---
 

@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native secondary-index helpers for the `TiDB` backend.
+//! Native secondary-index helpers for `TiDB` storage.
 //!
 //! `TiDB` owns secondary-index maintenance. ExtendDB stores every item once in
 //! the base `_ddb_*` table, exposes DynamoDB index keys as generated columns,

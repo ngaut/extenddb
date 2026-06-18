@@ -100,8 +100,8 @@ Error responses must be byte-for-byte compatible with DynamoDB:
 **Requirements:**
 - REQ-ERR-001: Error JSON must contain `__type` field with `com.amazonaws.dynamodb.v20120810#` prefix
 - REQ-ERR-002: Error JSON must contain `message` field with descriptive text
-- REQ-ERR-003: HTTP status codes must match DynamoDB exactly (see error catalog below)
-- REQ-ERR-004: SDK retry behavior must work identically (throttling errors return 400, not 429)
+- REQ-ERR-003: DynamoDB-format errors returned by ExtendDB must use DynamoDB status codes (see error catalog below)
+- REQ-ERR-004: DynamoDB-format errors returned by ExtendDB must use DynamoDB status codes. TiDB Resource Control capacity governance is documented separately and does not synthesize DynamoDB throughput errors.
 
 ### 2.4 Error Catalog
 
@@ -115,7 +115,7 @@ Error responses must be byte-for-byte compatible with DynamoDB:
 | `ItemCollectionSizeLimitExceededException` | 400 | Item collection exceeds 10 GB (tables with LSIs) |
 | `MalformedHttpRequestException` | 400 | Request body cannot be decompressed or parsed |
 | `MissingAuthenticationToken` | 403 | No Authorization header present |
-| `ProvisionedThroughputExceededException` | 400 | Table/partition throughput limit exceeded |
+| `ProvisionedThroughputExceededException` | 400 | Reserved DynamoDB throughput error type; TiDB Resource Control capacity governance does not synthesize it |
 | `RequestEntityTooLargeException` | 413 | Request body exceeds maximum size |
 | `RequestLimitExceeded` | 400 | Account-level throughput quota exceeded |
 | `RequestTimeoutException` | 408 | Request processing timed out |
@@ -165,7 +165,7 @@ These are the core CRUD operations. All must be fully implemented.
 - REQ-DATA-012: TransactGetItems must be atomic — consistent snapshot of up to 100 items
 - REQ-DATA-013: All data operations must support legacy `Expected` and `ConditionalOperator` parameters (converted internally to expressions)
 - REQ-DATA-014: All write operations must trigger stream event capture when streams are enabled on the table
-- REQ-DATA-015: `ConsistentRead` parameter must be accepted on GetItem, Query, Scan, and BatchGetItem and passed to storage read methods. Each backend maps `ConsistentRead=false` and `ConsistentRead=true` to its native default and strong read paths. Capacity calculations must reflect the requested consistency mode (0.5 RCU for eventually consistent, 1.0 RCU for strongly consistent).
+- REQ-DATA-015: `ConsistentRead` parameter must be accepted on GetItem, Query, Scan, and BatchGetItem and passed to storage read methods. TiDB storage maps `ConsistentRead=false` and `ConsistentRead=true` to its native default and strong read paths. Capacity calculations must reflect the requested consistency mode (0.5 RCU for eventually consistent, 1.0 RCU for strongly consistent).
 
 ### 3.2 Control Plane Operations (In Scope)
 
@@ -190,7 +190,7 @@ These are the core CRUD operations. All must be fully implemented.
 - REQ-CTRL-003: UpdateTable must support adding/removing GSIs, changing billing mode, and modifying provisioned throughput
 - REQ-CTRL-004: DescribeTable must return accurate `TableSizeBytes` and `ItemCount` (may be approximate)
 - REQ-CTRL-005: ListTables must support `Limit` and `ExclusiveStartTableName` for pagination
-- REQ-CTRL-006: TTL worker must run as a background task, using an indexed sweep (expression index on TTL attribute) to efficiently find and delete expired items. Staleness metrics are recorded per deletion.
+- REQ-CTRL-006: User-table item expiration must run through ExtendDB-owned TiDB transactions so TTL deletes update LSI accounting and emit DynamoDB Streams service REMOVE records.
 
 ### 3.3 Import/Export Operations (In Scope)
 
@@ -389,12 +389,12 @@ All limits must be enforced by default with DynamoDB-compatible values. All limi
 - REQ-CAP-001: Support both `PROVISIONED` and `PAY_PER_REQUEST` billing modes
 - REQ-CAP-002: Calculate Read Capacity Units: 1 RCU = one strongly consistent read up to 4 KB; 0.5 RCU for eventually consistent; 2 RCU for transactional
 - REQ-CAP-003: Calculate Write Capacity Units: 1 WCU = one write up to 1 KB; 2 WCU for transactional
-- REQ-CAP-004: Calculate per-partition throughput usage (default DynamoDB reference: 3,000 RCU/s, 1,000 WCU/s) and enforce it through the selected backend's capacity-control model
-- REQ-CAP-005: Enforce per-table provisioned throughput limits for PROVISIONED billing mode through TiDB native Resource Control/resource groups when configured
-- REQ-CAP-006: Return `ConsumedCapacity` in responses when `ReturnConsumedCapacity` is TOTAL or INDEXES
-- REQ-CAP-007: Return per-table and per-index capacity breakdown when `ReturnConsumedCapacity` is INDEXES
-- REQ-CAP-008: Return `ProvisionedThroughputExceededException` when throughput limits are exceeded
-- REQ-CAP-009: Capacity enforcement must not require cross-frontend coordination in ExtendDB; distributed backends such as TiDB must use backend-native capacity control
+- REQ-CAP-004: Estimate request consumed capacity and delegate distributed capacity governance to TiDB Resource Control/resource groups
+- REQ-CAP-005: Validate `PROVISIONED` throughput inputs and decrease limits; operators map deployment-level quotas to TiDB Resource Control/resource groups when configured
+- REQ-CAP-006: Return aggregate `ConsumedCapacity` in responses when `ReturnConsumedCapacity` is TOTAL or INDEXES
+- REQ-CAP-007: Return the DynamoDB `Table` breakdown when `ReturnConsumedCapacity` is INDEXES; per-index capacity maps are a documented compatibility gap under TiDB native secondary indexes
+- REQ-CAP-008: Do not implement process-local throughput admission; TiDB Resource Control governs capacity and does not guarantee DynamoDB throughput exception types
+- REQ-CAP-009: Capacity enforcement must not require cross-frontend coordination in ExtendDB; TiDB deployments must use TiDB-native capacity control
 
 ## 7. Catalog & Data Separation Requirements
 
@@ -430,7 +430,7 @@ The catalog database stores extenddb metadata: table definitions, indexes, tags,
 - REQ-STOR-001: All data access must go through a `StorageEngine` trait (async, `Send + Sync`)
 - REQ-STOR-002: The trait must cover: table CRUD, item CRUD, query/scan, batch operations, transaction operations, metadata, stream events, import/export job tracking
 - REQ-STOR-003: The trait must support transactions with serializable isolation for TransactWriteItems/TransactGetItems
-- REQ-STOR-004: The trait must not leak backend-specific types — all inputs and outputs use core DynamoDB types
+- REQ-STOR-004: The trait must not leak TiDB driver types — all inputs and outputs use core DynamoDB types
 - REQ-STOR-005: The TiDB implementation must remain isolated from engine and server crates
 - REQ-STOR-006: Read methods must receive the DynamoDB `ConsistentRead` flag so TiDB can map strong and default reads to native consistency paths without leaking topology into the engine layer
 
@@ -441,7 +441,7 @@ The catalog database stores extenddb metadata: table definitions, indexes, tags,
 - REQ-TIDB-003: Represent DynamoDB secondary indexes with generated columns and native TiDB secondary indexes; GSI versus LSI is API metadata, not separate physical index classes
 - REQ-TIDB-004: Treat TiDB secondary indexes as global for DynamoDB index reads; do not implement local-index fallback or routing logic
 - REQ-TIDB-005: Use TiDB native online DDL and idempotent catalog reconciliation for table create, delete, update, and TTL transitions; do not add frontend DDL leases or ownership locks
-- REQ-TIDB-006: Use TiDB native TTL for all user tables and fixed-retention internal tables; do not run a parallel ExtendDB TTL worker for TiDB tables
+- REQ-TIDB-006: Use TiDB generated-column lookup artifacts for user-table TTL and TiDB native TTL only for fixed-retention internal tables
 - REQ-TIDB-007: Use TiDB BR for native physical backup/restore instead of catalog row-copy backup data
 - REQ-TIDB-008: Route default data-plane reads through a TiDB session configured for native follower-read locality (`tidb_replica_read = 'closest-adaptive'`); when configured, set TiDB session `tidb_read_staleness` on that default-read pool; route writes and `ConsistentRead=true` reads through the strong data pool
 - REQ-TIDB-009: Run `TransactGetItems` inside a TiDB transaction so multi-item transactional reads use one native snapshot instead of application-level locking

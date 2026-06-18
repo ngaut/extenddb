@@ -1,4 +1,4 @@
-// Copyright 2026 DynamoDB Open contributors
+// Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! Diagnostics trait for deployment health checks and verification.
@@ -26,9 +26,25 @@ impl std::fmt::Display for DiagError {
 
 impl std::error::Error for DiagError {}
 
+/// Error type for diagnostics store creation.
+#[derive(Debug)]
+pub enum DiagnosticsStoreError {
+    ConnectionFailed(String),
+}
+
+impl std::fmt::Display for DiagnosticsStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConnectionFailed(msg) => write!(f, "Failed to connect: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for DiagnosticsStoreError {}
+
 /// Diagnostic and verification operations for deployment health checks.
 ///
-/// Used by `ddbo verify` to check catalog integrity and enumerate resources.
+/// Used by `extenddb verify` to check catalog integrity and enumerate resources.
 pub trait DiagnosticsStore: Send + Sync {
     /// Count the number of DynamoDB tables in the catalog.
     fn count_tables(&self) -> BoxFuture<'_, DiagResult<i64>>;

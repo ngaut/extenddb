@@ -432,7 +432,7 @@ aws dynamodb update-time-to-live \
     --time-to-live-specification Enabled=true,AttributeName=ExpiresAt
 ```
 
-`DescribeTimeToLive` may report `ENABLING` or `DISABLING` while backend-native
+`DescribeTimeToLive` may report `ENABLING` or `DISABLING` while TiDB-native
 TTL artifacts are being reconciled. TiDB records the TTL intent durably and uses
 its native online DDL/TTL scheduler; ExtendDB does not run a frontend TTL item
 sweeper for TiDB.
@@ -489,7 +489,8 @@ metadata.tags[2].name
 
 ## Error Reference
 
-extenddb reproduces DynamoDB error responses exactly. Common errors:
+extenddb uses DynamoDB JSON error shapes and status codes for the DynamoDB-format
+errors it returns. Common errors:
 
 | Error | HTTP Status | Cause |
 |-------|-------------|-------|
@@ -498,7 +499,7 @@ extenddb reproduces DynamoDB error responses exactly. Common errors:
 | `ValidationException` | 400 | Invalid input (bad expression, missing key, etc.) |
 | `ResourceInUseException` | 400 | Table already exists or is being deleted |
 | `TransactionCanceledException` | 400 | Transaction failed (with per-item reasons) |
-| `ProvisionedThroughputExceededException` | 400 | Throughput limit exceeded |
+| `ProvisionedThroughputExceededException` | 400 | DynamoDB throughput error type; TiDB Resource Control capacity governance does not synthesize it |
 | `ItemCollectionSizeLimitExceededException` | 400 | LSI item collection > 10 GB |
 | `AccessDeniedException` | 400 | IAM policy denied the request |
 | `UnrecognizedClientException` | 403 | Invalid access key |
@@ -527,7 +528,7 @@ extenddb reproduces DynamoDB error responses exactly. Common errors:
 | PartiQL | ✗ (not planned) |
 | DAX | ✗ (not applicable) |
 | Global Tables | ✗ (future) |
-| Backups / PITR | Backups supported by backend; table-level PITR restore is backend-specific and may be unsupported |
+| Backups / PITR | Backups use TiDB BR; table-level PITR restore is not exposed |
 | Import/Export (local filesystem) | ✓ (FileSource instead of S3) |
 
 ---

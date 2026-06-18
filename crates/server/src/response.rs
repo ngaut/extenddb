@@ -16,7 +16,7 @@ const SERIALIZATION_FAILURE_BODY: &[u8] =
 /// REQ-WIRE-011: `x-amz-crc32` checksum.
 /// REQ-WIRE-012: `Content-Type`: `application/x-amz-json-1.0`.
 pub(crate) fn success_response(body: &Value, request_id: &str) -> Response {
-    // Fix #8: Use fallback error body instead of empty bytes on serialization failure
+    // Never send an empty body if serialization fails.
     let body_bytes =
         serde_json::to_vec(body).unwrap_or_else(|_| SERIALIZATION_FAILURE_BODY.to_vec());
     let crc = crc32fast::hash(&body_bytes);
@@ -36,7 +36,6 @@ pub(crate) fn success_response(body: &Value, request_id: &str) -> Response {
 /// REQ-ERR-001: `__type` with prefix. REQ-ERR-002: message field.
 /// REQ-ERR-003: Omit `message` when empty (real DynamoDB behavior, verified 2026-05-04).
 pub(crate) fn error_response(error: &DynamoDbError, request_id: &str) -> Response {
-    // Fix #14: Use full_error_type() which includes the prefix
     let mut body = serde_json::json!({
         "__type": error.full_error_type(),
     });
@@ -74,8 +73,8 @@ pub(crate) fn error_response(error: &DynamoDbError, request_id: &str) -> Respons
 
 /// Classify and record error metrics for a failed `DynamoDB` request.
 ///
-/// M-2: `ServiceUnavailable` is a system error (503), not a user error.
-/// M-3: `TransactionConflict` metric maps to `TransactionConflictException` (OCC
+/// `ServiceUnavailable` is a system error (503), not a user error.
+/// `TransactionConflict` metric maps to `TransactionConflictException` (OCC
 /// conflict on individual items), not `TransactionCanceledException`.
 pub(crate) fn record_error_metrics(
     metrics: &extenddb_core::metrics::MetricsCollector,

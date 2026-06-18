@@ -8,47 +8,22 @@
 //! Account-scoped methods receive `account_id` from the authenticated identity.
 
 pub mod authorization_store;
-pub mod bootstrapper;
+pub mod bootstrap;
+pub mod catalog_check;
 pub mod config;
 pub mod diagnostics;
-pub mod diagnostics_store;
 pub mod error;
 pub mod hooks;
 pub mod management_store;
-pub mod operations;
 pub mod server_components;
 pub mod settings_store;
 pub mod transact;
 
 pub use transact::{TransactGetOp, TransactWriteOp};
 
-pub use server_components::{
-    BackendError, ServerComponents, ServerComponentsFactory, ServerComponentsRegistration,
-    create_server_components,
-};
+pub use server_components::{ServerComponents, StorageInitError};
 
 pub use hooks::{ServerRuntimeHooks, WorkerContext};
-
-/// Pluggable lookup for `TableKeyInfo`.
-///
-/// Allows the engine layer to consult an in-memory cache transparently
-/// instead of calling `StorageEngine::table_key_info` directly. The server
-/// crate provides a SWR-cached implementation; tests and embedded uses can
-/// pass `None` to fall back to direct storage lookups.
-///
-/// Defined here (rather than in `extenddb-engine`) so the cache wrapper in
-/// `extenddb-server` can implement it without creating a circular crate
-/// dependency.
-pub trait TableKeyInfoLookup: Send + Sync {
-    fn lookup<'a>(
-        &'a self,
-        account_id: &'a str,
-        table_name: &'a str,
-    ) -> futures::future::BoxFuture<
-        'a,
-        Result<extenddb_core::types::TableKeyInfo, error::StorageError>,
-    >;
-}
 
 pub mod util;
 
@@ -109,7 +84,7 @@ pub struct ExportTableItemsSummary {
     pub item_count: i64,
 }
 
-/// Sink used by storage backends to stream exported items without materializing
+/// Sink used by storage implementations to stream exported items without materializing
 /// the full table in memory.
 pub trait ItemExportSink: Send {
     fn write_item<'a>(&'a mut self, item: &'a Item) -> BoxFuture<'a, Result<(), StorageError>>;
@@ -117,7 +92,7 @@ pub trait ItemExportSink: Send {
 
 /// One unconditional write in a `BatchWriteItem` request.
 ///
-/// `BatchWriteItem` has no conditions or return values, so storage backends can
+/// `BatchWriteItem` has no conditions or return values, so storage implementations can
 /// batch these by physical key while preserving the single-item fallback.
 pub enum BatchWriteOp<'a> {
     Put(&'a Item),
@@ -126,7 +101,7 @@ pub enum BatchWriteOp<'a> {
 
 /// Parameters for capturing a stream record within a data write transaction.
 ///
-/// When present, the storage backend inserts the stream record in the same
+/// When present, storage inserts the stream record in the same
 /// transaction as the data write, guaranteeing atomicity.
 #[derive(Debug, Clone)]
 pub struct StreamCapture {
@@ -186,6 +161,24 @@ pub trait TableEngine: Send + Sync {
         table_name: &str,
     ) -> BoxFuture<'_, Result<TableKeyInfo, StorageError>>;
 
+    /// Fetch key metadata for multiple tables in one logical operation.
+    ///
+    /// Backends should override this with a set-based catalog lookup. The
+    /// default preserves correctness for tests and embedded implementations.
+    fn table_key_infos<'a>(
+        &'a self,
+        account_id: &'a str,
+        table_names: &'a [String],
+    ) -> BoxFuture<'a, Result<Vec<TableKeyInfo>, StorageError>> {
+        Box::pin(async move {
+            let mut infos = Vec::with_capacity(table_names.len());
+            for table_name in table_names {
+                infos.push(self.table_key_info(account_id, table_name).await?);
+            }
+            Ok(infos)
+        })
+    }
+
     /// Fetch table metadata for item writes.
     ///
     /// Backends may include extra validation metadata needed before a write
@@ -202,12 +195,30 @@ pub trait TableEngine: Send + Sync {
         self.table_key_info(account_id, table_name)
     }
 
+    /// Fetch write metadata for multiple tables in one logical operation.
+    ///
+    /// Backends should override this with a set-based catalog lookup so batch
+    /// and transaction handlers do not issue one catalog query per table.
+    fn table_write_infos<'a>(
+        &'a self,
+        account_id: &'a str,
+        table_names: &'a [String],
+    ) -> BoxFuture<'a, Result<Vec<TableKeyInfo>, StorageError>> {
+        Box::pin(async move {
+            let mut infos = Vec::with_capacity(table_names.len());
+            for table_name in table_names {
+                infos.push(self.table_write_info(account_id, table_name).await?);
+            }
+            Ok(infos)
+        })
+    }
+
     /// Fetch base-table metadata plus optional secondary-index metadata for
     /// a read path in one logical operation.
     ///
-    /// Backends should override this when they can fetch the table row and
-    /// index row with a single catalog query. The default preserves the older
-    /// two-step contract for backends that do not need the optimization.
+    /// Implementations should override this when they can fetch the table row
+    /// and index row with a single catalog query. The default preserves the
+    /// simple two-step path.
     fn table_read_info(
         &self,
         account_id: &str,
@@ -249,8 +260,8 @@ pub trait TableEngine: Send + Sync {
     /// Fetch metadata for a secondary index using a known `table_id`.
     ///
     /// Saves one catalog roundtrip vs `index_info` when the caller already
-    /// has `TableKeyInfo`. Backends that don't override
-    /// this will fall back to the standard `index_info` path.
+    /// has `TableKeyInfo`. Implementations that don't override this will fall
+    /// back to the standard `index_info` path.
     fn index_info_by_table_id(
         &self,
         table_id: &str,
@@ -262,13 +273,13 @@ pub trait TableEngine: Send + Sync {
 ///
 /// All methods receive a `TableKeyInfo` from the engine layer, which has
 /// already validated the table exists and can serve data-plane requests.
-/// Storage backends do not re-fetch catalog metadata for data operations.
+/// Storage implementations do not re-fetch catalog metadata for data operations.
 ///
 /// `account_id` is carried inside `TableKeyInfo` for data operations,
 /// so these methods do not need a separate `account_id` parameter.
 ///
 /// Data-plane methods tie the returned future lifetime to both `&self` and the
-/// borrowed request metadata. Implementations can await the backend operation
+/// borrowed request metadata. Implementations can await the storage operation
 /// directly instead of cloning keys, expression maps, or transaction batches
 /// just to satisfy async lifetime requirements.
 pub trait DataEngine: Send + Sync {
@@ -279,7 +290,7 @@ pub trait DataEngine: Send + Sync {
     /// condition evaluates to false.
     ///
     /// When `stream` is `Some`, the stream record is inserted in the same
-    /// transaction as the data write, guaranteeing atomicity. The backend
+    /// transaction as the data write, guaranteeing atomicity. The storage layer
     /// decides which item images the stream view needs; callers should not set
     /// `return_old` only for stream capture.
     ///
@@ -297,8 +308,8 @@ pub trait DataEngine: Send + Sync {
     /// Read a single item by primary key.
     ///
     /// Returns `None` if the item does not exist (not an error).
-    /// `consistent_read` is the DynamoDB request flag: `true` asks the backend
-    /// for the latest strongly consistent path; `false` lets the backend use a
+    /// `consistent_read` is the DynamoDB request flag: `true` asks storage
+    /// for the latest strongly consistent path; `false` lets storage use a
     /// native eventually-consistent or replica-read path when it has one.
     fn get_item<'a>(
         &'a self,
@@ -310,9 +321,9 @@ pub trait DataEngine: Send + Sync {
     /// Read multiple items from one table by primary key.
     ///
     /// The returned items need not preserve request order; DynamoDB
-    /// `BatchGetItem` responses are unordered. Backends that can express the
-    /// keys as a native batch point lookup should override this. The default
-    /// preserves the single-item behavior for simpler backends.
+    /// `BatchGetItem` responses are unordered. Implementations that can express
+    /// the keys as a native batch point lookup should override this. The
+    /// default preserves single-item behavior.
     fn batch_get_items<'a>(
         &'a self,
         key_info: &'a TableKeyInfo,
@@ -332,9 +343,9 @@ pub trait DataEngine: Send + Sync {
 
     /// Write multiple unconditional items for one table.
     ///
-    /// Backends that can express these writes as native multi-row DML should
-    /// override this. The default preserves the single-item behavior for
-    /// simpler backends and for feature paths that require per-item handling.
+    /// Implementations that can express these writes as native multi-row DML
+    /// should override this. The default preserves single-item behavior for
+    /// feature paths that require per-item handling.
     fn batch_write_items<'a>(
         &'a self,
         key_info: &'a TableKeyInfo,
@@ -366,7 +377,7 @@ pub trait DataEngine: Send + Sync {
     /// condition evaluates to false.
     ///
     /// When `stream` is `Some`, the stream record is inserted in the same
-    /// transaction as the data write, guaranteeing atomicity. The backend
+    /// transaction as the data write, guaranteeing atomicity. Storage
     /// decides which item images the stream view needs; callers should not set
     /// `return_old` only for stream capture.
     ///
@@ -390,7 +401,7 @@ pub trait DataEngine: Send + Sync {
     /// (or empty item for new) inside a transaction.
     ///
     /// When `stream` is `Some`, the stream record is inserted in the same
-    /// transaction as the data write, guaranteeing atomicity. The backend
+    /// transaction as the data write, guaranteeing atomicity. Storage
     /// decides which item images the stream view needs; callers should not set
     /// `return_old` only for stream capture.
     ///
@@ -456,10 +467,10 @@ pub trait DataEngine: Send + Sync {
         consistent_read: bool,
     ) -> BoxFuture<'a, QueryResult>;
 
-    /// Export base-table items from one backend-owned snapshot.
+    /// Export base-table items from one storage-owned snapshot.
     ///
-    /// `export_time_epoch` is seconds since the Unix epoch. Backends that have a
-    /// native historical-read facility should honor it. Backends without one
+    /// `export_time_epoch` is seconds since the Unix epoch. Implementations that
+    /// have a native historical-read facility should honor it. Implementations without one
     /// must return a validation error instead of emulating point-in-time export
     /// by replaying current rows.
     fn export_table_items<'a>(
@@ -470,11 +481,11 @@ pub trait DataEngine: Send + Sync {
         sink: &'a mut dyn ItemExportSink,
     ) -> BoxFuture<'a, Result<ExportTableItemsSummary, StorageError>>;
 
-    /// Refresh backend-native optimizer statistics after a bulk load.
+    /// Refresh storage-native optimizer statistics after a bulk load.
     ///
-    /// Backends with native statistics collection should override this so
+    /// Implementations with native statistics collection should override this so
     /// newly imported tables are immediately planned from real row/index
-    /// metadata. Backends without optimizer statistics can keep the no-op
+    /// metadata. Implementations without optimizer statistics can keep the no-op
     /// default.
     fn refresh_table_statistics<'a>(
         &'a self,
@@ -546,8 +557,8 @@ pub trait MetadataEngine: Send + Sync {
 
     /// Apply a complete TTL state change.
     ///
-    /// Backends with physical TTL artifacts or native TTL DDL should override
-    /// this method so the backend owns the full catalog/DDL transition.
+    /// Implementations with physical TTL artifacts or native TTL DDL should
+    /// override this method so storage owns the full catalog/DDL transition.
     fn apply_ttl_update(
         &self,
         account_id: &str,
@@ -650,8 +661,8 @@ pub trait StreamEngine: Send + Sync {
     ///
     /// Used by `GetShardIterator` with `LATEST` to resolve the current position
     /// so that only records written after the iterator was created are returned.
-    /// Backends may return either the latest committed stream record sequence or
-    /// a backend-native high-water marker that future sequence numbers sort
+    /// Implementations may return either the latest committed stream record
+    /// sequence or a storage-native high-water marker that future sequence numbers sort
     /// after.
     fn latest_sequence_number(
         &self,
@@ -662,7 +673,7 @@ pub trait StreamEngine: Send + Sync {
 /// Background worker operations that require storage access.
 ///
 /// Covers control-plane transition processing and other periodic maintenance
-/// tasks that belong to backend engines.
+/// tasks that belong to storage engines.
 pub trait WorkerStore: Send + Sync {
     /// Process pending control-plane transitions (CREATING → ACTIVE,
     /// UPDATING → ACTIVE, DELETING → deleted). Returns a list of `(table_name, description)`
@@ -670,6 +681,15 @@ pub trait WorkerStore: Send + Sync {
     fn process_control_plane_transitions(
         &self,
     ) -> BoxFuture<'_, Result<Vec<(String, &'static str)>, StorageError>>;
+
+    /// Delete expired DynamoDB TTL items through the storage write path.
+    ///
+    /// Implementations that support DynamoDB TTL should remove at most `limit`
+    /// expired user items and emit the same stream records as ordinary deletes.
+    /// Internal fixed-retention tables can still use storage-native TTL.
+    fn expire_ttl_items(&self, _limit: i64) -> BoxFuture<'_, Result<usize, StorageError>> {
+        Box::pin(std::future::ready(Ok(0)))
+    }
 }
 
 /// Backup and point-in-time recovery operations.
@@ -727,7 +747,7 @@ pub trait BackupEngine: Send + Sync {
     /// Restore a table to a point in time.
     ///
     /// `restore_time_epoch` is seconds since the Unix epoch. `None` means the
-    /// caller requested the backend's latest restorable timestamp.
+    /// caller requested storage's latest restorable timestamp.
     fn restore_table_to_point_in_time(
         &self,
         account_id: &str,
@@ -739,9 +759,9 @@ pub trait BackupEngine: Send + Sync {
 
 /// Supertrait combining all DynamoDB operation traits.
 ///
-/// All storage backends must implement this to provide a complete
+/// The concrete storage engine must implement this to provide a complete
 /// DynamoDB-compatible API. This trait has NO additional methods beyond
-/// the trait bounds — backend-specific concerns belong in ServerRuntimeHooks.
+/// the trait bounds — TiDB-specific concerns belong in ServerRuntimeHooks.
 pub trait StorageEngine:
     TableEngine + DataEngine + MetadataEngine + StreamEngine + BackupEngine + WorkerStore + Send + Sync
 {
@@ -762,7 +782,7 @@ impl<T> StorageEngine for T where
 
 /// Supertrait combining all catalog/management operation traits.
 ///
-/// All storage backends must implement this to provide management API
+/// The concrete catalog store must implement this to provide management API
 /// functionality (accounts, users, groups, roles, policies, settings, metrics).
 pub trait CatalogStore:
     management_store::ManagementStore
@@ -789,7 +809,7 @@ mod tests {
     /// Verify that CatalogStore is dyn-compatible (object-safe).
     ///
     /// This test ensures all catalog traits remain object-safe, allowing us to
-    /// use `Arc<dyn CatalogStore>` in the factory pattern.
+    /// use `Arc<dyn CatalogStore>` across crate boundaries.
     #[test]
     fn catalog_store_is_dyn_compatible() {
         // This function just needs to compile - it's never called

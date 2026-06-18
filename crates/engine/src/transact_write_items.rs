@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::future::join_all;
 use serde_json::Value;
 
 use crate::OperationContext;
@@ -180,7 +179,7 @@ pub async fn handle_transact_write_items(
 
     // Stream records are now captured atomically within the storage transaction.
 
-    // Per-item WCU: round each item individually, then sum (M-1).
+    // Per-item WCU: round each item individually, then sum.
     let mut per_table_wcu: HashMap<String, f64> = HashMap::new();
     let wcu: f64 = prepared
         .iter()
@@ -230,28 +229,36 @@ async fn transact_write_table_infos(
     ctx: &OperationContext,
     metadata_plan: &HashMap<String, TableMetadataKind>,
 ) -> Result<HashMap<String, TableKeyInfo>, DynamoDbError> {
-    let mut table_plans = metadata_plan
-        .iter()
-        .map(|(table_name, metadata_kind)| (table_name.clone(), *metadata_kind))
-        .collect::<Vec<_>>();
-    table_plans.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut key_tables = Vec::new();
+    let mut write_tables = Vec::new();
+    for (table_name, metadata_kind) in metadata_plan {
+        match metadata_kind {
+            TableMetadataKind::Key => key_tables.push(table_name.clone()),
+            TableMetadataKind::Write => write_tables.push(table_name.clone()),
+        }
+    }
+    key_tables.sort();
+    write_tables.sort();
 
-    let results = join_all(
-        table_plans
-            .iter()
-            .map(|(table_name, metadata_kind)| async move {
-                let result = match *metadata_kind {
-                    TableMetadataKind::Key => ctx.table_key_info(table_name).await,
-                    TableMetadataKind::Write => ctx.table_write_info(table_name).await,
-                };
-                (table_name.clone(), result.map_err(storage_err_to_dynamo))
-            }),
-    )
-    .await;
-
-    let mut table_infos = HashMap::with_capacity(results.len());
-    for (table_name, result) in results {
-        table_infos.insert(table_name, result?);
+    let mut table_infos = HashMap::with_capacity(metadata_plan.len());
+    table_infos.extend(
+        ctx.table_key_infos(&key_tables)
+            .await
+            .map_err(storage_err_to_dynamo)?,
+    );
+    table_infos.extend(
+        ctx.table_write_infos(&write_tables)
+            .await
+            .map_err(storage_err_to_dynamo)?,
+    );
+    if table_infos.len() != metadata_plan.len() {
+        for table_name in metadata_plan.keys() {
+            if !table_infos.contains_key(table_name) {
+                return Err(DynamoDbError::InternalServerError(format!(
+                    "missing transaction metadata for table {table_name}"
+                )));
+            }
+        }
     }
     Ok(table_infos)
 }

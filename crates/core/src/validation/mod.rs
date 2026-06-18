@@ -56,7 +56,7 @@ pub fn validate_table_name_chars(name: &str) -> Result<(), DynamoDbError> {
 /// Validate an index name per `DynamoDB` rules: 3–255 chars, `[a-zA-Z0-9_.-]+`.
 ///
 /// Same character rules as table names. Defense-in-depth: prevents SQL injection
-/// via index names that are interpolated into backend DDL identifiers.
+/// via index names that are interpolated into TiDB DDL identifiers.
 ///
 /// # Errors
 ///
@@ -967,7 +967,7 @@ pub fn validate_key_sizes(
 
 /// Validate secondary-index key type and size constraints for an item.
 ///
-/// This uses the write metadata carried by `TableKeyInfo`: backends that own
+/// This uses the write metadata carried by `TableKeyInfo`: storage that owns
 /// native secondary indexes can validate request-visible DynamoDB key
 /// constraints without re-reading catalog rows.
 ///
@@ -1103,7 +1103,7 @@ fn key_value_raw_bytes(value: &AttributeValue) -> Option<&[u8]> {
 
 /// Validate one key attribute's non-empty and byte-size constraints.
 ///
-/// Storage backends use this for post-mutation secondary-index keys whose
+/// Storage implementations use this for post-mutation secondary-index keys whose
 /// values live in the item body rather than the request key map.
 pub fn validate_key_value_size(
     attr_name: &str,

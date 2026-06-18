@@ -14,7 +14,7 @@ use super::{data_table_name, item_collection_table_name, json_to_item};
 /// collection row keyed by the physical partition key. The first write for a
 /// partition key lazily initializes that row by scanning only that key; later
 /// writes use the maintained total and do not scan the user data table.
-pub(super) async fn apply_lsi_item_collection_delta_in_tx(
+pub(crate) async fn apply_lsi_item_collection_delta_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     key_info: &TableKeyInfo,
     pk: &[u8],

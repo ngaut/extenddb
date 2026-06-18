@@ -59,6 +59,33 @@ fn filter_by_table() {
 }
 
 #[test]
+fn ttl_worker_metrics_are_queryable() {
+    let c = MetricsCollector::new();
+    c.record_ttl_expiry_cycle(12, 3, Some(45));
+
+    let expired = c.query(&MetricsQuery {
+        metric: Some(MetricName::TtlExpiredItemCount),
+        window: Some(TimeWindow::AllTime),
+        ..Default::default()
+    });
+    assert_eq!(expired.len(), 1);
+    assert_eq!(expired[0].sum, 12.0);
+    assert!(
+        expired[0]
+            .dimensions
+            .contains(&Dimension::Operation("TtlExpiry".to_owned()))
+    );
+
+    let age = c.query(&MetricsQuery {
+        metric: Some(MetricName::TtlOldestExpiredAgeSeconds),
+        window: Some(TimeWindow::AllTime),
+        ..Default::default()
+    });
+    assert_eq!(age.len(), 1);
+    assert_eq!(age[0].max, 45.0);
+}
+
+#[test]
 fn prune_removes_old_data() {
     let c = MetricsCollector::new();
     c.record_user_error(Some("T"), "PutItem");
@@ -82,10 +109,9 @@ fn record_and_query_segments() {
         LatencySegments {
             auth_us: 100.0,
             authz_us: 200.0,
-            throttle_us: 50.0,
             dispatch_us: 400.0,
             response_us: 80.0,
-            total_us: 830.0,
+            total_us: 780.0,
         },
     );
     c.record_segments(
@@ -93,10 +119,9 @@ fn record_and_query_segments() {
         LatencySegments {
             auth_us: 200.0,
             authz_us: 300.0,
-            throttle_us: 50.0,
             dispatch_us: 600.0,
             response_us: 120.0,
-            total_us: 1270.0,
+            total_us: 1220.0,
         },
     );
 
@@ -108,7 +133,7 @@ fn record_and_query_segments() {
     assert!((s.avg.auth_us - 150.0).abs() < f64::EPSILON);
     assert!((s.avg.authz_us - 250.0).abs() < f64::EPSILON);
     assert!((s.avg.dispatch_us - 500.0).abs() < f64::EPSILON);
-    assert!((s.avg.total_us - 1050.0).abs() < f64::EPSILON);
+    assert!((s.avg.total_us - 1000.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -121,10 +146,9 @@ fn prune_removes_old_segments() {
         LatencySegments {
             auth_us: 10.0,
             authz_us: 20.0,
-            throttle_us: 5.0,
             dispatch_us: 40.0,
             response_us: 8.0,
-            total_us: 83.0,
+            total_us: 78.0,
         },
     );
 
@@ -145,10 +169,9 @@ fn segments_multiple_operations() {
         LatencySegments {
             auth_us: 100.0,
             authz_us: 200.0,
-            throttle_us: 50.0,
             dispatch_us: 400.0,
             response_us: 80.0,
-            total_us: 830.0,
+            total_us: 780.0,
         },
     );
     c.record_segments(
@@ -156,10 +179,9 @@ fn segments_multiple_operations() {
         LatencySegments {
             auth_us: 120.0,
             authz_us: 220.0,
-            throttle_us: 60.0,
             dispatch_us: 500.0,
             response_us: 90.0,
-            total_us: 990.0,
+            total_us: 930.0,
         },
     );
 

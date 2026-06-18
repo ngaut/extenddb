@@ -5,7 +5,7 @@
 ExtendDB has one supported storage implementation: TiDB, in
 `crates/storage-tidb`. The `crates/storage` crate remains a boundary between
 the DynamoDB engine and persistence code, but it is not a promise that multiple
-backends are shipped or tested.
+storage implementations are shipped or tested.
 
 The storage layer owns:
 
@@ -20,7 +20,7 @@ The storage layer owns:
 
 | Crate | Responsibility |
 |---|---|
-| `extenddb-storage` | Trait definitions, shared storage data types, and backend-agnostic helpers. |
+| `extenddb-storage` | Trait definitions, shared storage data types, and SQL-free helper types. |
 | `extenddb-storage-tidb` | The only concrete storage implementation. |
 | `extenddb-engine` | DynamoDB operation handlers that call storage traits. |
 | `extenddb-server` | HTTP, authz context, management API, console, health, and metrics. |
@@ -34,16 +34,18 @@ The storage traits keep engine and server code free of SQL driver details:
 - `DataEngine`: item CRUD, query, scan, batch, and transactions.
 - `MetadataEngine`: TTL configuration and tags.
 - `StreamEngine`: stream metadata, iterators, and stream records.
-- `WorkerStore`: backend-owned runtime work.
+- `WorkerStore`: storage-owned runtime work.
 - `BackupEngine`: backup and restore metadata plus TiDB BR coordination.
 - `ManagementStore`, `AdminStore`, `SettingsStore`, `MetricsStore`,
   `RateLimitStore`, and `AuthorizationStore`: IAM, settings, metrics, lockout,
   and authorization persistence.
-- `Bootstrapper`: init, destroy, migrate, verify, and catalog checks.
+
+Bootstrap, destroy, migrate, verify, and catalog-check commands are concrete
+`storage-tidb` code invoked by the CLI, not generic storage traits.
 
 Traits use explicit `BoxFuture` return types where object safety is required.
 The concrete runtime is TiDB-only; code should not add conditional branches for
-removed backends.
+alternate storage engines.
 
 ## TiDB Catalog And Data Layout
 
@@ -97,11 +99,12 @@ primary-key handle as the deterministic tie breaker.
 
 ## Streams, TTL, Metrics, And Rate Limits
 
-Stream records live in TiDB and use MVCC commit timestamps plus an in-transaction
-ordinal for ordering. Retention is TiDB-native where possible.
+Stream records live in TiDB and use transaction TSO values plus an
+in-transaction ordinal for ordering. Retention is TiDB-native where possible.
 
-TTL deletes are TiDB-native. ExtendDB does not run an application sweep worker
-or synthesize TTL service REMOVE stream records.
+User-table TTL deletes run through an ExtendDB worker backed by TiDB lookup
+artifacts, so stream-enabled tables emit service-owned REMOVE records.
+Fixed-retention internal tables use TiDB native TTL.
 
 Metrics and rate-limit state live in TiDB tables so multiple frontends see one
 consistent view. Avoid process-local capacity limiters; use TiDB Resource

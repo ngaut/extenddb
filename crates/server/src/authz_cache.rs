@@ -15,8 +15,9 @@
 //! - Role-session data (policy + session tags) — pre-parsed.
 //!
 //! Self-induced changes from the management API are propagated via the
-//! [`AuthCacheRegistry`] (write-through invalidation). Off-instance changes
-//! propagate within the configured TTL.
+//! [`AuthCacheRegistry`] (write-through invalidation plus a TiDB-backed epoch
+//! bump). Other frontends poll the epoch and flush local auth caches when it
+//! changes; TTL remains the fallback if epoch propagation fails.
 //!
 //! See `docs/design/12-auth-authz-cache.md` for the full design.
 

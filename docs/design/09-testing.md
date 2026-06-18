@@ -19,7 +19,7 @@ compatibility as product behavior, not as an implementation detail.
 2. **One test, two targets.** Integration tests run against ExtendDB when
    `EXTENDDB_TEST_ENDPOINT` is set and against real DynamoDB when it is unset.
 3. **No target-specific assertions.** A behavioral difference is either an
-   ExtendDB bug, a test bug, or an explicitly documented native-backend
+   ExtendDB bug, a test bug, or an explicitly documented TiDB-native
    boundary.
 4. **SDKs are part of the contract.** boto3 and the Rust AWS SDK both exercise
    the wire protocol through normal customer clients. Additional external
@@ -52,7 +52,7 @@ devtools/
 
 `cargo test -j12 --workspace` is the default in-repo correctness gate. These
 tests cover pure types, expression parsing/evaluation, operation handlers,
-auth, server helpers, storage metadata, and backend SQL generation.
+auth, server helpers, storage metadata, and TiDB SQL generation.
 
 Crate-level tests should stay close to the code they protect. Prefer focused
 tests for parser, validator, and query-shape changes, then run the workspace
@@ -83,7 +83,7 @@ operation-focused coverage separate from the main pytest files and is run via:
 devtools/run-tests --extenddb --comprehensive
 ```
 
-This suite should remain backend-agnostic and use the same endpoint/credential
+This suite should remain endpoint-focused and use the same endpoint/credential
 model as the primary Python suite.
 
 ### 3.4 Rust AWS SDK Suite
@@ -160,7 +160,7 @@ release binary path.
 
 ## 6. TiDB Acceptance Gate
 
-TiDB is the default backend, so TiDB changes use `devtools/tidb-acceptance`.
+TiDB is the storage implementation, so TiDB changes use `devtools/tidb-acceptance`.
 The gate maps changed files to the smallest useful check set, while still
 offering full and archive modes for final proof.
 
@@ -203,7 +203,7 @@ checks where a better data shape can eliminate the edge case.
 |-------------|--------------------|
 | Rust source | `cargo fmt --all -- --check`, focused test, `cargo test -j12 --workspace`, `cargo clippy -j12 --all-targets -- -D warnings` |
 | Docs only | `.venv/bin/python docs/build-docs.py`, `git diff --check` |
-| TiDB backend | `devtools/tidb-acceptance --changed`; add `--with-playground` or `--full` when live TiDB behavior changed |
+| TiDB storage | `devtools/tidb-acceptance --changed`; add `--with-playground` or `--full` when live TiDB behavior changed |
 | SDK/customer path | `devtools/tidb-acceptance --sdk-smoke` or a registered external suite |
 | Final TiDB archive proof | `devtools/tidb-acceptance --archive` |
 

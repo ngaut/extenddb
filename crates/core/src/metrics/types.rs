@@ -14,19 +14,10 @@ pub enum MetricName {
     SuccessfulRequestLatency,
     SystemErrors,
     UserErrors,
-    /// Throttled request count. Recorded when token bucket rejects a request.
-    ThrottledRequests,
-    /// Read throttle events. Recorded when a read operation is throttled.
-    ReadThrottleEvents,
-    /// Write throttle events. Recorded when a write operation is throttled.
-    WriteThrottleEvents,
     ConditionalCheckFailedRequests,
     TransactionConflict,
     ReturnedItemCount,
     ReturnedBytes,
-    TimeToLiveDeletedItemCount,
-    /// Seconds between TTL expiry and actual deletion (staleness).
-    TtlDeletionStaleness,
     /// HTTP request count (dimensions: operation).
     RequestCount,
     /// Storage query count (dimensions: source, category).
@@ -45,6 +36,12 @@ pub enum MetricName {
     WorkerCycleLatency,
     /// Worker error count.
     WorkerErrorCount,
+    /// DynamoDB TTL items expired by the ExtendDB worker.
+    TtlExpiredItemCount,
+    /// TTL-enabled table candidates scanned by the worker.
+    TtlCandidateTableCount,
+    /// Age in seconds of the oldest expired TTL item seen in a worker cycle.
+    TtlOldestExpiredAgeSeconds,
 }
 
 impl std::fmt::Display for MetricName {
@@ -55,15 +52,10 @@ impl std::fmt::Display for MetricName {
             Self::SuccessfulRequestLatency => f.write_str("SuccessfulRequestLatency"),
             Self::SystemErrors => f.write_str("SystemErrors"),
             Self::UserErrors => f.write_str("UserErrors"),
-            Self::ThrottledRequests => f.write_str("ThrottledRequests"),
-            Self::ReadThrottleEvents => f.write_str("ReadThrottleEvents"),
-            Self::WriteThrottleEvents => f.write_str("WriteThrottleEvents"),
             Self::ConditionalCheckFailedRequests => f.write_str("ConditionalCheckFailedRequests"),
             Self::TransactionConflict => f.write_str("TransactionConflict"),
             Self::ReturnedItemCount => f.write_str("ReturnedItemCount"),
             Self::ReturnedBytes => f.write_str("ReturnedBytes"),
-            Self::TimeToLiveDeletedItemCount => f.write_str("TimeToLiveDeletedItemCount"),
-            Self::TtlDeletionStaleness => f.write_str("TtlDeletionStaleness"),
             Self::RequestCount => f.write_str("RequestCount"),
             Self::StorageQueryCount => f.write_str("StorageQueryCount"),
             Self::StorageQueryLatency => f.write_str("StorageQueryLatency"),
@@ -73,6 +65,9 @@ impl std::fmt::Display for MetricName {
             Self::WorkerLastSuccess => f.write_str("WorkerLastSuccess"),
             Self::WorkerCycleLatency => f.write_str("WorkerCycleLatency"),
             Self::WorkerErrorCount => f.write_str("WorkerErrorCount"),
+            Self::TtlExpiredItemCount => f.write_str("TtlExpiredItemCount"),
+            Self::TtlCandidateTableCount => f.write_str("TtlCandidateTableCount"),
+            Self::TtlOldestExpiredAgeSeconds => f.write_str("TtlOldestExpiredAgeSeconds"),
         }
     }
 }
@@ -92,51 +87,21 @@ pub enum Dimension {
 pub enum QuerySource {
     /// User-facing HTTP request handler.
     Request,
-    /// Background: log level poller.
-    PollLogLevel,
-    /// Background: throttling enabled poller.
-    PollThrottlingEnabled,
-    /// Background: GSI delay poller.
-    PollGsiDelay,
-    /// Background: TTL sweeper.
-    TtlSweeper,
-    /// Background: stream record cleanup.
-    StreamCleanup,
-    /// Background: idempotency token cleanup.
-    IdempotencyCleanup,
     /// Background: metrics flush.
     MetricsFlush,
     /// Background: metrics prune.
     MetricsPrune,
-    /// Background: capacity warning.
-    CapacityWarning,
-    /// Background: table size refresh.
-    TableSizeRefresh,
-    /// Background: control plane transitions.
-    ControlPlane,
-    /// Background: login attempt cleanup.
-    LoginAttemptCleanup,
-    /// Management CLI commands.
-    Management,
+    /// Background: DynamoDB user-table TTL expiry worker.
+    TtlExpiry,
 }
 
 impl std::fmt::Display for QuerySource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Request => f.write_str("Request"),
-            Self::PollLogLevel => f.write_str("PollLogLevel"),
-            Self::PollThrottlingEnabled => f.write_str("PollThrottlingEnabled"),
-            Self::PollGsiDelay => f.write_str("PollGsiDelay"),
-            Self::TtlSweeper => f.write_str("TtlSweeper"),
-            Self::StreamCleanup => f.write_str("StreamCleanup"),
-            Self::IdempotencyCleanup => f.write_str("IdempotencyCleanup"),
             Self::MetricsFlush => f.write_str("MetricsFlush"),
             Self::MetricsPrune => f.write_str("MetricsPrune"),
-            Self::CapacityWarning => f.write_str("CapacityWarning"),
-            Self::TableSizeRefresh => f.write_str("TableSizeRefresh"),
-            Self::ControlPlane => f.write_str("ControlPlane"),
-            Self::LoginAttemptCleanup => f.write_str("LoginAttemptCleanup"),
-            Self::Management => f.write_str("Management"),
+            Self::TtlExpiry => f.write_str("TtlExpiry"),
         }
     }
 }
@@ -306,13 +271,11 @@ pub struct LatencySegments {
     pub auth_us: f64,
     /// IAM policy fetch + evaluation.
     pub authz_us: f64,
-    /// Token bucket check + lazy `describe_table`.
-    pub throttle_us: f64,
     /// Everything inside engine dispatch.
     pub dispatch_us: f64,
     /// JSON serialization + CRC32 + response construction.
     pub response_us: f64,
-    /// Full handler time (= auth + authz + throttle + dispatch + response).
+    /// Full handler time (= auth + authz + dispatch + response).
     pub total_us: f64,
 }
 

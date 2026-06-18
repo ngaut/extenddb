@@ -6,10 +6,9 @@
 -- data within a single TiDB transaction.
 
 -- Stream records — change data capture records. TiDB derives fixed stream
--- shards from table_id. Rows are inserted atomically with item writes under a
--- transaction-local storage sequence, then finalized to the user-visible
--- sequence_number from TiDB MVCC commit_ts plus the in-transaction ordinal.
--- This keeps stream order tied to TiDB commit order without a shard counter.
+-- shards from table_id. Rows are inserted atomically with item writes using a
+-- TiDB transaction TSO plus an in-transaction ordinal as the user-visible
+-- sequence number. This avoids shard counters and privileged MVCC inspection.
 CREATE TABLE IF NOT EXISTS stream_records (
     record_id BIGINT NOT NULL AUTO_RANDOM(4),
     shard_id VARCHAR(128) NOT NULL,

@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
@@ -32,7 +31,7 @@ const MAX_BATCH_WRITE_ITEMS: usize = 25;
 /// Handle a `BatchWriteItem` request.
 ///
 /// Writes (put or delete) items across one or more tables. Each table's writes
-/// are sent through the storage backend's batch write path. `DynamoDB` limits:
+/// are sent through the storage batch write path. `DynamoDB` limits:
 /// max 25 items total, max 16 MB request size, max 400 KB per item.
 ///
 /// # Errors
@@ -186,7 +185,7 @@ pub async fn handle_batch_write_item(
         per_table_wcu.iter().map(|(t, cu)| (t.as_str(), *cu)),
     );
 
-    // Per-item WCU already accumulated above (M-1: DynamoDB rounds per item, then sums).
+    // Per-item WCU already accumulated above; DynamoDB rounds per item, then sums.
     let wcu = total_wcu;
 
     let output = BatchWriteItemOutput {
@@ -214,18 +213,9 @@ async fn batch_write_table_infos(
 ) -> Result<HashMap<String, TableKeyInfo>, DynamoDbError> {
     let mut table_plans = request_items.keys().cloned().collect::<Vec<_>>();
     table_plans.sort();
-
-    let results = join_all(table_plans.iter().map(|table_name| async move {
-        let result = ctx.table_write_info(table_name).await;
-        (table_name.clone(), result.map_err(storage_err_to_dynamo))
-    }))
-    .await;
-
-    let mut table_infos = HashMap::with_capacity(results.len());
-    for (table_name, result) in results {
-        table_infos.insert(table_name, result?);
-    }
-    Ok(table_infos)
+    ctx.table_write_infos(&table_plans)
+        .await
+        .map_err(storage_err_to_dynamo)
 }
 
 /// Validate that no two write requests in the same table target the same key.

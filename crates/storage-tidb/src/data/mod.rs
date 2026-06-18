@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Per-DynamoDB-table DDL and item CRUD for the `TiDB` backend.
+//! Per-DynamoDB-table DDL and item CRUD for `TiDB` storage.
 //!
 //! Each Virtual `DynamoDB` table maps to a `TiDB` table named `_ddb_<table_id>`.
 //! Partition keys are stored as bytes. Sort keys use typed columns (`sk_s`, `sk_n`, `sk_b`)
@@ -120,7 +120,7 @@ pub(crate) fn validate_native_key_schema_shape(
         .count();
     if range_count > 1 {
         return Err(StorageError::Validation(format!(
-            "One or more parameter values were invalid: TiDB backend supports at most one RANGE key for {context} because native clustered and secondary indexes must fit TiDB's 3072-byte key limit"
+            "One or more parameter values were invalid: TiDB storage supports at most one RANGE key for {context} because native clustered and secondary indexes must fit TiDB's 3072-byte key limit"
         )));
     }
     Ok(())
@@ -297,14 +297,14 @@ mod data_engine;
 mod ddl;
 mod delete_item;
 mod index;
-mod item_collections;
+pub(crate) mod item_collections;
 mod put_item;
 mod query;
 mod query_scan;
 mod region_split;
 mod statistics;
 mod transactions;
-mod tx_helpers;
+pub(crate) mod tx_helpers;
 mod update_item;
 
 pub(crate) use region_split::{

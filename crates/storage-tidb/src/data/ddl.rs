@@ -38,7 +38,30 @@ type TableInfoRow = (
     Option<bool>,
 );
 
+type NamedTableInfoRow = (
+    String,
+    serde_json::Value,
+    serde_json::Value,
+    String,
+    String,
+    Option<serde_json::Value>,
+    Option<String>,
+    Option<bool>,
+);
+
 type TableWriteInfoRow = (
+    serde_json::Value,
+    serde_json::Value,
+    String,
+    String,
+    Option<serde_json::Value>,
+    Option<String>,
+    Option<bool>,
+    serde_json::Value,
+);
+
+type NamedTableWriteInfoRow = (
+    String,
     serde_json::Value,
     serde_json::Value,
     String,
@@ -66,6 +89,87 @@ type TableReadInfoRow = (
 
 fn table_accepts_data_plane(status: &str) -> bool {
     matches!(status, "ACTIVE" | "UPDATING")
+}
+
+fn parse_table_key_info_row(
+    account_id: &str,
+    table_name: String,
+    row: TableInfoRow,
+) -> Result<TableKeyInfo, StorageError> {
+    let (ks_json, ad_json, status, table_id, stream_spec_json, stream_label, has_lsi) = row;
+
+    if !table_accepts_data_plane(&status) {
+        return Err(StorageError::TableNotActive(table_name));
+    }
+
+    let key_schema: Vec<KeySchemaElement> =
+        serde_json::from_value(ks_json).map_err(|e| StorageError::Internal(e.to_string()))?;
+    let attribute_definitions: Vec<AttributeDefinition> =
+        serde_json::from_value(ad_json).map_err(|e| StorageError::Internal(e.to_string()))?;
+
+    let stream_specification: Option<StreamSpecification> = stream_spec_json
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+    Ok(TableKeyInfo {
+        table_name,
+        account_id: account_id.to_owned(),
+        table_id,
+        key_schema: key_schema.clone(),
+        base_key_schema: key_schema,
+        attribute_definitions,
+        secondary_index_key_schemas: Vec::new(),
+        has_lsi: has_lsi.unwrap_or(false),
+        stream_specification,
+        stream_label,
+    })
+}
+
+fn parse_table_write_info_row(
+    account_id: &str,
+    table_name: String,
+    row: TableWriteInfoRow,
+) -> Result<TableKeyInfo, StorageError> {
+    let (
+        ks_json,
+        ad_json,
+        status,
+        table_id,
+        stream_spec_json,
+        stream_label,
+        has_lsi,
+        secondary_index_key_schemas_json,
+    ) = row;
+
+    if !table_accepts_data_plane(&status) {
+        return Err(StorageError::TableNotActive(table_name));
+    }
+
+    let key_schema: Vec<KeySchemaElement> =
+        serde_json::from_value(ks_json).map_err(|e| StorageError::Internal(e.to_string()))?;
+    let attribute_definitions: Vec<AttributeDefinition> =
+        serde_json::from_value(ad_json).map_err(|e| StorageError::Internal(e.to_string()))?;
+    let stream_specification: Option<StreamSpecification> = stream_spec_json
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|e| StorageError::Internal(e.to_string()))?;
+    let secondary_index_key_schemas: Vec<Vec<KeySchemaElement>> =
+        serde_json::from_value(secondary_index_key_schemas_json)
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+    Ok(TableKeyInfo {
+        table_name,
+        account_id: account_id.to_owned(),
+        table_id,
+        key_schema: key_schema.clone(),
+        base_key_schema: key_schema,
+        attribute_definitions,
+        secondary_index_key_schemas,
+        has_lsi: has_lsi.unwrap_or(false),
+        stream_specification,
+        stream_label,
+    })
 }
 
 fn data_table_ddl(
@@ -374,35 +478,71 @@ impl TidbEngine {
         .await
         .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        let (ks_json, ad_json, status, table_id, stream_spec_json, stream_label, has_lsi) =
-            row.ok_or_else(|| StorageError::TableNotFound(table_name.to_owned()))?;
+        parse_table_key_info_row(
+            account_id,
+            table_name.to_owned(),
+            row.ok_or_else(|| StorageError::TableNotFound(table_name.to_owned()))?,
+        )
+    }
 
-        if !table_accepts_data_plane(&status) {
-            return Err(StorageError::TableNotActive(table_name.to_owned()));
+    pub(crate) async fn fetch_table_key_infos(
+        &self,
+        account_id: &str,
+        table_names: &[String],
+    ) -> Result<Vec<TableKeyInfo>, StorageError> {
+        if table_names.is_empty() {
+            return Ok(Vec::new());
         }
 
-        let key_schema: Vec<KeySchemaElement> =
-            serde_json::from_value(ks_json).map_err(|e| StorageError::Internal(e.to_string()))?;
-        let attribute_definitions: Vec<AttributeDefinition> =
-            serde_json::from_value(ad_json).map_err(|e| StorageError::Internal(e.to_string()))?;
+        let mut query = sqlx::QueryBuilder::<sqlx::MySql>::new(
+            "SELECT table_name, key_schema, attribute_definitions, table_status, table_id, \
+             stream_specification, stream_label, \
+             EXISTS(SELECT 1 FROM indexes WHERE table_id = tables.table_id AND index_type = 'LSI') AS has_lsi \
+             FROM tables \
+             WHERE account_id = ",
+        );
+        query.push_bind(account_id);
+        query.push(" AND table_name IN (");
+        let mut separated = query.separated(", ");
+        for table_name in table_names {
+            separated.push_bind(table_name);
+        }
+        separated.push_unseparated(") ORDER BY table_name");
 
-        let stream_specification: Option<StreamSpecification> = stream_spec_json
-            .map(serde_json::from_value)
-            .transpose()
+        let rows: Vec<NamedTableInfoRow> = query
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        Ok(TableKeyInfo {
-            table_name: table_name.to_owned(),
-            account_id: account_id.to_owned(),
-            table_id,
-            key_schema: key_schema.clone(),
-            base_key_schema: key_schema,
-            attribute_definitions,
-            secondary_index_key_schemas: Vec::new(),
-            has_lsi: has_lsi.unwrap_or(false),
-            stream_specification,
-            stream_label,
-        })
+        rows.into_iter()
+            .map(
+                |(
+                    table_name,
+                    ks_json,
+                    ad_json,
+                    status,
+                    table_id,
+                    stream_spec_json,
+                    stream_label,
+                    has_lsi,
+                )| {
+                    parse_table_key_info_row(
+                        account_id,
+                        table_name,
+                        (
+                            ks_json,
+                            ad_json,
+                            status,
+                            table_id,
+                            stream_spec_json,
+                            stream_label,
+                            has_lsi,
+                        ),
+                    )
+                },
+            )
+            .collect()
     }
 
     pub(crate) async fn fetch_table_write_info(
@@ -417,45 +557,80 @@ impl TidbEngine {
             .await
             .map_err(|e| StorageError::Internal(e.to_string()))?;
 
-        let (
-            ks_json,
-            ad_json,
-            status,
-            table_id,
-            stream_spec_json,
-            stream_label,
-            has_lsi,
-            secondary_index_key_schemas_json,
-        ) = row.ok_or_else(|| StorageError::TableNotFound(table_name.to_owned()))?;
+        parse_table_write_info_row(
+            account_id,
+            table_name.to_owned(),
+            row.ok_or_else(|| StorageError::TableNotFound(table_name.to_owned()))?,
+        )
+    }
 
-        if !table_accepts_data_plane(&status) {
-            return Err(StorageError::TableNotActive(table_name.to_owned()));
+    pub(crate) async fn fetch_table_write_infos(
+        &self,
+        account_id: &str,
+        table_names: &[String],
+    ) -> Result<Vec<TableKeyInfo>, StorageError> {
+        if table_names.is_empty() {
+            return Ok(Vec::new());
         }
 
-        let key_schema: Vec<KeySchemaElement> =
-            serde_json::from_value(ks_json).map_err(|e| StorageError::Internal(e.to_string()))?;
-        let attribute_definitions: Vec<AttributeDefinition> =
-            serde_json::from_value(ad_json).map_err(|e| StorageError::Internal(e.to_string()))?;
-        let stream_specification: Option<StreamSpecification> = stream_spec_json
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|e| StorageError::Internal(e.to_string()))?;
-        let secondary_index_key_schemas: Vec<Vec<KeySchemaElement>> =
-            serde_json::from_value(secondary_index_key_schemas_json)
-                .map_err(|e| StorageError::Internal(e.to_string()))?;
+        let mut query = sqlx::QueryBuilder::<sqlx::MySql>::new(
+            "SELECT table_name, key_schema, attribute_definitions, table_status, table_id, \
+             stream_specification, stream_label, \
+             EXISTS(SELECT 1 FROM indexes WHERE table_id = tables.table_id AND index_type = 'LSI') AS has_lsi, \
+             CASE WHEN EXISTS( \
+                 SELECT 1 FROM indexes \
+                 WHERE table_id = tables.table_id AND index_status IN ('ACTIVE', 'CREATING') \
+             ) THEN ( \
+                 SELECT JSON_ARRAYAGG(key_schema) FROM indexes \
+                 WHERE table_id = tables.table_id AND index_status IN ('ACTIVE', 'CREATING') \
+             ) ELSE JSON_ARRAY() END AS secondary_index_key_schemas \
+             FROM tables \
+             WHERE account_id = ",
+        );
+        query.push_bind(account_id);
+        query.push(" AND table_name IN (");
+        let mut separated = query.separated(", ");
+        for table_name in table_names {
+            separated.push_bind(table_name);
+        }
+        separated.push_unseparated(") ORDER BY table_name");
 
-        Ok(TableKeyInfo {
-            table_name: table_name.to_owned(),
-            account_id: account_id.to_owned(),
-            table_id,
-            key_schema: key_schema.clone(),
-            base_key_schema: key_schema,
-            attribute_definitions,
-            secondary_index_key_schemas,
-            has_lsi: has_lsi.unwrap_or(false),
-            stream_specification,
-            stream_label,
-        })
+        let rows: Vec<NamedTableWriteInfoRow> = query
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| StorageError::Internal(e.to_string()))?;
+
+        rows.into_iter()
+            .map(
+                |(
+                    table_name,
+                    ks_json,
+                    ad_json,
+                    status,
+                    table_id,
+                    stream_spec_json,
+                    stream_label,
+                    has_lsi,
+                    secondary_index_key_schemas_json,
+                )| {
+                    parse_table_write_info_row(
+                        account_id,
+                        table_name,
+                        (
+                            ks_json,
+                            ad_json,
+                            status,
+                            table_id,
+                            stream_spec_json,
+                            stream_label,
+                            has_lsi,
+                            secondary_index_key_schemas_json,
+                        ),
+                    )
+                },
+            )
+            .collect()
     }
 
     pub(crate) async fn fetch_table_read_info(

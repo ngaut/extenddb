@@ -242,7 +242,7 @@ pub async fn import_access_key(
         .await
     {
         Ok(Some(v)) => v == "true",
-        Ok(None) => true, // Default: allowed.
+        Ok(None) => super::ops_settings::ALLOW_CREDENTIAL_IMPORT_DEFAULT,
         Err(e) => {
             tracing::error!("Management API: check allow_credential_import failed: {e:?}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();

@@ -24,15 +24,12 @@
 
 [server]
 # bind_addr = "127.0.0.1"      # Network interface to bind (default: localhost only)
-# port = 8000                  # HTTP port
+# port = 8000                  # HTTPS port
 # region = "us-east-1"         # AWS region for ARN generation
 # run_dir = "~/.extenddb/run"     # Directory for PID file (~ is expanded to $HOME)
 
-[storage]
-# backend = "tidb"             # Storage backend. ExtendDB currently supports TiDB.
-
 [storage.tidb]
-# Default TiDB backend. Connection string points to the CATALOG database.
+# Connection string points to the TiDB catalog database.
 # TiDB listens on port 4000 by default.
 # The `tidb://` scheme is accepted in config and converted to `mysql://` for sqlx.
 # connection_string = "mysql://extenddb:extenddb-local-dev@localhost:4000/extenddb_catalog"
@@ -100,16 +97,8 @@
 # address and port as [server]. The console requires auth.provider = "builtin"
 # (it authenticates against the admin_users and iam_users tables).
 
-# Provisioned throughput throttling via in-memory token buckets.
-# When enabled, tables with provisioned capacity are rate-limited to their
-# configured RCU/WCU. On-demand tables use default ceilings (12,000 RCU /
-# 4,000 WCU). Account-level aggregate limits also apply.
-# Disabled by default. TiDB builds ignore this process-local limiter and should
-# use TiDB Resource Control/resource groups for distributed capacity governance.
-# throttling_enabled = false
-
 [server.tls]
-# TLS is mandatory. The server refuses to start with enabled = false.
+# TLS is mandatory.
 # cert_path = "~/.extenddb/tls/cert.pem"   # PEM certificate file
 # key_path = "~/.extenddb/tls/key.pem"     # PEM private key file
 # `extenddb init` generates a self-signed certificate automatically.
@@ -159,9 +148,6 @@
 # [server.tls]
 # cert_path = "/etc/extenddb/tls/cert.pem"
 # key_path = "/etc/extenddb/tls/key.pem"
-#
-# [storage]
-# backend = "tidb"
 #
 # [storage.tidb]
 # connection_string = "mysql://extenddb:<password>@tidb.example.com:4000/extenddb_catalog"

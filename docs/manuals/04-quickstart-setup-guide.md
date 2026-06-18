@@ -131,7 +131,7 @@ Options:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--catalog-db` | `extenddb_catalog` | Catalog database name |
+| `--catalog-db` | `<data-db>_catalog` (`extenddb_catalog`) | Catalog database name |
 | `--data-db` | `extenddb` | Data database name |
 | `--storage-host` | `localhost` | TiDB SQL host |
 | `--storage-port` | `4000` | TiDB SQL port |
@@ -171,7 +171,7 @@ Expected output:
 ./target/release/extenddb serve --config extenddb.toml
 ```
 
-extenddb runs as a daemon (background process). It prints a startup banner, then forks to background. All logging goes to syslog.
+By default extenddb runs as a daemon (background process), prints a startup banner, then forks to background and logs to syslog. Use `--foreground` when running under a container or process supervisor.
 
 Check status:
 

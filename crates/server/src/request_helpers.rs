@@ -7,6 +7,7 @@ use axum::http::HeaderMap;
 use extenddb_core::error::DynamoDbError;
 use extenddb_core::types::{TableKeyInfo, TableReadInfo};
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::AppState;
 use crate::authorization;
@@ -42,7 +43,7 @@ pub(crate) fn extract_operation(headers: &HeaderMap) -> Result<String, DynamoDbE
 
 /// Extract the top-level `TableName` from a `DynamoDB` request body.
 ///
-/// This is used by throttling only. Authorization uses typed operation
+/// This is used for request metrics. Authorization uses typed operation
 /// resources from `authz_request_context`.
 pub(crate) fn extract_table_name(input: &Value) -> Option<String> {
     input
@@ -51,9 +52,43 @@ pub(crate) fn extract_table_name(input: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(crate) struct AuthorizationPrefetch {
+pub(crate) struct AuthorizedOperationMetadata {
+    pub account_id: Arc<str>,
     pub read_info: Option<TableReadInfo>,
     pub write_info: Option<TableKeyInfo>,
+}
+
+struct AuthorizationPrefetch {
+    read_info: Option<TableReadInfo>,
+    write_info: Option<TableKeyInfo>,
+}
+
+pub(crate) async fn authorize_operation_metadata(
+    state: &AppState,
+    identity: &extenddb_auth::AuthIdentity,
+    input: &Value,
+    operation: &str,
+) -> Result<AuthorizedOperationMetadata, DynamoDbError> {
+    if state.catalog_store.is_none() {
+        tracing::error!("Authorization required but catalog_store is not configured");
+        return Err(DynamoDbError::AccessDeniedException(
+            "User: is not authorized to perform this operation".to_owned(),
+        ));
+    }
+
+    let account_id: Arc<str> = match identity {
+        extenddb_auth::AuthIdentity::User { account_id, .. }
+        | extenddb_auth::AuthIdentity::RoleSession { account_id, .. } => {
+            Arc::from(account_id.as_str())
+        }
+    };
+    let prefetch = authorize_request(state, identity, input, operation, &account_id).await?;
+
+    Ok(AuthorizedOperationMetadata {
+        account_id,
+        read_info: prefetch.read_info,
+        write_info: prefetch.write_info,
+    })
 }
 
 /// Evaluate IAM policies for an authenticated identity.
@@ -67,7 +102,7 @@ pub(crate) struct AuthorizationPrefetch {
 /// All authorization data is fetched via `state.authz_cache`, which sits on
 /// top of the underlying `AuthorizationStore` and serves cached, pre-parsed
 /// `PolicyDocument`s.
-pub(crate) async fn authorize_request(
+async fn authorize_request(
     state: &AppState,
     identity: &extenddb_auth::AuthIdentity,
     input: &Value,
@@ -84,10 +119,8 @@ pub(crate) async fn authorize_request(
 
     // Fetch table metadata for item-level operations. The result is both used
     // for LeadingKeys extraction here and returned to the caller to avoid a
-    // redundant fetch in the engine layer. Query/Scan include IndexName when
-    // present so index metadata is resolved once per request. Put/Update/Delete
-    // ask for write metadata because secondary-index and stream write metadata
-    // can matter.
+    // redundant fetch in the engine layer. Metadata comes directly from TiDB so
+    // distributed frontends do not need cross-node table-metadata invalidation.
     let (read_info, write_info) = match operation {
         "PutItem" | "UpdateItem" | "DeleteItem" => {
             let write_info = if let Some(ref tn) = table_name {
@@ -100,7 +133,7 @@ pub(crate) async fn authorize_request(
         "GetItem" => {
             if let Some(ref tn) = table_name {
                 let read_info =
-                    optional_auth_metadata(state.table_key_info_cache.get(account_id, tn).await)?
+                    optional_auth_metadata(state.storage.table_key_info(account_id, tn).await)?
                         .map(|table| TableReadInfo { table, index: None });
                 (read_info, None)
             } else {
@@ -109,15 +142,18 @@ pub(crate) async fn authorize_request(
         }
         "Query" | "Scan" => {
             if let Some(ref tn) = table_name {
-                (
+                let read_info = if index_name.is_some() {
                     optional_auth_metadata(
                         state
                             .storage
                             .table_read_info(account_id, tn, index_name.as_deref())
                             .await,
-                    )?,
-                    None,
-                )
+                    )?
+                } else {
+                    optional_auth_metadata(state.storage.table_key_info(account_id, tn).await)?
+                        .map(|table| TableReadInfo { table, index: None })
+                };
+                (read_info, None)
             } else {
                 (None, None)
             }

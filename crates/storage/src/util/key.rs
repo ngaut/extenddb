@@ -84,7 +84,7 @@ pub fn pk_to_text(value: &AttributeValue) -> Result<Cow<'_, str>, StorageError> 
     }
 }
 
-/// Extract the partition key as raw bytes for backends with binary key columns.
+/// Extract the partition key as raw bytes for binary key columns.
 pub fn pk_to_bytes(value: &AttributeValue) -> Result<Cow<'_, [u8]>, StorageError> {
     match value {
         AttributeValue::S(s) => Ok(Cow::Borrowed(s.as_bytes())),

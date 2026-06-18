@@ -4,7 +4,10 @@
 //! Shared configuration types for the extenddb binary.
 
 use extenddb_core::limits::LimitsConfig;
+use extenddb_storage_tidb::TidbStorageConfig;
 use serde::Deserialize;
+
+const TIDB_BACKEND: &str = "tidb";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,13 +57,9 @@ pub struct ServerConfig {
     /// Directory for runtime files (PID file). Defaults to `~/.extenddb/run`.
     #[serde(default = "default_run_dir")]
     pub run_dir: String,
-    /// TLS configuration. When enabled, the server serves HTTPS.
+    /// TLS configuration. The server always serves HTTPS.
     #[serde(default)]
     pub tls: TlsConfig,
-    /// Enable frontend provisioned-throughput throttling via token buckets.
-    /// Backends with native distributed capacity control, such as TiDB, ignore
-    /// this process-local limiter.
-    pub throttling_enabled: Option<bool>,
 }
 
 impl Default for ServerConfig {
@@ -71,22 +70,14 @@ impl Default for ServerConfig {
             region: default_region(),
             run_dir: default_run_dir(),
             tls: TlsConfig::default(),
-            throttling_enabled: None,
         }
     }
 }
 
 /// TLS configuration for HTTPS.
-///
-/// TLS is always enabled. The `enabled` field is accepted for backward
-/// compatibility but the server refuses to start if set to `false`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TlsConfig {
-    /// TLS is mandatory. Accepted for backward compatibility; the server
-    /// refuses to start if explicitly set to `false`.
-    #[serde(default = "default_tls_enabled")]
-    pub enabled: bool,
     /// Path to the TLS certificate file (PEM). Defaults to `~/.extenddb/tls/cert.pem`.
     #[serde(default = "default_tls_cert_path")]
     pub cert_path: String,
@@ -98,190 +89,37 @@ pub struct TlsConfig {
 impl Default for TlsConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             cert_path: default_tls_cert_path(),
             key_path: default_tls_key_path(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StorageConfig {
-    /// Storage backend selector.
-    pub _backend: String,
-    /// Backend-specific configuration (trait object).
-    config: Box<dyn extenddb_storage::config::StorageConfig>,
+    /// TiDB storage configuration.
+    pub tidb: TidbStorageConfig,
 }
 
 impl StorageConfig {
-    /// Get the connection configuration string for this backend.
-    ///
-    /// Delegates to the backend-specific config trait object. This wrapper
-    /// provides a clean API without exposing the trait object to callers.
     pub fn connection_config(&self) -> &str {
-        self.config.connection_config()
+        &self.tidb.connection_string
     }
 
-    /// Get the maximum connections for data operations.
     pub fn max_connections(&self) -> u32 {
-        self.config.max_connections()
+        self.tidb.pool_size
     }
 
-    /// Get the maximum connections for catalog operations.
     pub fn max_catalog_connections(&self) -> u32 {
-        self.config.max_catalog_connections()
+        self.tidb.catalog_pool_size()
     }
 
-    /// Get a reference to the underlying trait object for factory calls.
-    pub fn as_trait(&self) -> &dyn extenddb_storage::config::StorageConfig {
-        &*self.config
-    }
-
-    /// Optional backend-native resource group used for capacity governance.
     pub fn native_capacity_resource_group(&self) -> Option<&str> {
-        self.config.native_capacity_resource_group()
+        self.tidb.native_capacity_resource_group()
     }
 
-    /// Optional backend-native bounded-staleness window for default reads.
     pub fn native_default_read_staleness_seconds(&self) -> Option<u32> {
-        self.config.native_default_read_staleness_seconds()
-    }
-}
-
-/// Storage config view enriched with runtime limits from the top-level config.
-#[derive(Debug)]
-pub struct RuntimeStorageConfig<'a> {
-    base: &'a dyn extenddb_storage::config::StorageConfig,
-    limits: LimitsConfig,
-}
-
-impl<'a> RuntimeStorageConfig<'a> {
-    pub fn new(
-        base: &'a dyn extenddb_storage::config::StorageConfig,
-        limits: &LimitsConfig,
-    ) -> Self {
-        Self {
-            base,
-            limits: limits.clone(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct OwnedRuntimeStorageConfig {
-    base: Box<dyn extenddb_storage::config::StorageConfig>,
-    limits: LimitsConfig,
-}
-
-impl extenddb_storage::config::StorageConfig for RuntimeStorageConfig<'_> {
-    fn connection_config(&self) -> &str {
-        self.base.connection_config()
-    }
-
-    fn max_connections(&self) -> u32 {
-        self.base.max_connections()
-    }
-
-    fn max_catalog_connections(&self) -> u32 {
-        self.base.max_catalog_connections()
-    }
-
-    fn runtime_limits(&self) -> Option<&LimitsConfig> {
-        Some(&self.limits)
-    }
-
-    fn native_backup_config(&self) -> Option<extenddb_storage::config::NativeBackupConfig> {
-        self.base.native_backup_config()
-    }
-
-    fn uses_backend_native_control_plane(&self) -> bool {
-        self.base.uses_backend_native_control_plane()
-    }
-
-    fn uses_backend_native_secondary_indexes(&self) -> bool {
-        self.base.uses_backend_native_secondary_indexes()
-    }
-
-    fn uses_backend_native_capacity_control(&self) -> bool {
-        self.base.uses_backend_native_capacity_control()
-    }
-
-    fn native_capacity_resource_group(&self) -> Option<&str> {
-        self.base.native_capacity_resource_group()
-    }
-
-    fn native_default_read_staleness_seconds(&self) -> Option<u32> {
-        self.base.native_default_read_staleness_seconds()
-    }
-
-    fn clone_box(&self) -> Box<dyn extenddb_storage::config::StorageConfig> {
-        Box::new(OwnedRuntimeStorageConfig {
-            base: self.base.clone_box(),
-            limits: self.limits.clone(),
-        })
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any
-    where
-        Self: 'static,
-    {
-        self
-    }
-}
-
-impl extenddb_storage::config::StorageConfig for OwnedRuntimeStorageConfig {
-    fn connection_config(&self) -> &str {
-        self.base.connection_config()
-    }
-
-    fn max_connections(&self) -> u32 {
-        self.base.max_connections()
-    }
-
-    fn max_catalog_connections(&self) -> u32 {
-        self.base.max_catalog_connections()
-    }
-
-    fn runtime_limits(&self) -> Option<&LimitsConfig> {
-        Some(&self.limits)
-    }
-
-    fn native_backup_config(&self) -> Option<extenddb_storage::config::NativeBackupConfig> {
-        self.base.native_backup_config()
-    }
-
-    fn uses_backend_native_control_plane(&self) -> bool {
-        self.base.uses_backend_native_control_plane()
-    }
-
-    fn uses_backend_native_secondary_indexes(&self) -> bool {
-        self.base.uses_backend_native_secondary_indexes()
-    }
-
-    fn uses_backend_native_capacity_control(&self) -> bool {
-        self.base.uses_backend_native_capacity_control()
-    }
-
-    fn native_capacity_resource_group(&self) -> Option<&str> {
-        self.base.native_capacity_resource_group()
-    }
-
-    fn native_default_read_staleness_seconds(&self) -> Option<u32> {
-        self.base.native_default_read_staleness_seconds()
-    }
-
-    fn clone_box(&self) -> Box<dyn extenddb_storage::config::StorageConfig> {
-        Box::new(Self {
-            base: self.base.clone_box(),
-            limits: self.limits.clone(),
-        })
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any
-    where
-        Self: 'static,
-    {
-        self
+        self.tidb.native_default_read_staleness_seconds()
     }
 }
 
@@ -292,45 +130,38 @@ impl<'de> serde::Deserialize<'de> for StorageConfig {
     {
         use serde::de::Error;
 
-        // Deserialize into a raw TOML value first
         let value: toml::Value = toml::Value::deserialize(deserializer)?;
+        let table = value
+            .as_table()
+            .ok_or_else(|| D::Error::custom("[storage] must be a table"))?;
 
-        // Extract the backend field
-        let backend = value
-            .get("backend")
-            .and_then(|v| v.as_str())
-            .map_or_else(default_backend, str::to_owned);
+        if table.contains_key("backend") {
+            return Err(D::Error::custom(
+                "The [storage].backend selector has been removed. ExtendDB is TiDB-only; \
+                 remove 'backend' and keep [storage.tidb].",
+            ));
+        }
 
-        // Get the backend-specific table matching `backend`.
-        let backend_table: &toml::Table = value
-            .get(&backend)
-            .and_then(|v| v.as_table())
+        for key in table.keys() {
+            if key != TIDB_BACKEND {
+                return Err(D::Error::custom(format!(
+                    "Unknown storage field '{key}'. Only '{TIDB_BACKEND}' is supported."
+                )));
+            }
+        }
+
+        let tidb: TidbStorageConfig = value
+            .get(TIDB_BACKEND)
+            .cloned()
             .ok_or_else(|| {
-                D::Error::custom(format!("Missing [storage.{backend}] section in config"))
-            })?;
-
-        // Use the registry to deserialize the backend config
-        let config = extenddb_storage::config::deserialize_storage_config(&backend, backend_table)
+                D::Error::custom(format!(
+                    "Missing [storage.{TIDB_BACKEND}] section in config"
+                ))
+            })?
+            .try_into()
             .map_err(D::Error::custom)?;
 
-        Ok(StorageConfig {
-            _backend: backend,
-            config,
-        })
-    }
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        let backend = default_backend();
-        let config =
-            extenddb_storage::config::default_storage_config(&backend).unwrap_or_else(|e| {
-                panic!("Default storage backend '{backend}' is not registered: {e}")
-            });
-        Self {
-            _backend: backend,
-            config,
-        }
+        Ok(StorageConfig { tidb })
     }
 }
 
@@ -460,14 +291,6 @@ pub fn expand_tilde(path: &str) -> String {
     }
     path.to_owned()
 }
-pub(crate) fn default_backend() -> String {
-    extenddb_storage::config::default_backend_name()
-        .unwrap_or_else(|e| panic!("No default storage backend registered: {e}"))
-        .to_owned()
-}
-fn default_tls_enabled() -> bool {
-    true
-}
 fn default_tls_cert_path() -> String {
     std::env::var("HOME").map_or_else(
         |_| "/tmp/extenddb-cert.pem".to_owned(),
@@ -505,26 +328,20 @@ pub fn load(config_path: &str) -> anyhow::Result<AppConfig> {
 }
 
 /// Redact password from a connection string for safe logging (REQ-LOG-002).
-///
-/// Uses the backend-specific operations engine to handle different connection
-/// string formats.
-pub fn redact_password(backend: &str, conn: &str) -> String {
-    extenddb_storage::operations::redact_connection_string(backend, conn)
-        .unwrap_or_else(|_| conn.to_owned())
+pub fn redact_password(conn: &str) -> String {
+    extenddb_storage_tidb::redact_connection_string(conn)
 }
 
 /// Validate that a string is safe to use as a database identifier for DDL.
 ///
-/// Delegates to the backend-specific operations engine. Rejects strings
-/// containing characters unsafe for `format!`-based DDL where parameterized
-/// queries are not supported (e.g. `CREATE DATABASE`, `DROP DATABASE`).
+/// Rejects strings containing characters unsafe for `format!`-based DDL where
+/// parameterized queries are not supported (e.g. `CREATE DATABASE`, `DROP DATABASE`).
 ///
 /// # Errors
 ///
 /// Returns an error describing the invalid character found.
-pub fn validate_identifier(backend: &str, name: &str, label: &str) -> anyhow::Result<()> {
-    extenddb_storage::operations::validate_identifier(backend, name, label)
-        .map_err(|e| anyhow::anyhow!("{e:?}"))
+pub fn validate_identifier(name: &str, label: &str) -> anyhow::Result<()> {
+    extenddb_storage_tidb::validate_identifier(name, label).map_err(|e| anyhow::anyhow!("{e:?}"))
 }
 
 /// Keys whose values must be redacted in configuration displays.
@@ -555,16 +372,11 @@ fn redact_if_sensitive(key: &str, val: &str) -> String {
 /// sensitive values (connection strings, passwords, keys).
 pub fn build_config_entries(cfg: &AppConfig) -> Vec<(String, String)> {
     let r = redact_if_sensitive;
-    let backend = &cfg.storage._backend;
     let mut entries = vec![
         ("server.bind_addr".into(), cfg.server.bind_addr.clone()),
         ("server.port".into(), cfg.server.port.to_string()),
         ("server.region".into(), cfg.server.region.clone()),
         ("server.run_dir".into(), cfg.server.run_dir.clone()),
-        (
-            "server.tls.enabled".into(),
-            cfg.server.tls.enabled.to_string(),
-        ),
         (
             "server.tls.cert_path".into(),
             cfg.server.tls.cert_path.clone(),
@@ -574,21 +386,15 @@ pub fn build_config_entries(cfg: &AppConfig) -> Vec<(String, String)> {
             cfg.server.tls.key_path.clone(),
         ),
         (
-            "server.throttling_enabled".into(),
-            cfg.server
-                .throttling_enabled
-                .map_or("none".into(), |b| b.to_string()),
-        ),
-        (
-            format!("storage.{backend}.connection_string"),
+            "storage.tidb.connection_string".into(),
             r("connection_string", cfg.storage.connection_config()),
         ),
         (
-            format!("storage.{backend}.pool_size"),
+            "storage.tidb.pool_size".into(),
             cfg.storage.max_connections().to_string(),
         ),
         (
-            format!("storage.{backend}.catalog_pool_size"),
+            "storage.tidb.catalog_pool_size".into(),
             cfg.storage.max_catalog_connections().to_string(),
         ),
         ("auth.provider".into(), cfg.auth.provider.clone()),
@@ -615,14 +421,14 @@ pub fn build_config_entries(cfg: &AppConfig) -> Vec<(String, String)> {
 
     if let Some(resource_group) = cfg.storage.native_capacity_resource_group() {
         entries.push((
-            format!("storage.{backend}.resource_group"),
+            "storage.tidb.resource_group".into(),
             resource_group.to_owned(),
         ));
     }
 
     if let Some(seconds) = cfg.storage.native_default_read_staleness_seconds() {
         entries.push((
-            format!("storage.{backend}.default_read_staleness_seconds"),
+            "storage.tidb.default_read_staleness_seconds".into(),
             seconds.to_string(),
         ));
     }
@@ -683,18 +489,78 @@ mod tests {
     }
 
     #[test]
-    fn tidb_is_the_implicit_backend_when_available() {
-        assert_eq!(default_backend(), "tidb");
-        assert_eq!(StorageConfig::default()._backend, "tidb");
+    fn storage_defaults_to_tidb() {
+        assert_eq!(
+            StorageConfig::default().connection_config(),
+            "mysql://extenddb:extenddb-local-dev@localhost:4000/extenddb_catalog"
+        );
     }
 
     #[test]
-    fn tidb_default_read_staleness_survives_runtime_config_wrappers() {
-        let cfg: AppConfig = toml::from_str(
+    fn removed_backend_selector_is_rejected_even_for_tidb() {
+        let error = toml::from_str::<AppConfig>(
             r#"
 [storage]
 backend = "tidb"
 
+[storage.tidb]
+connection_string = "mysql://extenddb:extenddb-local-dev@localhost:4000/extenddb_catalog"
+"#,
+        )
+        .expect_err("removed backend selector should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("backend selector has been removed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn removed_backend_selector_is_rejected() {
+        let error = toml::from_str::<AppConfig>(
+            r#"
+[storage]
+backend = "removed-backend"
+
+[storage.tidb]
+connection_string = "mysql://extenddb:extenddb-local-dev@localhost:4000/extenddb_catalog"
+"#,
+        )
+        .expect_err("removed backend selector should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("backend selector has been removed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn removed_tls_enabled_switch_is_rejected() {
+        let error = toml::from_str::<AppConfig>(
+            r#"
+[server.tls]
+enabled = true
+
+[storage.tidb]
+connection_string = "mysql://extenddb:extenddb-local-dev@localhost:4000/extenddb_catalog"
+"#,
+        )
+        .expect_err("removed TLS enabled switch should fail");
+
+        assert!(
+            error.to_string().contains("unknown field `enabled`"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn tidb_default_read_staleness_is_exposed_in_config_entries() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
 [storage.tidb]
 connection_string = "mysql://extenddb:extenddb-local-dev@localhost:4000/extenddb_catalog"
 default_read_staleness_seconds = 5
@@ -703,17 +569,6 @@ default_read_staleness_seconds = 5
         .expect("TiDB app config should parse");
 
         assert_eq!(cfg.storage.native_default_read_staleness_seconds(), Some(5));
-
-        let runtime = RuntimeStorageConfig::new(cfg.storage.as_trait(), &cfg.limits);
-        assert_eq!(
-            extenddb_storage::config::StorageConfig::native_default_read_staleness_seconds(
-                &runtime
-            ),
-            Some(5)
-        );
-
-        let owned = extenddb_storage::config::StorageConfig::clone_box(&runtime);
-        assert_eq!(owned.native_default_read_staleness_seconds(), Some(5));
 
         let entries = build_config_entries(&cfg);
         assert_eq!(

@@ -45,15 +45,6 @@ pub async fn auth_cache_metrics(
             .unwrap_or_default(),
         );
     }
-    out.insert(
-        "table_key_info".to_owned(),
-        serde_json::to_value(snapshot_to_json(
-            &state.table_key_info_cache.metrics().snapshot(),
-            state.table_key_info_cache.entry_count(),
-            state.table_key_info_cache.is_pass_through(),
-        ))
-        .unwrap_or_default(),
-    );
     if let Some(authz_metrics) = state.authz_cache.metrics_snapshot() {
         // The authz block carries one entry per sub-cache plus a single
         // pass_through flag for the whole authz cache (sub-caches share

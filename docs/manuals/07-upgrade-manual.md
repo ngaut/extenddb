@@ -4,7 +4,7 @@
 
 ## Current Status
 
-ExtendDB 0.1.0 defaults to the TiDB backend and currently expects TiDB catalog
+ExtendDB 0.1.0 uses TiDB storage and currently expects TiDB catalog
 version 0.0.29. Existing TiDB catalogs are upgraded in place by
 `extenddb migrate`.
 
@@ -83,13 +83,13 @@ small, repeatable catalog DML. Do not wrap TiDB migration files in `BEGIN` /
 ```sql
 -- Copyright 2026 ExtendDB contributors
 -- SPDX-License-Identifier: Apache-2.0
--- Migration 030: Brief description of what this adds/changes.
+-- Migration 032: Brief description of what this adds/changes.
 
 -- Your online DDL here.
 ALTER TABLE tables ADD COLUMN IF NOT EXISTS new_column TEXT;
 
 -- Bump the catalog version after the DDL statements are in place.
-UPDATE settings SET value = '0.0.30' WHERE key = 'catalog_version';
+UPDATE settings SET value = '0.0.32' WHERE key = 'catalog_version';
 ```
 
 ### 2. Register it in the migration runner
@@ -107,8 +107,8 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../storage-tidb/migrations/029_drop_role_permissions_boundary_column.sql"),
     ),
     (
-        "030_your_feature.sql",
-        include_str!("../../storage-tidb/migrations/030_your_feature.sql"),
+        "032_your_feature.sql",
+        include_str!("../../storage-tidb/migrations/032_your_feature.sql"),
     ),
 ];
 ```
@@ -118,7 +118,7 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
 In `crates/storage-tidb/src/lib.rs`:
 
 ```rust
-pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 30);
+pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 32);
 ```
 
 This must match the version written by your migration's `UPDATE settings` statement.

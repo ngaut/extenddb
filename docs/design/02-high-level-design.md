@@ -24,7 +24,7 @@ extenddb/
 
 `core` has no async runtime, I/O, HTTP, or database dependencies. `engine` owns
 DynamoDB behavior and calls storage traits. `server` owns wire protocol and web
-surfaces. `bin` wires the TiDB backend into the server.
+surfaces. `bin` wires TiDB storage into the server.
 
 ## Request Lifecycle
 
@@ -47,9 +47,9 @@ ExtendDB uses a catalog/data topology inside one TiDB cluster:
   index metadata, stream metadata, settings, metrics, and backup metadata.
 - Data tables store items once, with generated columns and native secondary
   indexes for GSI/LSI access.
-- Streams use TiDB storage with MVCC commit timestamps plus an in-transaction
+- Streams use TiDB storage with transaction TSO values plus an in-transaction
   ordinal for sequence ordering.
-- TTL uses TiDB native table TTL.
+- User-table TTL uses an ExtendDB expiry worker backed by TiDB lookup artifacts; fixed-retention internal tables use TiDB native TTL.
 - Backup/restore delegates physical data to TiDB BR.
 
 The catalog and data databases must stay in the same TiDB cluster so snapshot

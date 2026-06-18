@@ -36,12 +36,9 @@ documents every supported key:
 cp extenddb.sample.toml extenddb.toml
 ```
 
-The supported storage backend is TiDB:
+Configure the TiDB catalog connection:
 
 ```toml
-[storage]
-backend = "tidb"
-
 [storage.tidb]
 connection_string = "mysql://root@127.0.0.1:4000/extenddb_catalog"
 pool_size = 20
@@ -139,8 +136,9 @@ extenddb settings --config extenddb.toml list
 ```
 
 TiDB owns storage-level scheduling and capacity. Use TiDB Resource Control for
-distributed capacity governance, TiDB native TTL for expiration, and TiDB BR for
-physical backup/restore.
+distributed capacity governance, TiDB native TTL for fixed-retention internal
+tables, and TiDB BR for physical backup/restore. User-table TTL expiry is
+performed by ExtendDB so stream records and LSI accounting stay correct.
 
 ## Lifecycle Commands
 

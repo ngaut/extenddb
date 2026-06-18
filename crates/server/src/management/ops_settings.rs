@@ -8,83 +8,21 @@
 
 use extenddb_storage::management_store::{OpError, OpResult};
 
+pub const ALLOW_CREDENTIAL_IMPORT_DEFAULT: bool = true;
+pub const ALLOW_CREDENTIAL_IMPORT_DEFAULT_VALUE: &str = if ALLOW_CREDENTIAL_IMPORT_DEFAULT {
+    "true"
+} else {
+    "false"
+};
+
 /// Validator function for a setting value.
 pub type Validator = fn(&str) -> Result<(), &'static str>;
-
-/// Backend capabilities that determine which runtime settings are writable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeSettingContext {
-    backend_native_control_plane: bool,
-    backend_native_secondary_indexes: bool,
-    backend_native_capacity_control: bool,
-}
-
-impl RuntimeSettingContext {
-    pub fn from_storage_config(config: &dyn extenddb_storage::config::StorageConfig) -> Self {
-        Self {
-            backend_native_control_plane: config.uses_backend_native_control_plane(),
-            backend_native_secondary_indexes: config.uses_backend_native_secondary_indexes(),
-            backend_native_capacity_control: config.uses_backend_native_capacity_control(),
-        }
-    }
-
-    pub const fn frontend_owned() -> Self {
-        Self {
-            backend_native_control_plane: false,
-            backend_native_secondary_indexes: false,
-            backend_native_capacity_control: false,
-        }
-    }
-
-    pub const fn backend_native() -> Self {
-        Self {
-            backend_native_control_plane: true,
-            backend_native_secondary_indexes: true,
-            backend_native_capacity_control: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SettingScope {
-    AllBackends,
-    FrontendControlPlane,
-    FrontendSecondaryIndexes,
-    FrontendCapacityControl,
-}
-
-impl SettingScope {
-    fn is_supported(self, context: RuntimeSettingContext) -> bool {
-        match self {
-            Self::AllBackends => true,
-            Self::FrontendControlPlane => !context.backend_native_control_plane,
-            Self::FrontendSecondaryIndexes => !context.backend_native_secondary_indexes,
-            Self::FrontendCapacityControl => !context.backend_native_capacity_control,
-        }
-    }
-
-    fn unsupported_reason(self) -> &'static str {
-        match self {
-            Self::AllBackends => "is supported by every backend",
-            Self::FrontendControlPlane => {
-                "this backend uses native online DDL and control-plane coordination"
-            }
-            Self::FrontendSecondaryIndexes => {
-                "this backend uses native secondary indexes maintained from base-row writes"
-            }
-            Self::FrontendCapacityControl => {
-                "this backend uses native distributed capacity control"
-            }
-        }
-    }
-}
 
 /// Runtime setting definition.
 #[derive(Debug, Clone, Copy)]
 pub struct SettingSpec {
     pub key: &'static str,
     pub validator: Validator,
-    scope: SettingScope,
 }
 
 /// Known writable setting keys and their validators.
@@ -92,33 +30,47 @@ pub const KNOWN_KEYS: &[SettingSpec] = &[
     SettingSpec {
         key: "allow_credential_import",
         validator: validate_bool,
-        scope: SettingScope::AllBackends,
-    },
-    SettingSpec {
-        key: "control_plane_delay_seconds",
-        validator: validate_delay_seconds,
-        scope: SettingScope::FrontendControlPlane,
-    },
-    SettingSpec {
-        key: "gsi_propagation_delay_ms",
-        validator: validate_gsi_delay_ms,
-        scope: SettingScope::FrontendSecondaryIndexes,
     },
     SettingSpec {
         key: "log_level",
         validator: validate_log_level,
-        scope: SettingScope::AllBackends,
     },
     SettingSpec {
         key: "sqlx_log_level",
         validator: validate_log_level,
-        scope: SettingScope::AllBackends,
     },
     SettingSpec {
-        key: "throttling_enabled",
-        validator: validate_bool,
-        scope: SettingScope::FrontendCapacityControl,
+        key: "ttl_expiry_interval_ms",
+        validator: validate_ttl_expiry_interval_ms,
     },
+    SettingSpec {
+        key: "ttl_expiry_batch_size",
+        validator: validate_ttl_expiry_batch_size,
+    },
+    SettingSpec {
+        key: "ttl_expiry_table_scan_limit",
+        validator: validate_ttl_expiry_table_scan_limit,
+    },
+    SettingSpec {
+        key: "ttl_expiry_drain_batches",
+        validator: validate_ttl_expiry_drain_batches,
+    },
+];
+
+/// Legacy frontend-owned settings that are intentionally not writable on TiDB.
+const UNSUPPORTED_KEYS: &[(&str, &str)] = &[
+    (
+        "control_plane_delay_seconds",
+        "TiDB uses native online DDL and control-plane coordination",
+    ),
+    (
+        "gsi_propagation_delay_ms",
+        "TiDB secondary indexes are native and maintained from base-row writes",
+    ),
+    (
+        "throttling_enabled",
+        "TiDB Resource Control provides distributed capacity governance",
+    ),
 ];
 
 /// Read-only keys that cannot be changed via the settings API.
@@ -142,56 +94,61 @@ fn validate_bool(value: &str) -> Result<(), &'static str> {
     }
 }
 
-fn validate_delay_seconds(value: &str) -> Result<(), &'static str> {
-    match value.parse::<f64>() {
-        Ok(v) if (0.0..=300.0).contains(&v) => Ok(()),
-        Ok(_) => Err("must be between 0 and 300"),
-        Err(_) => Err("must be a non-negative number"),
+fn validate_int_range(value: &str, min: u64, max: u64) -> Result<(), &'static str> {
+    match value.parse::<u64>() {
+        Ok(parsed) if (min..=max).contains(&parsed) => Ok(()),
+        _ => Err("must be an integer in the supported range"),
     }
 }
 
-fn validate_gsi_delay_ms(value: &str) -> Result<(), &'static str> {
-    match value.parse::<u32>() {
-        Ok(0..=10000) => Ok(()),
-        Ok(_) => Err("must be between 0 and 10000"),
-        Err(_) => Err("must be a non-negative integer"),
-    }
+fn validate_ttl_expiry_interval_ms(value: &str) -> Result<(), &'static str> {
+    validate_int_range(value, 100, 60_000)
+}
+
+fn validate_ttl_expiry_batch_size(value: &str) -> Result<(), &'static str> {
+    validate_int_range(value, 1, 10_000)
+}
+
+fn validate_ttl_expiry_table_scan_limit(value: &str) -> Result<(), &'static str> {
+    validate_int_range(value, 1, 10_000)
+}
+
+fn validate_ttl_expiry_drain_batches(value: &str) -> Result<(), &'static str> {
+    validate_int_range(value, 1, 100)
 }
 
 fn setting_spec(key: &str) -> Option<&'static SettingSpec> {
     KNOWN_KEYS.iter().find(|spec| spec.key == key)
 }
 
-pub fn setting_is_supported(context: RuntimeSettingContext, key: &str) -> bool {
-    setting_spec(key).is_some_and(|spec| spec.scope.is_supported(context))
+pub fn setting_is_supported(key: &str) -> bool {
+    setting_spec(key).is_some()
 }
 
-pub fn known_writable_keys(context: RuntimeSettingContext) -> Vec<&'static str> {
-    KNOWN_KEYS
-        .iter()
-        .filter(|spec| spec.scope.is_supported(context))
-        .map(|spec| spec.key)
-        .collect()
+pub fn known_writable_keys() -> Vec<&'static str> {
+    KNOWN_KEYS.iter().map(|spec| spec.key).collect()
 }
 
-pub fn validate_setting(context: RuntimeSettingContext, key: &str, value: &str) -> OpResult<()> {
+pub fn validate_setting(key: &str, value: &str) -> OpResult<()> {
     if READONLY_KEYS.contains(&key) {
         return Err(OpError::Validation(format!("Setting '{key}' is read-only")));
+    }
+
+    if let Some((_, reason)) = UNSUPPORTED_KEYS
+        .iter()
+        .find(|(unsupported, _)| *unsupported == key)
+    {
+        return Err(OpError::Validation(format!(
+            "Setting '{key}' is not supported for TiDB because {reason}"
+        )));
     }
 
     let Some(spec) = setting_spec(key) else {
         return Err(OpError::Validation(format!(
             "Unknown setting '{key}'. Known writable keys: {}",
-            known_writable_keys(context).join(", ")
+            known_writable_keys().join(", ")
         )));
     };
-
-    if !spec.scope.is_supported(context) {
-        return Err(OpError::Validation(format!(
-            "Setting '{key}' is not supported for this deployment because {}",
-            spec.scope.unsupported_reason()
-        )));
-    }
 
     (spec.validator)(value)
         .map_err(|reason| OpError::Validation(format!("Invalid value for '{key}': {reason}")))?;
@@ -210,11 +167,10 @@ pub fn validate_setting(context: RuntimeSettingContext, key: &str, value: &str) 
 /// fails validation. Returns `OpError::Internal` on database errors.
 pub async fn set_setting(
     store: &dyn extenddb_storage::management_store::SettingsStore,
-    context: RuntimeSettingContext,
     key: &str,
     value: &str,
 ) -> OpResult<()> {
-    validate_setting(context, key, value)?;
+    validate_setting(key, value)?;
     store.set_setting(key, value).await?;
 
     tracing::warn!(
@@ -226,9 +182,7 @@ pub async fn set_setting(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        RuntimeSettingContext, known_writable_keys, setting_is_supported, validate_setting,
-    };
+    use super::{known_writable_keys, setting_is_supported, validate_setting};
     use extenddb_storage::management_store::OpError;
 
     fn validation_message(result: Result<(), OpError>) -> String {
@@ -239,53 +193,54 @@ mod tests {
     }
 
     #[test]
-    fn frontend_owned_context_accepts_frontend_settings() {
-        let context = RuntimeSettingContext::frontend_owned();
-
-        assert!(validate_setting(context, "control_plane_delay_seconds", "0.25").is_ok());
-        assert!(validate_setting(context, "gsi_propagation_delay_ms", "10").is_ok());
-        assert!(validate_setting(context, "throttling_enabled", "true").is_ok());
-    }
-
-    #[test]
-    fn backend_native_context_rejects_noop_frontend_settings() {
-        let context = RuntimeSettingContext::backend_native();
-
-        let control_plane = validation_message(validate_setting(
-            context,
-            "control_plane_delay_seconds",
-            "0.25",
-        ));
+    fn tidb_rejects_frontend_legacy_settings() {
+        let control_plane =
+            validation_message(validate_setting("control_plane_delay_seconds", "0.25"));
         assert!(control_plane.contains("native online DDL"));
 
-        let indexes =
-            validation_message(validate_setting(context, "gsi_propagation_delay_ms", "10"));
-        assert!(indexes.contains("native secondary indexes"));
+        let indexes = validation_message(validate_setting("gsi_propagation_delay_ms", "10"));
+        assert!(indexes.contains("secondary indexes are native"));
 
-        let throttling =
-            validation_message(validate_setting(context, "throttling_enabled", "true"));
-        assert!(throttling.contains("native distributed capacity control"));
+        let throttling = validation_message(validate_setting("throttling_enabled", "true"));
+        assert!(throttling.contains("Resource Control"));
     }
 
     #[test]
-    fn writable_key_list_is_capability_filtered() {
-        let context = RuntimeSettingContext::backend_native();
-
-        assert!(setting_is_supported(context, "log_level"));
-        assert!(!setting_is_supported(
-            context,
-            "control_plane_delay_seconds"
-        ));
+    fn writable_key_list_is_tidb_only() {
+        assert!(setting_is_supported("log_level"));
+        assert!(!setting_is_supported("control_plane_delay_seconds"));
         assert_eq!(
-            known_writable_keys(context),
-            vec!["allow_credential_import", "log_level", "sqlx_log_level"]
+            known_writable_keys(),
+            vec![
+                "allow_credential_import",
+                "log_level",
+                "sqlx_log_level",
+                "ttl_expiry_interval_ms",
+                "ttl_expiry_batch_size",
+                "ttl_expiry_table_scan_limit",
+                "ttl_expiry_drain_batches",
+            ]
         );
     }
 
     #[test]
+    fn ttl_worker_settings_are_range_checked() {
+        assert!(validate_setting("ttl_expiry_interval_ms", "100").is_ok());
+        assert!(validate_setting("ttl_expiry_batch_size", "10000").is_ok());
+        assert!(validate_setting("ttl_expiry_table_scan_limit", "128").is_ok());
+        assert!(validate_setting("ttl_expiry_drain_batches", "100").is_ok());
+
+        assert!(validate_setting("ttl_expiry_interval_ms", "99").is_err());
+        assert!(validate_setting("ttl_expiry_interval_ms", "60001").is_err());
+        assert!(validate_setting("ttl_expiry_batch_size", "0").is_err());
+        assert!(validate_setting("ttl_expiry_table_scan_limit", "not-a-number").is_err());
+        assert!(validate_setting("ttl_expiry_drain_batches", "0").is_err());
+        assert!(validate_setting("ttl_expiry_drain_batches", "101").is_err());
+    }
+
+    #[test]
     fn unknown_setting_message_lists_only_supported_keys() {
-        let context = RuntimeSettingContext::backend_native();
-        let message = validation_message(validate_setting(context, "not_a_setting", "true"));
+        let message = validation_message(validate_setting("not_a_setting", "true"));
 
         assert!(message.contains("allow_credential_import"));
         assert!(message.contains("log_level"));

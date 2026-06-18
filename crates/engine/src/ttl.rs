@@ -44,8 +44,8 @@ pub async fn handle_describe_time_to_live(
 
 /// Handle `UpdateTimeToLive` — enable or disable TTL on a table attribute.
 ///
-/// The storage backend owns the full TTL mutation, including any
-/// backend-specific lookup index or native TTL DDL.
+/// Storage owns the full TTL mutation, including any lookup index or native TTL
+/// DDL.
 ///
 /// # Errors
 ///

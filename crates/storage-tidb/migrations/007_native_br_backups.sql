@@ -1,6 +1,6 @@
 -- Copyright 2026 ExtendDB contributors
 -- SPDX-License-Identifier: Apache-2.0
--- Use TiDB BR as the TiDB backend's backup data plane.
+-- Use TiDB BR as the TiDB storage backup data plane.
 
 ALTER TABLE backups
     ADD COLUMN IF NOT EXISTS backup_backend VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT 'legacy-logical';

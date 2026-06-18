@@ -13,7 +13,6 @@ pub mod limits;
 pub mod metrics;
 pub mod provisioning;
 pub mod serde_helpers;
-pub mod throttle;
 pub mod types;
 pub mod validation;
 pub mod version;

@@ -9,18 +9,14 @@
 use std::path::Path;
 
 use clap::Args;
-use extenddb_storage::bootstrapper::BootstrapOptions;
+use extenddb_storage::bootstrap::BootstrapOptions;
+use extenddb_storage_tidb::TidbBootstrapper;
 
-use crate::config;
 use crate::init_helpers::{generate_config, generate_tls_cert_if_needed};
 
 #[derive(Args)]
 #[allow(clippy::doc_markdown)] // Clap help text, not rustdoc
 pub struct InitArgs {
-    /// Storage backend name
-    #[arg(long)]
-    backend: Option<String>,
-
     /// Data database name (default: extenddb)
     #[arg(long)]
     data_db: Option<String>,
@@ -115,18 +111,6 @@ fn discover_docs_dir() -> Option<String> {
 
 /// Returns exit code: 0 = success, 255 = existing config preserved.
 pub async fn run(args: InitArgs) -> anyhow::Result<u8> {
-    // Determine backend: CLI flag > config file > compiled default.
-    let backend = if let Some(ref b) = args.backend {
-        b.clone()
-    } else if Path::new(&args.config).exists() {
-        let app_config = config::load(&args.config)?;
-        app_config.storage._backend
-    } else {
-        config::default_backend()
-    };
-
-    println!("=== extenddb init (backend: {backend}) ===");
-
     // Check config file conflict early, before any database work
     if Path::new(&args.config).exists() && !args.overwrite {
         eprintln!(
@@ -137,9 +121,9 @@ pub async fn run(args: InitArgs) -> anyhow::Result<u8> {
         return Ok(255);
     }
 
-    // Create bootstrapper via registry (no hardcoded match!)
-    let bootstrapper = extenddb_storage::bootstrapper::create_bootstrapper(
-        &backend,
+    println!("=== extenddb init (TiDB) ===");
+
+    let bootstrapper = TidbBootstrapper::from_config(
         &args.config,
         BootstrapOptions {
             storage_host: args.storage_host.clone(),
@@ -266,23 +250,62 @@ pub async fn run(args: InitArgs) -> anyhow::Result<u8> {
     }
 
     // Generate or update extenddb.toml.
-    let backend = backend.as_str();
     let config_path = &args.config;
 
     if Path::new(config_path).exists() {
         std::fs::remove_file(config_path)?;
     }
-    generate_config(
-        config_path,
-        backend,
-        bootstrapper.as_ref(),
-        &bind_addr,
-        docs_dir.as_deref(),
-    )?;
+    generate_config(config_path, &bootstrapper, &bind_addr, docs_dir.as_deref())?;
 
     println!(
         "\n=== extenddb init complete ===\nStart the server with: extenddb serve --config {config_path}"
     );
 
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    fn init_args(config: String) -> InitArgs {
+        InitArgs {
+            data_db: None,
+            catalog_db: None,
+            storage_host: None,
+            storage_port: None,
+            storage_admin_user: None,
+            storage_admin_password: None,
+            extenddb_user: None,
+            extenddb_pass: None,
+            config,
+            bind_addr: None,
+            overwrite: false,
+            no_overwrite: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn init_preserves_existing_config_before_storage_validation() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("extenddb-init-existing-{suffix}.toml"));
+        let contents = "[storage]\nbackend = \"removed-backend\"\n";
+        std::fs::write(&path, contents).expect("write temp config");
+
+        let code = run(init_args(path.to_string_lossy().into_owned()))
+            .await
+            .expect("existing config should be preserved");
+
+        assert_eq!(code, 255);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read temp config"),
+            contents
+        );
+        std::fs::remove_file(path).expect("remove temp config");
+    }
 }

@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `query` and `scan` implementations for the `TiDB` backend.
+//! `query` and `scan` implementations for `TiDB` storage.
 
 use extenddb_core::expression::PathElement;
 use extenddb_core::expression::{ExpressionMaps, KeyCondition};

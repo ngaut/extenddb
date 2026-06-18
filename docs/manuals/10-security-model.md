@@ -9,7 +9,7 @@ This document describes the security architecture of extenddb, including the thr
 ### What extenddb Protects
 
 - **Data confidentiality**: Items stored in DynamoDB tables are accessible only to authenticated and authorized principals.
-- **Data integrity**: Write operations are atomic (including stream records, index updates, and side effects). Concurrent writes use the configured backend's transaction and locking model.
+- **Data integrity**: Write operations are atomic (including stream records, index updates, and side effects). Concurrent writes use TiDB transactions and distributed row locks.
 - **Access control**: IAM policies enforce least-privilege access. Explicit Deny always takes precedence.
 - **Credential security**: Access key secrets are encrypted at rest (AES-256-GCM). Console passwords are hashed (bcrypt).
 - **Transport security**: TLS encrypts data in transit between clients and extenddb. TLS is mandatory — the server refuses to start without it.
@@ -17,14 +17,14 @@ This document describes the security architecture of extenddb, including the thr
 ### Trust Boundaries
 
 1. **Client ↔ extenddb**: Untrusted. All input is validated. SigV4 signatures are verified. IAM policies are evaluated.
-2. **extenddb ↔ storage backend**: Trusted network. The backend connection string contains credentials. Use backend transport encryption in production.
+2. **extenddb ↔ TiDB**: Trusted network. The TiDB connection string contains credentials. Use TiDB transport encryption in production.
 3. **Admin ↔ Management API/Console**: Authenticated via admin credentials or IAM user credentials. CSRF tokens protect the web console.
 
 ### Out of Scope
 
-- **Storage security**: extenddb relies on backend access controls and network security. Securing the storage cluster (firewall rules, TLS, authentication) is the operator's responsibility.
+- **Storage security**: extenddb relies on TiDB access controls and network security. Securing the storage cluster (firewall rules, TLS, authentication) is the operator's responsibility.
 - **Operating system security**: File permissions on `extenddb.toml`, TLS keys, and the PID file are the operator's responsibility.
-- **Key management**: Access key secrets are encrypted with a locally generated AES key stored in the catalog database. For HSM-grade key management, use a KMS-backed encryption layer at the storage backend level.
+- **Key management**: Access key secrets are encrypted with a locally generated AES key stored in the catalog database. For HSM-grade key management, use a KMS-backed encryption layer at the TiDB layer.
 
 ## Authentication
 
@@ -56,7 +56,10 @@ extenddb uses SigV4 signature verification with a local credential store and IAM
 - Secret keys encrypted with AES-256-GCM using a per-catalog encryption key
 - Encryption key generated during `extenddb init` and stored in the catalog database
 - Console passwords hashed with bcrypt (cost factor 12)
-- No in-process credential cache — every request reads directly from the catalog store
+- Credential and IAM policy lookups use in-process stale-while-revalidate caches.
+  Management mutations invalidate local entries and bump a TiDB-backed
+  `auth_cache_epoch` so sibling frontends flush their local auth caches; hard TTLs
+  bound drift from direct catalog writes.
 
 ## Authorization
 
@@ -152,11 +155,11 @@ Resources are identified by ARN: `arn:aws:dynamodb:<region>:<account-id>:table/<
 
 ### TLS Configuration
 
-TLS is mandatory. The server refuses to start with `tls.enabled = false`. extenddb uses rustls (no OpenSSL dependency).
+TLS is mandatory. extenddb uses rustls (no OpenSSL dependency).
 
 - `extenddb init` generates a self-signed certificate and private key at `~/.extenddb/tls/`
 - Production deployments should replace with CA-signed certificates
-- When TLS is enabled, HSTS headers (`Strict-Transport-Security`) are sent automatically
+- HSTS headers (`Strict-Transport-Security`) are sent automatically
 
 ```toml
 [server.tls]
@@ -192,7 +195,7 @@ Input validation is layered:
 
 1. **Server layer**: Request size limits, header validation, content-type checks
 2. **Engine layer**: All user-supplied strings validated before reaching storage — table names, attribute names, expression strings, policy documents
-3. **Storage layer**: Parameterized queries for values; dynamic DDL identifiers are backend-validated and quoted before formatting
+3. **Storage layer**: Parameterized queries for values; dynamic DDL identifiers are TiDB-validated and quoted before formatting
 
 ### Expression Limits
 

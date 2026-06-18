@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Query and scan SQL helpers for the `TiDB` backend.
+//! Query and scan SQL helpers for `TiDB` storage.
 //!
 //! Contains condition evaluation, sort-key SQL generation, and dynamic
 //! parameter binding for `Query` and `Scan` operations.

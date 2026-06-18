@@ -6,7 +6,8 @@
 //! Reads current catalog version, runs pending migrations, and reports the result.
 
 use clap::Args;
-use extenddb_storage::bootstrapper::BootstrapOptions;
+use extenddb_storage::bootstrap::BootstrapOptions;
+use extenddb_storage_tidb::TidbBootstrapper;
 
 use crate::config;
 
@@ -37,16 +38,13 @@ pub async fn run(args: MigrateArgs) -> anyhow::Result<()> {
             args.config,
         );
     }
-    let app_config = config::load(&args.config)?;
-    let backend = &app_config.storage._backend;
+    let _app_config = config::load(&args.config)?;
 
     println!("=== extenddb migrate ===");
     println!("Config:           {}", args.config);
     println!();
 
-    // Create bootstrapper via registry
-    let bootstrap = extenddb_storage::bootstrapper::create_bootstrapper(
-        backend,
+    let bootstrap = TidbBootstrapper::from_config(
         &args.config,
         BootstrapOptions {
             admin_user: args.storage_admin_user.clone(),
@@ -71,7 +69,7 @@ pub async fn run(args: MigrateArgs) -> anyhow::Result<()> {
     if catalog_version_matches && !args.yes {
         println!();
         println!(
-            "Catalog version is current ({expected}). Use --yes to check and apply backend schema migrations."
+            "Catalog version is current ({expected}). Use --yes to check and apply TiDB schema migrations."
         );
         return Ok(());
     }

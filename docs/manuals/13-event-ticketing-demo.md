@@ -79,7 +79,7 @@ export EXTENDDB_ADMIN_PASSWORD="<password-from-init-output>"
 ./target/release/extenddb serve --config extenddb.toml
 ```
 
-extenddb daemonizes automatically — no output appears in the terminal. Verify it's running:
+extenddb daemonizes automatically by default. Use `--foreground` if you want logs to stay attached to the terminal. Verify it's running:
 
 ```bash
 curl --cacert ~/.extenddb/tls/cert.pem https://127.0.0.1:8000/health
@@ -437,9 +437,9 @@ aws dynamodb transact-get-items --transact-items '[
 Open a **second terminal** and run the streams consumer script. This will
 print change events as they arrive — including the TTL deletion event.
 
-TiDB note: the TiDB backend delegates TTL deletion to native TiDB table TTL.
-The expired ticket is still deleted, but TiDB does not synthesize ExtendDB
-Streams REMOVE records for native TTL deletions.
+TiDB note: ExtendDB uses TiDB lookup artifacts to find expired user items, then
+deletes them through ExtendDB's transactional write path. That means expired
+tickets produce the same service-owned Streams REMOVE records as DynamoDB TTL.
 
 ```bash
 export AWS_CA_BUNDLE=~/.extenddb/tls/cert.pem
@@ -503,9 +503,9 @@ aws dynamodb get-item \
 ```
 
 **Now wait approximately 2 minutes.** While waiting, proceed to step 13 to
-check metrics. On backends with an ExtendDB TTL worker, when the TTL fires, the
-streams consumer will print a REMOVE event with `userIdentity.type: Service` —
-proving the deletion was automatic.
+check metrics. The ExtendDB TTL worker should delete the expired item and the
+streams consumer should print a service-owned REMOVE record for this automatic
+deletion.
 
 ---
 
@@ -541,17 +541,9 @@ aws dynamodb get-item \
 # Should return empty (no Item)
 ```
 
-On backends with an ExtendDB TTL worker, check the streams consumer terminal —
-you should see:
-
-```
-REMOVE: {'event_id': {'S': 'EVT-002'}, 'ticket_id': {'S': 'TKT-002'}}
-  userIdentity: {'type': 'Service', 'principalId': 'dynamodb.amazonaws.com'}
-```
-
-This confirms TTL-based deletion generates a streams event with the service
-principal on worker-driven TTL backends. TiDB-native TTL deletes the item inside
-TiDB and does not currently emit this ExtendDB Streams record.
+The TTL worker deletes the item through the same transactional path as ordinary
+deletes, so a stream-enabled table should also emit a service-owned REMOVE
+record for the automatic expiration.
 
 ---
 

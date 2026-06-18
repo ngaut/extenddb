@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `TiDB` storage backend for extenddb.
+//! `TiDB` storage for extenddb.
 //!
 //! Implements the `TableEngine` and `DataEngine` traits from `extenddb-storage`
 //! using `TiDB` via `sqlx`. All SQL uses parameterized queries exclusively
@@ -12,6 +12,7 @@ mod admin_store;
 mod authorization_store;
 mod backup_engine;
 mod bootstrapper;
+mod catalog_check;
 mod catalog_store;
 mod cluster_capabilities;
 mod cluster_topology;
@@ -23,7 +24,6 @@ mod delete_table;
 mod management_store;
 mod metadata_engine;
 mod migrations;
-mod operations;
 mod stream_engine;
 mod table_attributes;
 mod table_engine;
@@ -34,81 +34,10 @@ mod worker_store;
 mod workers;
 
 pub use bootstrapper::TidbBootstrapper;
+pub use catalog_check::{catalog_check, validate_identifier};
 pub use catalog_store::TidbCatalogStore;
-pub use config::TidbStorageConfig;
-pub use config::parse_connection_string;
+pub use config::{TidbStorageConfig, parse_connection_string, redact_connection_string};
 pub use credential_store::DbCredentialStore;
-
-// Auto-register the Tidb backend at compile time
-inventory::submit! {
-    extenddb_storage::bootstrapper::BackendRegistration {
-        name: "tidb",
-        factory: |config_path, options| {
-            Box::pin(async move {
-                let store = TidbBootstrapper::from_config(&config_path, options).await?;
-                Ok(Box::new(store) as Box<dyn extenddb_storage::bootstrapper::Bootstrapper>)
-            })
-        }
-    }
-}
-
-// Auto-register TiDB operations engine
-inventory::submit! {
-    extenddb_storage::operations::OperationsEngineRegistration {
-        name: "tidb",
-        operations: &operations::TidbOperationsEngine,
-    }
-}
-
-// Auto-register TiDB config deserializer
-inventory::submit! {
-    extenddb_storage::config::StorageConfigRegistration {
-        backend: "tidb",
-        deserializer: |table| {
-            let config: TidbStorageConfig = table.clone().try_into()
-                .map_err(|e: toml::de::Error| format!("Failed to parse tidb config: {}", e))?;
-            Ok(Box::new(config) as Box<dyn extenddb_storage::config::StorageConfig>)
-        },
-        default_config: || {
-            Box::new(TidbStorageConfig::default()) as Box<dyn extenddb_storage::config::StorageConfig>
-        },
-        default_priority: Some(100),
-    }
-}
-
-// Auto-register TiDB settings store factory
-inventory::submit! {
-    extenddb_storage::settings_store::SettingsStoreRegistration {
-        backend: "tidb",
-        factory: |connection_string| {
-            let connection_string = config::sqlx_connection_string(connection_string);
-            Box::pin(async move {
-                let pool = tidb_pool_options(MIN_POOL_SIZE, 0)
-                    .connect(&connection_string)
-                    .await
-                    .map_err(|e| extenddb_storage::settings_store::SettingsStoreError::ConnectionFailed(e.to_string()))?;
-                Ok(Box::new(TidbCatalogStore::new(pool)) as Box<dyn extenddb_storage::management_store::SettingsStore>)
-            })
-        },
-    }
-}
-
-// Auto-register TiDB diagnostics store factory
-inventory::submit! {
-    extenddb_storage::diagnostics_store::DiagnosticsStoreRegistration {
-        backend: "tidb",
-        factory: |connection_string| {
-            let connection_string = config::sqlx_connection_string(connection_string);
-            Box::pin(async move {
-                let pool = tidb_pool_options(MIN_POOL_SIZE, 0)
-                    .connect(&connection_string)
-                    .await
-                    .map_err(|e| extenddb_storage::diagnostics_store::DiagnosticsStoreError::ConnectionFailed(e.to_string()))?;
-                Ok(Box::new(TidbCatalogStore::new(pool)) as Box<dyn extenddb_storage::diagnostics::DiagnosticsStore>)
-            })
-        },
-    }
-}
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -127,7 +56,7 @@ use crate::tidb_util::{
 ///
 /// The tuple is the single source of truth. Use `CATALOG_VERSION.to_string()`
 /// wherever a string representation is needed.
-pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 29);
+pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 31);
 
 /// Minimum number of connections allowed per pool.
 ///
@@ -136,7 +65,39 @@ pub const CATALOG_VERSION: CatalogVersion = CatalogVersion::new(0, 0, 29);
 /// Configured values below the floor are clamped at startup with a warning.
 const MIN_POOL_SIZE: u32 = 10;
 
-/// `TiDB` storage backend configuration.
+pub async fn create_settings_store(
+    connection_string: &str,
+) -> Result<
+    Box<dyn extenddb_storage::management_store::SettingsStore>,
+    extenddb_storage::settings_store::SettingsStoreError,
+> {
+    let connection_string = config::sqlx_connection_string(connection_string);
+    let pool = tidb_pool_options(MIN_POOL_SIZE, 0)
+        .connect(&connection_string)
+        .await
+        .map_err(|e| {
+            extenddb_storage::settings_store::SettingsStoreError::ConnectionFailed(e.to_string())
+        })?;
+    Ok(Box::new(TidbCatalogStore::new(pool)))
+}
+
+pub async fn create_diagnostics_store(
+    connection_string: &str,
+) -> Result<
+    Box<dyn extenddb_storage::diagnostics::DiagnosticsStore>,
+    extenddb_storage::diagnostics::DiagnosticsStoreError,
+> {
+    let connection_string = config::sqlx_connection_string(connection_string);
+    let pool = tidb_pool_options(MIN_POOL_SIZE, 0)
+        .connect(&connection_string)
+        .await
+        .map_err(|e| {
+            extenddb_storage::diagnostics::DiagnosticsStoreError::ConnectionFailed(e.to_string())
+        })?;
+    Ok(Box::new(TidbCatalogStore::new(pool)))
+}
+
+/// `TiDB` storage configuration.
 pub struct TidbConfig {
     pub connection_string: String,
     /// Maximum connections for strong and default-read data-plane pools.
@@ -153,7 +114,7 @@ pub struct TidbConfig {
     pub resource_group: Option<String>,
 }
 
-/// `TiDB` storage backend.
+/// `TiDB` storage engine.
 ///
 /// The engine no longer stores a single `account_id`. Instead, `account_id`
 /// is passed per-request through the storage trait methods, enabling
@@ -260,7 +221,7 @@ impl TidbEngine {
             data_default_read_pool,
             region: region.to_owned(),
             limits: config.limits.clone(),
-            native_backup: backup_engine::TidbNativeBackupConfig::from_storage_config(
+            native_backup: backup_engine::TidbNativeBackupConfig::from_native_backup_config(
                 config.native_backup.clone(),
             ),
             control_plane_notify: Arc::new(tokio::sync::Notify::new()),
@@ -349,7 +310,7 @@ impl TidbEngine {
         Ok(row.map_or_else(|| "(not configured)".to_owned(), |(name,)| name))
     }
 
-    /// Returns a reference to the data pool for backend runtime workers.
+    /// Returns a reference to the data pool for storage runtime workers.
     pub fn data_pool(&self) -> &MySqlPool {
         &self.data_pool
     }
@@ -385,19 +346,250 @@ fn normalized_pool_size(config_key: &'static str, configured: u32) -> u32 {
 fn validate_tidb_limits(limits: &LimitsConfig) -> Result<(), StorageError> {
     if limits.max_partition_key_size_bytes > data::DYNAMODB_HASH_KEY_COLUMN_BYTES {
         return Err(StorageError::Configuration(format!(
-            "TiDB backend supports partition keys up to {} bytes because native clustered and secondary indexes must fit TiDB's 3072-byte key limit; configured limit is {}",
+            "TiDB storage supports partition keys up to {} bytes because native clustered and secondary indexes must fit TiDB's 3072-byte key limit; configured limit is {}",
             data::DYNAMODB_HASH_KEY_COLUMN_BYTES,
             limits.max_partition_key_size_bytes
         )));
     }
     if limits.max_sort_key_size_bytes > data::DYNAMODB_SORT_KEY_COLUMN_BYTES {
         return Err(StorageError::Configuration(format!(
-            "TiDB backend supports sort keys up to {} bytes because native clustered and secondary indexes must fit TiDB's 3072-byte key limit; configured limit is {}",
+            "TiDB storage supports sort keys up to {} bytes because native clustered and secondary indexes must fit TiDB's 3072-byte key limit; configured limit is {}",
             data::DYNAMODB_SORT_KEY_COLUMN_BYTES,
             limits.max_sort_key_size_bytes
         )));
     }
     Ok(())
+}
+
+// ============================================================================
+// Server components
+// ============================================================================
+
+use extenddb_auth::CredentialStore;
+use extenddb_storage::hooks::{ServerRuntimeHooks, StorageHealthError, WorkerContext};
+use extenddb_storage::server_components::{ServerComponents, StorageInitError};
+
+/// Backend-specific runtime hooks for TiDB.
+struct TidbRuntimeHooks {
+    engine: Arc<TidbEngine>,
+    catalog_store_pool: MySqlPool,
+    control_plane_notify: Arc<tokio::sync::Notify>,
+    data_db_name: String,
+    resource_group: Option<String>,
+}
+
+const BACKEND_HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
+
+async fn check_tidb_catalog_pool(
+    name: &'static str,
+    pool: &MySqlPool,
+) -> Result<(), StorageHealthError> {
+    let query = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM settings WHERE `key` = 'catalog_version' LIMIT 1",
+    )
+    .fetch_optional(pool);
+
+    match tokio::time::timeout(BACKEND_HEALTH_TIMEOUT, query).await {
+        Ok(Ok(Some(_))) => Ok(()),
+        Ok(Ok(None)) => Err(StorageHealthError::new(format!(
+            "{name}: catalog_version missing"
+        ))),
+        Ok(Err(error)) => Err(StorageHealthError::new(format!("{name}: {error}"))),
+        Err(_) => Err(StorageHealthError::new(format!("{name}: timed out"))),
+    }
+}
+
+async fn check_tidb_data_pool(
+    name: &'static str,
+    pool: &MySqlPool,
+) -> Result<(), StorageHealthError> {
+    let query =
+        sqlx::query_scalar::<_, i32>("SELECT 1 FROM stream_records WHERE shard_id = '' LIMIT 1")
+            .fetch_optional(pool);
+
+    match tokio::time::timeout(BACKEND_HEALTH_TIMEOUT, query).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(StorageHealthError::new(format!("{name}: {error}"))),
+        Err(_) => Err(StorageHealthError::new(format!("{name}: timed out"))),
+    }
+}
+
+fn health_result(
+    results: impl IntoIterator<Item = Result<(), StorageHealthError>>,
+) -> Result<(), StorageHealthError> {
+    let failures: Vec<String> = results
+        .into_iter()
+        .filter_map(|result| result.err().map(|error| error.to_string()))
+        .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(StorageHealthError::new(failures.join("; ")))
+    }
+}
+
+#[async_trait::async_trait]
+impl ServerRuntimeHooks for TidbRuntimeHooks {
+    async fn spawn_workers(&self, ctx: &WorkerContext) {
+        // Backend-specific workers that need TiDB internals
+
+        // 1. Control plane transitions poller
+        let storage_for_poller = self.engine.clone();
+        let cp_notify = self.control_plane_notify.clone();
+        tokio::spawn(async move {
+            workers::poll_control_plane_transitions(storage_for_poller, cp_notify).await
+        });
+
+        // 2. DynamoDB user-table TTL expiry. Internal fixed-retention tables use
+        // TiDB native TTL, but user item expiry must flow through ExtendDB so
+        // streams and LSI accounting stay correct.
+        let storage_for_ttl = self.engine.clone();
+        let ttl_metrics = ctx.metrics.clone();
+        tokio::spawn(async move { workers::ttl_expiry_worker(storage_for_ttl, ttl_metrics).await });
+
+        // 3. Pool metrics worker - samples every TiDB pool opened by this frontend.
+        let pools = vec![
+            self.engine.pool.clone(),
+            self.engine.data_pool().clone(),
+            self.engine.data_default_read_pool.clone(),
+            self.catalog_store_pool.clone(),
+        ];
+        let metrics = ctx.metrics.clone();
+        tokio::spawn(async move { workers::pool_metrics_worker(pools, metrics).await });
+    }
+
+    async fn health_check(&self) -> Result<(), StorageHealthError> {
+        let catalog = check_tidb_catalog_pool("tidb.catalog_metadata_pool", &self.engine.pool);
+        let strong_data = check_tidb_data_pool("tidb.strong_data_pool", self.engine.data_pool());
+        let default_read = check_tidb_data_pool(
+            "tidb.default_read_data_pool",
+            &self.engine.data_default_read_pool,
+        );
+        let catalog_store =
+            check_tidb_catalog_pool("tidb.catalog_store_pool", &self.catalog_store_pool);
+
+        let results = tokio::join!(catalog, strong_data, default_read, catalog_store);
+        health_result([results.0, results.1, results.2, results.3])
+    }
+
+    fn storage_info(&self) -> Option<String> {
+        Some(match &self.resource_group {
+            Some(resource_group) => {
+                format!(
+                    "data_db={}, resource_group={resource_group}",
+                    self.data_db_name
+                )
+            }
+            None => format!("data_db={}", self.data_db_name),
+        })
+    }
+}
+
+pub async fn create_server_components(
+    config: &TidbStorageConfig,
+    limits: &LimitsConfig,
+    region: &str,
+) -> Result<ServerComponents, StorageInitError> {
+    let connection_string = config.connection_string.clone();
+    let catalog_pool_size = effective_pool_size(config.catalog_pool_size());
+    let resource_group = config.native_capacity_resource_group().map(str::to_owned);
+
+    let tidb_config = TidbConfig {
+        connection_string: connection_string.clone(),
+        pool_size: config.pool_size,
+        catalog_pool_size: config.catalog_pool_size(),
+        default_read_staleness_seconds: config.native_default_read_staleness_seconds(),
+        limits: limits.clone(),
+        native_backup: config.native_backup_config(),
+        resource_group: resource_group.clone(),
+    };
+
+    let engine = TidbEngine::new(&tidb_config, region)
+        .await
+        .map_err(|error| match error {
+            StorageError::Configuration(details) => StorageInitError::InitializationFailed(details),
+            error => StorageInitError::ConnectionFailed {
+                target: "TiDB".to_owned(),
+                details: error.to_string(),
+            },
+        })?;
+
+    engine.check_catalog_version().await.map_err(|e| match e {
+        StorageError::CatalogVersionMismatch { expected, found } => {
+            StorageInitError::CatalogVersionMismatch { expected, found }
+        }
+        _ => StorageInitError::InitializationFailed(e.to_string()),
+    })?;
+
+    engine.repair_ttl_artifacts().await.map_err(|e| {
+        StorageInitError::InitializationFailed(format!("Failed to repair TiDB TTL artifacts: {e}"))
+    })?;
+
+    match engine.process_control_plane_transitions().await {
+        Ok(ref t) if t.is_empty() => {}
+        Ok(transitions) => {
+            for (name, transition) in &transitions {
+                tracing::info!("Recovered table '{name}': {transition}");
+            }
+        }
+        Err(e) => tracing::error!("Failed to recover control plane transitions: {e}"),
+    }
+
+    let data_db_name = engine
+        .get_data_database_info()
+        .await
+        .unwrap_or_else(|_| "(query failed)".to_owned());
+    let control_plane_notify = engine.control_plane_notify.clone();
+    let engine = Arc::new(engine);
+
+    let catalog_pool_options = tidb_pool_options_with_resource_group(
+        catalog_pool_size,
+        catalog_pool_size.min(2),
+        resource_group.as_deref(),
+    )
+    .map_err(|e| StorageInitError::InitializationFailed(e.to_string()))?;
+    let catalog_pool = catalog_pool_options
+        .connect(&crate::config::sqlx_connection_string(&connection_string))
+        .await
+        .map_err(|e| StorageInitError::ConnectionFailed {
+            target: "TiDB".to_owned(),
+            details: format!("Failed to create catalog pool: {e}"),
+        })?;
+
+    let enc_key: Option<String> =
+        sqlx::query_scalar("SELECT value FROM settings WHERE `key` = 'encryption_key'")
+            .fetch_optional(&catalog_pool)
+            .await
+            .map_err(|e| {
+                StorageInitError::InitializationFailed(format!(
+                    "Failed to fetch encryption key: {e}"
+                ))
+            })?;
+
+    let catalog_store = Arc::new(match enc_key {
+        Some(k) => TidbCatalogStore::with_encryption_key(catalog_pool.clone(), k),
+        None => return Err(StorageInitError::MissingEncryptionKey),
+    }) as Arc<dyn extenddb_storage::CatalogStore>;
+
+    let enc_key = extenddb_storage::CatalogStore::cached_encryption_key(&*catalog_store)
+        .ok_or(StorageInitError::MissingEncryptionKey)?;
+    let cred_store: Arc<dyn CredentialStore> =
+        Arc::new(DbCredentialStore::new(catalog_pool.clone(), enc_key));
+
+    let runtime_hooks = Arc::new(TidbRuntimeHooks {
+        engine: engine.clone(),
+        catalog_store_pool: catalog_pool.clone(),
+        control_plane_notify,
+        data_db_name,
+        resource_group,
+    }) as Arc<dyn ServerRuntimeHooks>;
+
+    Ok(ServerComponents {
+        engine,
+        catalog_store,
+        credential_store: cred_store,
+        runtime_hooks: Some(runtime_hooks),
+    })
 }
 
 #[cfg(test)]
@@ -408,7 +600,7 @@ mod tests {
     use super::{MIN_POOL_SIZE, effective_pool_size, validate_tidb_limits};
 
     #[test]
-    fn tidb_pool_sizes_are_clamped_to_the_backend_minimum() {
+    fn tidb_pool_sizes_are_clamped_to_the_tidb_minimum() {
         assert_eq!(effective_pool_size(0), MIN_POOL_SIZE);
         assert_eq!(effective_pool_size(MIN_POOL_SIZE - 1), MIN_POOL_SIZE);
         assert_eq!(effective_pool_size(MIN_POOL_SIZE), MIN_POOL_SIZE);
@@ -444,259 +636,5 @@ mod tests {
 
         assert!(matches!(err, StorageError::Configuration(_)));
         assert!(err.to_string().contains("sort keys up to 1024 bytes"));
-    }
-}
-
-// ============================================================================
-// ServerComponents Factory Registration
-// ============================================================================
-
-use extenddb_auth::CredentialStore;
-use extenddb_storage::hooks::{BackendHealthError, ServerRuntimeHooks, WorkerContext};
-use extenddb_storage::server_components::{
-    BackendError, ServerComponents, ServerComponentsRegistration,
-};
-
-/// Backend-specific runtime hooks for TiDB.
-struct TidbRuntimeHooks {
-    engine: Arc<TidbEngine>,
-    catalog_store_pool: MySqlPool,
-    control_plane_notify: Arc<tokio::sync::Notify>,
-    data_db_name: String,
-    resource_group: Option<String>,
-}
-
-const BACKEND_HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
-
-async fn check_tidb_catalog_pool(
-    name: &'static str,
-    pool: &MySqlPool,
-) -> Result<(), BackendHealthError> {
-    let query = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM settings WHERE `key` = 'catalog_version' LIMIT 1",
-    )
-    .fetch_optional(pool);
-
-    match tokio::time::timeout(BACKEND_HEALTH_TIMEOUT, query).await {
-        Ok(Ok(Some(_))) => Ok(()),
-        Ok(Ok(None)) => Err(BackendHealthError::new(format!(
-            "{name}: catalog_version missing"
-        ))),
-        Ok(Err(error)) => Err(BackendHealthError::new(format!("{name}: {error}"))),
-        Err(_) => Err(BackendHealthError::new(format!("{name}: timed out"))),
-    }
-}
-
-async fn check_tidb_data_pool(
-    name: &'static str,
-    pool: &MySqlPool,
-) -> Result<(), BackendHealthError> {
-    let query =
-        sqlx::query_scalar::<_, i32>("SELECT 1 FROM stream_records WHERE shard_id = '' LIMIT 1")
-            .fetch_optional(pool);
-
-    match tokio::time::timeout(BACKEND_HEALTH_TIMEOUT, query).await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(error)) => Err(BackendHealthError::new(format!("{name}: {error}"))),
-        Err(_) => Err(BackendHealthError::new(format!("{name}: timed out"))),
-    }
-}
-
-fn health_result(
-    results: impl IntoIterator<Item = Result<(), BackendHealthError>>,
-) -> Result<(), BackendHealthError> {
-    let failures: Vec<String> = results
-        .into_iter()
-        .filter_map(|result| result.err().map(|error| error.to_string()))
-        .collect();
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        Err(BackendHealthError::new(failures.join("; ")))
-    }
-}
-
-#[async_trait::async_trait]
-impl ServerRuntimeHooks for TidbRuntimeHooks {
-    async fn spawn_workers(&self, ctx: &WorkerContext) {
-        // Backend-specific workers that need TiDB internals
-
-        // 1. Control plane transitions poller
-        let storage_for_poller = self.engine.clone();
-        let cp_notify = self.control_plane_notify.clone();
-        tokio::spawn(async move {
-            workers::poll_control_plane_transitions(storage_for_poller, cp_notify).await
-        });
-
-        // 2. Pool metrics worker - samples every TiDB pool opened by this frontend.
-        let pools = vec![
-            self.engine.pool.clone(),
-            self.engine.data_pool().clone(),
-            self.engine.data_default_read_pool.clone(),
-            self.catalog_store_pool.clone(),
-        ];
-        let metrics = ctx.metrics.clone();
-        tokio::spawn(async move { workers::pool_metrics_worker(pools, metrics).await });
-    }
-
-    async fn health_check(&self) -> Result<(), BackendHealthError> {
-        let catalog = check_tidb_catalog_pool("tidb.catalog_metadata_pool", &self.engine.pool);
-        let strong_data = check_tidb_data_pool("tidb.strong_data_pool", self.engine.data_pool());
-        let default_read = check_tidb_data_pool(
-            "tidb.default_read_data_pool",
-            &self.engine.data_default_read_pool,
-        );
-        let catalog_store =
-            check_tidb_catalog_pool("tidb.catalog_store_pool", &self.catalog_store_pool);
-
-        let results = tokio::join!(catalog, strong_data, default_read, catalog_store);
-        health_result([results.0, results.1, results.2, results.3])
-    }
-
-    fn backend_info(&self) -> Option<String> {
-        Some(match &self.resource_group {
-            Some(resource_group) => {
-                format!(
-                    "data_db={}, resource_group={resource_group}",
-                    self.data_db_name
-                )
-            }
-            None => format!("data_db={}", self.data_db_name),
-        })
-    }
-}
-
-// Register the TiDB backend factory
-inventory::submit! {
-    ServerComponentsRegistration {
-        backend: "tidb",
-        factory: |config, region| {
-            let connection_string = config.connection_config().to_string();
-            let max_connections = config.max_connections();
-            let max_catalog_connections = config.max_catalog_connections();
-            let limits = config.runtime_limits().cloned().unwrap_or_default();
-            let native_backup = config.native_backup_config().unwrap_or_default();
-            let resource_group = config.native_capacity_resource_group().map(str::to_owned);
-            let default_read_staleness_seconds = config.native_default_read_staleness_seconds();
-            let region = region.to_string();
-            Box::pin(async move {
-                let pool_size = normalized_pool_size("storage.tidb.pool_size", max_connections);
-                let catalog_pool_size = normalized_pool_size(
-                    "storage.tidb.catalog_pool_size",
-                    max_catalog_connections,
-                );
-
-                // Build TidbConfig from extracted values
-                let tidb_config = TidbConfig {
-                    connection_string: connection_string.clone(),
-                    pool_size,
-                    catalog_pool_size,
-                    default_read_staleness_seconds,
-                    limits,
-                    native_backup,
-                    resource_group: resource_group.clone(),
-                };
-
-                // Create TidbEngine
-                let engine = TidbEngine::new(&tidb_config, &region)
-                    .await
-                    .map_err(|error| match error {
-                        StorageError::Configuration(details) => {
-                            BackendError::InitializationFailed(details)
-                        }
-                        error => BackendError::ConnectionFailed {
-                            backend: "tidb".to_string(),
-                            details: error.to_string(),
-                        },
-                    })?;
-
-                // Check catalog version
-                engine.check_catalog_version().await.map_err(|e| match e {
-                    StorageError::CatalogVersionMismatch { expected, found } => {
-                        BackendError::CatalogVersionMismatch { expected, found }
-                    }
-                    _ => BackendError::InitializationFailed(e.to_string()),
-                })?;
-
-                engine.repair_native_ttl().await.map_err(|e| {
-                    BackendError::InitializationFailed(format!(
-                        "Failed to repair TiDB native TTL artifacts: {e}"
-                    ))
-                })?;
-
-                // Recover control plane transitions (ignore errors)
-                match engine.process_control_plane_transitions().await {
-                    Ok(ref t) if t.is_empty() => {}
-                    Ok(transitions) => {
-                        for (name, transition) in &transitions {
-                            tracing::info!("Recovered table '{name}': {transition}");
-                        }
-                    }
-                    Err(e) => tracing::error!("Failed to recover control plane transitions: {e}"),
-                }
-
-                // Get data database name for logging (before wrapping in Arc)
-                let data_db_name = engine
-                    .get_data_database_info()
-                    .await
-                    .unwrap_or_else(|_| "(query failed)".to_owned());
-
-                // Get references to fields we need before wrapping
-                let control_plane_notify = engine.control_plane_notify.clone();
-
-                // Wrap engine in Arc
-                let engine = Arc::new(engine);
-
-                // Create catalog store on the same independently sized catalog
-                // pool budget used by the engine's metadata/control-plane pool.
-                let catalog_pool_options = tidb_pool_options_with_resource_group(
-                    catalog_pool_size,
-                    catalog_pool_size.min(2),
-                    resource_group.as_deref(),
-                )
-                .map_err(|e| BackendError::InitializationFailed(e.to_string()))?;
-                let catalog_pool = catalog_pool_options
-                    .connect(&crate::config::sqlx_connection_string(&connection_string))
-                    .await
-                    .map_err(|e| BackendError::ConnectionFailed {
-                        backend: "tidb".to_string(),
-                        details: format!("Failed to create catalog pool: {e}"),
-                    })?;
-
-                // Load encryption key
-                let enc_key: Option<String> =
-                    sqlx::query_scalar("SELECT value FROM settings WHERE `key` = 'encryption_key'")
-                        .fetch_optional(&catalog_pool)
-                        .await
-                        .map_err(|e| BackendError::InitializationFailed(format!("Failed to fetch encryption key: {e}")))?;
-
-                let catalog_store = Arc::new(match enc_key {
-                    Some(k) => TidbCatalogStore::with_encryption_key(catalog_pool.clone(), k),
-                    None => return Err(BackendError::MissingEncryptionKey),
-                }) as Arc<dyn extenddb_storage::CatalogStore>;
-
-                // Create auth provider
-                let enc_key = extenddb_storage::CatalogStore::cached_encryption_key(&*catalog_store)
-                    .ok_or(BackendError::MissingEncryptionKey)?;
-                let cred_store: Arc<dyn CredentialStore> =
-                    Arc::new(DbCredentialStore::new(catalog_pool.clone(), enc_key));
-
-                // Create runtime hooks
-                let runtime_hooks = Arc::new(TidbRuntimeHooks {
-                    engine: engine.clone(),
-                    catalog_store_pool: catalog_pool.clone(),
-                    control_plane_notify,
-                    data_db_name,
-                    resource_group,
-                }) as Arc<dyn ServerRuntimeHooks>;
-
-                Ok(ServerComponents {
-                    engine,
-                    catalog_store,
-                    credential_store: cred_store,
-                    runtime_hooks: Some(runtime_hooks),
-                })
-            })
-        },
     }
 }

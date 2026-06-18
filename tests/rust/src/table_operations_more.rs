@@ -342,7 +342,10 @@ async fn create_table_gsi_provisioned_throughput_rejected_on_pay_per_request() {
         .send()
         .await;
 
-    assert!(err.is_err(), "Should reject GSI ProvisionedThroughput on PayPerRequest table");
+    assert!(
+        err.is_err(),
+        "Should reject GSI ProvisionedThroughput on PayPerRequest table"
+    );
     let err = err.unwrap_err();
     let code = err_code(&err);
     assert_eq!(code, Some("ValidationException"));

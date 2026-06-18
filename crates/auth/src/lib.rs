@@ -3,25 +3,25 @@
 
 //! Authentication and authorization for extenddb.
 //!
-//! Defines the `AuthProvider` trait for pluggable auth backends. Ships with
-//! `BuiltinAuthProvider` (full SigV4 verification with local credential store).
+//! Defines the `AuthProvider` boundary used by the server. The standard
+//! implementation is `BuiltinAuthProvider`, which performs full SigV4
+//! verification against the local credential store.
 
 pub mod cache_registry;
 pub mod credential_cache;
 pub mod policy;
 pub mod sigv4;
 
-pub use cache_registry::{AuthCacheRegistry, AuthzCacheInvalidator, TableKeyInfoCacheInvalidator};
+pub use cache_registry::{AuthCacheEpochBumper, AuthCacheRegistry, AuthzCacheInvalidator};
 pub use credential_cache::CachedCredentialStore;
 
 use axum::http::HeaderMap;
 use extenddb_core::error::DynamoDbError;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Auth provider trait — pluggable authentication.
+/// Auth provider trait used by the HTTP server.
 ///
 /// `BuiltinAuthProvider` performs SigV4 verification.
-/// Fix #11: Accept `&HeaderMap` directly to avoid per-request `HashMap` allocation.
 #[async_trait::async_trait]
 pub trait AuthProvider: Send + Sync {
     async fn authenticate(

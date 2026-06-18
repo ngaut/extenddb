@@ -15,12 +15,12 @@ Source: [AWS DynamoDB Service Quotas](https://docs.aws.amazon.com/amazondynamodb
 
 | Limit | DynamoDB Value | Status | Notes |
 |-------|---------------|--------|-------|
-| Per-table RCU (provisioned) | 40,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement |
-| Per-table WCU (provisioned) | 40,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement |
+| Per-table RCU (provisioned) | 40,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement; DynamoDB throughput errors are not synthesized |
+| Per-table WCU (provisioned) | 40,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement; DynamoDB throughput errors are not synthesized |
 | Per-table read request units (on-demand) | 40,000 | TiDB-native | ExtendDB delegates capacity to TiDB Resource Control |
 | Per-table write request units (on-demand) | 40,000 | TiDB-native | ExtendDB delegates capacity to TiDB Resource Control |
-| Per-account RCU (provisioned) | 80,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement |
-| Per-account WCU (provisioned) | 80,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement |
+| Per-account RCU (provisioned) | 80,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement; DynamoDB throughput errors are not synthesized |
+| Per-account WCU (provisioned) | 80,000 | TiDB-native | Use TiDB Resource Control/resource groups for distributed enforcement; DynamoDB throughput errors are not synthesized |
 | Minimum throughput per table/GSI | 1 RCU / 1 WCU | Enforced | `validate_provisioned_throughput` rejects < 1 |
 | Provisioned capacity decrease limit | 27 per day (4 + 1/hour) | Enforced | `apply_provisioned_throughput_update` tracks table decreases under catalog row locks and returns `NumberOfDecreasesToday` |
 | Reserved capacity per account | 1,000,000 units | N/A | ExtendDB has no reserved capacity concept |

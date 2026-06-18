@@ -9,8 +9,8 @@
 DynamoDB Streams provides change data capture for table writes. When streams
 are enabled, `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, and
 `TransactWriteItems` generate stream records with keys and the configured
-old/new image shape. TTL deletes are delegated to TiDB native TTL, so ExtendDB
-does not synthesize TTL service stream records.
+old/new image shape. TTL deletes route expired user items through the same
+transactional delete and stream capture path with a service `userIdentity`.
 
 ExtendDB serves DynamoDB and DynamoDB Streams on the same HTTPS endpoint. The
 wire target prefix distinguishes operations:
@@ -24,12 +24,12 @@ Both paths use mandatory SigV4 auth and the same account isolation model.
 
 ## 2. Storage Model
 
-Streams are backend-owned storage state, not frontend-local state.
+Streams are TiDB-owned storage state, not frontend-local state.
 
 - Stream records are written in the same storage transaction as the data
-  mutation when the backend can do so.
+  mutation through TiDB storage.
 - TiDB stages native stream records inside write transactions and finalizes
-  them through backend-native append tables and stream generations.
+  them through TiDB-native append tables and stream generations.
 - Stream metadata is tied to table metadata through stream labels, so disabled
   stream generations remain addressable during their retention window.
 
@@ -62,12 +62,13 @@ iterator.
 ## 4. Retention And Lifecycle
 
 DynamoDB-compatible stream retention is 24 hours by default. TiDB uses native
-generation metadata and backend cleanup paths so disabled generations and their
+generation metadata and TiDB cleanup paths so disabled generations and their
 records age out without frontend replay logic.
 
 Enabling or disabling streams updates table metadata and stream-generation
-metadata atomically with the backend's catalog path. The data plane reads the
-cached table key info to decide whether a write should capture stream data.
+metadata atomically with TiDB's catalog path. The data plane reads the
+request-provided table key info to decide whether a write should capture stream
+data.
 
 ## 5. Compatibility Boundaries
 

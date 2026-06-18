@@ -462,13 +462,6 @@ pub enum CacheInvalidateScope {
         #[arg(long)]
         user_names: String,
     },
-    /// Invalidate the TableKeyInfo cache for a single table.
-    TableKeyInfo {
-        #[arg(long)]
-        account_id: String,
-        #[arg(long)]
-        table_name: String,
-    },
     /// Invalidate the resource_tags cache for a resource ARN.
     ResourceTags {
         #[arg(long)]

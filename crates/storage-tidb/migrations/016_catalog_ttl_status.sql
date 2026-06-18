@@ -1,7 +1,7 @@
 -- Copyright 2026 ExtendDB contributors
 -- SPDX-License-Identifier: Apache-2.0
--- Make TiDB native TTL intent explicit so distributed repair can distinguish
--- enable, enabled, disable, and disabled states.
+-- Make DynamoDB TTL transition intent explicit so distributed repair can
+-- distinguish enable, enabled, disable, and disabled states.
 
 ALTER TABLE tables
     ADD COLUMN IF NOT EXISTS ttl_index_ready BOOLEAN NOT NULL DEFAULT FALSE;

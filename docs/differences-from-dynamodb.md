@@ -8,7 +8,7 @@ adaptation when switching between ExtendDB and the real service.
 
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
-| Storage backend | Proprietary distributed storage | TiDB |
+| Storage technology | Proprietary distributed storage | TiDB |
 | Global Tables | CreateGlobalTable, replication | Not implemented (returns UnknownOperationException) |
 | DAX (Accelerator) | In-memory caching layer | Not applicable |
 | PartiQL | ExecuteStatement, BatchExecuteStatement | Not implemented (returns UnknownOperationException) |
@@ -46,10 +46,10 @@ adaptation when switching between ExtendDB and the real service.
 
 | Area | DynamoDB | ExtendDB |
 |------|----------|------|
-| TTL attribute name | Any UTF-8 string (1–255 bytes) | Same 1–255 UTF-8 byte bound for ordinary names, including spaces, quotes, punctuation, and non-ASCII names. ExtendDB rejects the null character because backend SQL metadata cannot represent it reliably. |
-| TTL deletion | Background process, items deleted within 48 hours of expiry | TiDB native table TTL |
-| TTL transition states | `ENABLING`, `ENABLED`, `DISABLING`, `DISABLED` | Same API states. TiDB stores these states explicitly in the catalog so distributed startup repair can complete native TTL enable/disable DDL after a crash. |
-| TTL stream records | REMOVE events with `userIdentity: {type: "Service", principalId: "dynamodb.amazonaws.com"}` | ExtendDB delegates deletion to TiDB native TTL and does not synthesize TTL service REMOVE records |
+| TTL attribute name | Any UTF-8 string (1–255 bytes) | Same 1–255 UTF-8 byte bound for ordinary names, including spaces, quotes, punctuation, and non-ASCII names. ExtendDB rejects the null character because TiDB SQL metadata cannot represent it reliably. |
+| TTL deletion | Background process, items deleted within 48 hours of expiry | ExtendDB background worker deletes expired user items through TiDB transactions |
+| TTL transition states | `ENABLING`, `ENABLED`, `DISABLING`, `DISABLED` | Same API states. TiDB stores these states explicitly in the catalog so distributed startup repair can complete TTL lookup-artifact DDL and catalog transitions after a crash. |
+| TTL stream records | REMOVE events with `userIdentity: {type: "Service", principalId: "dynamodb.amazonaws.com"}` | Same. TTL expiry flows through ExtendDB's transactional delete path so streams see service-owned REMOVE records. |
 | TTL modification cooldown | Enforces a cooldown period between enable/disable changes ("Time to live has been modified multiple times within a fixed interval") | No cooldown — TTL can be enabled and disabled immediately. Intentional divergence for faster local development. |
 
 ## Tagging
@@ -71,7 +71,8 @@ adaptation when switching between ExtendDB and the real service.
 |------|----------|------|
 | Provisioned throughput | Token bucket per table/partition | ExtendDB delegates distributed capacity governance to TiDB Resource Control/resource groups; `storage.tidb.resource_group` can bind runtime sessions to the selected group |
 | On-demand capacity | Automatic scaling | ExtendDB delegates cluster capacity and scheduling to TiDB |
-| Throttling | Always on; throttles requests that exceed provisioned/burst capacity. No setting to disable | ExtendDB does not expose frontend throttling; use TiDB native Resource Control/resource groups |
+| Throttling | Always on; throttles requests that exceed provisioned/burst capacity. No setting to disable | ExtendDB does not implement process-local throughput admission or DynamoDB throughput-error translation; use TiDB native Resource Control/resource groups |
+| `ConsumedCapacity=INDEXES` | Includes table and per-index capacity maps | ExtendDB returns aggregate/table capacity only; TiDB native secondary indexes do not expose per-index request-unit attribution |
 
 ## Operations Not Implemented
 
@@ -93,10 +94,14 @@ ExtendDB exposes runtime settings that have no DynamoDB equivalent:
 | `log_level` | `info` | Runtime log level (trace, debug, info, warn, error) |
 | `sqlx_log_level` | `warn` | Separate log level for sqlx query traces |
 | `allow_credential_import` | `true` | Allow importing credentials via the management API |
+| `ttl_expiry_interval_ms` | `1000` | Delay between user-table TTL expiry worker polling cycles |
+| `ttl_expiry_batch_size` | `1000` | Maximum expired user items deleted per cleanup batch |
+| `ttl_expiry_table_scan_limit` | `1024` | Maximum TTL-enabled table candidates scanned per cleanup batch; the worker advances a table-id cursor and wraps around |
+| `ttl_expiry_drain_batches` | `8` | Maximum back-to-back cleanup batches per poll when each batch fills, allowing aggressive backlog drain under high write throughput |
 
 ## TiDB Native Backup/Restore
 
-The TiDB backend uses TiDB BR for backup data instead of copying items into
+TiDB storage uses TiDB BR for backup data instead of copying items into
 ExtendDB catalog tables. `CreateBackup` requires `[storage.tidb.backup]`
 configuration (`pd_endpoint` and `storage_uri`). Because the API call waits for
 BR to complete, ExtendDB publishes TiDB backup catalog metadata only after BR
@@ -109,7 +114,7 @@ BR restores physical TiDB tables to their recorded database/table identity.
 That means TiDB `RestoreTableFromBackup` is available only when the target TiDB
 cluster is empty or conflict-free for the backed physical table. ExtendDB does
 not emulate unsupported BR restore shapes by replaying item rows. The TiDB
-backend publishes the target table catalog only after BR restore, physical table
+storage layer publishes the target table catalog only after BR restore, physical table
 rename, and restored-table normalization complete; an interrupted restore does
 not leave a durable `CREATING` table entry.
 

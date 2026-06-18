@@ -1,16 +1,13 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! TiDB implementation of `Bootstrapper`.
+//! TiDB bootstrap operations.
 //!
 //! Handles `CREATE DATABASE`, schema migrations, user provisioning, and
 //! teardown using TiDB-specific DDL. Connection pools are created
 //! lazily as needed during the bootstrap sequence.
 
-use async_trait::async_trait;
-use extenddb_storage::bootstrapper::{
-    AdminBootstrapResult, BootstrapConfig, BootstrapOptions, Bootstrapper,
-};
+use extenddb_storage::bootstrap::{AdminBootstrapResult, BootstrapConfig, BootstrapOptions};
 use extenddb_storage::management_store::{OpError, OpResult};
 use sqlx::MySqlPool;
 use sqlx::mysql::MySqlConnectOptions;
@@ -20,7 +17,7 @@ use crate::CATALOG_VERSION;
 use crate::migrations;
 use crate::tidb_util::tidb_pool_options;
 
-/// Utilities for bootstrapping a TiDB backend store.
+/// Utilities for bootstrapping TiDB storage.
 ///
 /// Holds the bootstrap configuration and lazily-created connection pools.
 /// The admin pool connects without selecting a database and is created lazily
@@ -106,9 +103,8 @@ impl TidbBootstrapper {
     }
 }
 
-#[async_trait]
-impl Bootstrapper for TidbBootstrapper {
-    async fn ensure_app_user(&self) -> OpResult<()> {
+impl TidbBootstrapper {
+    pub async fn ensure_app_user(&self) -> OpResult<()> {
         let user = &self.config.app_user;
         let password = &self.config.app_password;
         let admin = self.admin_pool().await?;
@@ -158,11 +154,11 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(())
     }
 
-    async fn grant_app_role_to_admin(&self) -> OpResult<()> {
+    pub async fn grant_app_role_to_admin(&self) -> OpResult<()> {
         Ok(())
     }
 
-    async fn create_catalog_db(&self) -> OpResult<()> {
+    pub async fn create_catalog_db(&self) -> OpResult<()> {
         create_database(
             self.admin_pool().await?,
             &self.config.catalog_db,
@@ -171,7 +167,7 @@ impl Bootstrapper for TidbBootstrapper {
         .await
     }
 
-    async fn create_data_db(&self) -> OpResult<()> {
+    pub async fn create_data_db(&self) -> OpResult<()> {
         create_database(
             self.admin_pool().await?,
             &self.config.data_db,
@@ -180,17 +176,17 @@ impl Bootstrapper for TidbBootstrapper {
         .await
     }
 
-    async fn run_catalog_migrations(&self) -> OpResult<()> {
+    pub async fn run_catalog_migrations(&self) -> OpResult<()> {
         let pool = self.app_pool(&self.config.catalog_db).await?;
         migrations::run_catalog_migrations(&pool).await
     }
 
-    async fn run_data_migrations(&self) -> OpResult<()> {
+    pub async fn run_data_migrations(&self) -> OpResult<()> {
         let pool = self.app_pool(&self.config.data_db).await?;
         migrations::run_data_migrations(&pool).await
     }
 
-    async fn record_data_connection(&self) -> OpResult<()> {
+    pub async fn record_data_connection(&self) -> OpResult<()> {
         let pool = self.app_pool(&self.config.catalog_db).await?;
         let data_conn = self.app_connection_url(&self.config.data_db);
 
@@ -216,7 +212,7 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(())
     }
 
-    async fn bootstrap_encryption_key(&self) -> OpResult<()> {
+    pub async fn bootstrap_encryption_key(&self) -> OpResult<()> {
         use aes_gcm::KeyInit;
         use base64::Engine;
 
@@ -247,7 +243,7 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(())
     }
 
-    async fn bootstrap_default_account(&self) -> OpResult<()> {
+    pub async fn bootstrap_default_account(&self) -> OpResult<()> {
         let pool = self.app_pool(&self.config.catalog_db).await?;
         let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM accounts)")
             .fetch_one(&pool)
@@ -275,7 +271,7 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(())
     }
 
-    async fn bootstrap_admin_user(
+    pub async fn bootstrap_admin_user(
         &self,
         env_user: Option<&str>,
         env_password: Option<&str>,
@@ -330,12 +326,12 @@ impl Bootstrapper for TidbBootstrapper {
         })
     }
 
-    async fn is_catalog_initialized(&self) -> OpResult<bool> {
+    pub async fn is_catalog_initialized(&self) -> OpResult<bool> {
         let pool = self.app_pool(&self.config.catalog_db).await?;
         migrations::table_exists(&pool, "settings").await
     }
 
-    async fn list_table_names(&self) -> OpResult<Vec<String>> {
+    pub async fn list_table_names(&self) -> OpResult<Vec<String>> {
         let pool = match self.app_pool(&self.config.catalog_db).await {
             Ok(p) => p,
             Err(_) => return Ok(Vec::new()),
@@ -348,7 +344,7 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(tables.into_iter().map(|(n,)| n).collect())
     }
 
-    async fn get_data_db_name(&self) -> OpResult<Option<String>> {
+    pub async fn get_data_db_name(&self) -> OpResult<Option<String>> {
         let pool = match self.app_pool(&self.config.catalog_db).await {
             Ok(p) => p,
             Err(_) => return Ok(None),
@@ -362,7 +358,7 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(row.map(|(v,)| v))
     }
 
-    async fn drop_databases(&self, data_db: &str) -> OpResult<()> {
+    pub async fn drop_databases(&self, data_db: &str) -> OpResult<()> {
         let admin = self.admin_pool().await?;
         if !data_db.is_empty() {
             println!("--- Dropping data database '{data_db}'...");
@@ -384,7 +380,7 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(())
     }
 
-    async fn read_catalog_version(&self) -> OpResult<Option<String>> {
+    pub async fn read_catalog_version(&self) -> OpResult<Option<String>> {
         let pool = self.app_pool(&self.config.catalog_db).await?;
 
         if !migrations::table_exists(&pool, "settings").await? {
@@ -401,23 +397,19 @@ impl Bootstrapper for TidbBootstrapper {
         Ok(row.map(|(v,)| v))
     }
 
-    fn expected_catalog_version(&self) -> String {
+    pub fn expected_catalog_version(&self) -> String {
         CATALOG_VERSION.to_string()
     }
 
-    fn catalog_database_name(&self) -> String {
+    pub fn catalog_database_name(&self) -> String {
         self.config.catalog_db.clone()
     }
 
-    fn endpoint_info(&self) -> String {
+    pub fn endpoint_info(&self) -> String {
         format!("{}:{}", self.config.host, self.config.port)
     }
 
-    fn catalog_connection_url(&self) -> String {
-        self.app_connection_url(&self.config.catalog_db)
-    }
-
-    fn generate_backend_config_section(&self) -> String {
+    pub fn generate_storage_config_section(&self) -> String {
         format!(
             r#"[storage.tidb]
 connection_string = "{}"
@@ -580,13 +572,8 @@ impl TidbBootstrapper {
         let resolved_host = options.storage_host.unwrap_or(host);
         let resolved_port = options.storage_port.unwrap_or(port);
         let resolved_admin_user = options.admin_user.unwrap_or_else(|| "root".to_owned());
-        let resolved_catalog_db = options.catalog_db.unwrap_or(catalog_db_name);
-        let final_data_db = options.data_db.unwrap_or_else(|| {
-            resolved_catalog_db
-                .strip_suffix("_catalog")
-                .unwrap_or(&resolved_catalog_db)
-                .to_owned()
-        });
+        let (resolved_catalog_db, final_data_db) =
+            resolve_catalog_and_data_db(catalog_db_name, options.data_db, options.catalog_db);
         let resolved_app_user = options.app_user.unwrap_or(user);
         let resolved_app_password = options.app_password.unwrap_or(password);
 
@@ -605,6 +592,32 @@ impl TidbBootstrapper {
     }
 }
 
+fn data_db_from_catalog_db(catalog_db: &str) -> String {
+    catalog_db
+        .strip_suffix("_catalog")
+        .unwrap_or(catalog_db)
+        .to_owned()
+}
+
+fn resolve_catalog_and_data_db(
+    default_catalog_db: String,
+    cli_data_db: Option<String>,
+    cli_catalog_db: Option<String>,
+) -> (String, String) {
+    match (cli_data_db, cli_catalog_db) {
+        (Some(data_db), Some(catalog_db)) => (catalog_db, data_db),
+        (Some(data_db), None) => (format!("{data_db}_catalog"), data_db),
+        (None, Some(catalog_db)) => {
+            let data_db = data_db_from_catalog_db(&catalog_db);
+            (catalog_db, data_db)
+        }
+        (None, None) => {
+            let data_db = data_db_from_catalog_db(&default_catalog_db);
+            (default_catalog_db, data_db)
+        }
+    }
+}
+
 /// Check that a CLI arg, if provided, matches the config value.
 fn check_conflict<T: PartialEq + std::fmt::Display>(
     cli_val: Option<&T>,
@@ -620,4 +633,42 @@ fn check_conflict<T: PartialEq + std::fmt::Display>(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_catalog_and_data_db;
+
+    #[test]
+    fn explicit_data_db_drives_default_catalog_db() {
+        let (catalog, data) = resolve_catalog_and_data_db(
+            "extenddb_catalog".to_owned(),
+            Some("tenant_a".to_owned()),
+            None,
+        );
+
+        assert_eq!(catalog, "tenant_a_catalog");
+        assert_eq!(data, "tenant_a");
+    }
+
+    #[test]
+    fn explicit_catalog_and_data_are_preserved() {
+        let (catalog, data) = resolve_catalog_and_data_db(
+            "extenddb_catalog".to_owned(),
+            Some("tenant_data".to_owned()),
+            Some("tenant_meta".to_owned()),
+        );
+
+        assert_eq!(catalog, "tenant_meta");
+        assert_eq!(data, "tenant_data");
+    }
+
+    #[test]
+    fn default_data_db_still_derives_from_default_catalog_db() {
+        let (catalog, data) =
+            resolve_catalog_and_data_db("extenddb_catalog".to_owned(), None, None);
+
+        assert_eq!(catalog, "extenddb_catalog");
+        assert_eq!(data, "extenddb");
+    }
 }

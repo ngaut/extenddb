@@ -8,8 +8,7 @@ use crate::test_base::is_real_dynamodb;
 
 fn endpoint() -> String {
     std::env::var("EXTENDDB_TEST_ENDPOINT").unwrap_or_else(|_| {
-        let region =
-            std::env::var("AWS_DEFAULT_REGION").unwrap_or_else(|_| "us-east-1".into());
+        let region = std::env::var("AWS_DEFAULT_REGION").unwrap_or_else(|_| "us-east-1".into());
         format!("https://dynamodb.{region}.amazonaws.com")
     })
 }

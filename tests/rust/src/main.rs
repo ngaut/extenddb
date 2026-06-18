@@ -6,7 +6,9 @@
 //! Run via `cargo test` from `tests/rust/`.
 //! Requires a running extenddb instance with `EXTENDDB_TEST_ENDPOINT` and credentials set.
 
+#[cfg(test)]
 mod helpers;
+#[cfg(test)]
 mod test_base;
 
 #[cfg(test)]
@@ -18,7 +20,9 @@ mod batch_get_item;
 #[cfg(test)]
 mod batch_write_item;
 #[cfg(test)]
-mod capacity_throttling;
+mod cache_coherence;
+#[cfg(test)]
+mod capacity_accounting;
 #[cfg(test)]
 mod composite_keys;
 #[cfg(test)]

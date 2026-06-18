@@ -4,7 +4,7 @@
 //! Admin break-glass cache invalidation endpoint.
 //!
 //! `POST /management/cache/invalidate` — drop cached entries on demand
-//! from any of the auth/authz/table-key-info caches. Complements the
+//! from the auth/authz caches. Complements the
 //! automatic write-through hooks (see `docs/design/12-auth-authz-cache.md`
 //! §6 / §6.1) for cases the hooks miss: off-instance changes before TTL,
 //! bugs in the write-through plumbing, or test scenarios needing a
@@ -44,7 +44,6 @@ pub enum Scope {
     User,
     Role,
     GroupMembers,
-    TableKeyInfo,
     ResourceTags,
 }
 
@@ -62,7 +61,6 @@ impl Scope {
             Self::User => "user",
             Self::Role => "role",
             Self::GroupMembers => "group_members",
-            Self::TableKeyInfo => "table_key_info",
             Self::ResourceTags => "resource_tags",
         }
     }
@@ -80,7 +78,6 @@ pub struct Selectors {
     pub role_name: Option<String>,
     pub user_names: Option<Vec<String>>,
     pub access_key_id: Option<String>,
-    pub table_name: Option<String>,
     pub arn: Option<String>,
     /// For `scope: all`, callers must pass `confirm: true`. The CLI sets
     /// this when `--yes` is given; the console template uses a typed
@@ -151,8 +148,8 @@ pub async fn apply(
                         .to_owned(),
                 );
             }
-            auth_cache.invalidate_all_caches();
-            vec!["authz", "table_key_info", "credentials"]
+            auth_cache.invalidate_all_caches().await;
+            vec!["authz", "credentials"]
         }
         Scope::Account => {
             let account_id = require(&s.account_id, "account_id")?;
@@ -225,14 +222,6 @@ pub async fn apply(
                 .invalidate_users_group_policies(account_id, user_names)
                 .await;
             vec!["user_group_policies"]
-        }
-        Scope::TableKeyInfo => {
-            let account_id = require(&s.account_id, "account_id")?;
-            let table_name = require(&s.table_name, "table_name")?;
-            auth_cache
-                .invalidate_table_key_info(account_id, table_name)
-                .await;
-            vec!["table_key_info"]
         }
         Scope::ResourceTags => {
             let arn = require(&s.arn, "arn")?;

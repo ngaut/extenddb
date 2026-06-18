@@ -7,16 +7,10 @@
 //! Read CU: `ceil(item_size / 4KB)`, halved for eventually consistent reads.
 //! Write CU: `ceil(item_size / 1KB)`.
 
-use std::sync::atomic::AtomicU64;
-
 use extenddb_core::types::{
     ConsumedCapacity, Item, ItemCollectionMetrics, KeySchemaElement, ReturnConsumedCapacity,
     ReturnItemCollectionMetrics,
 };
-
-/// Global counter for requests that used approximate consumed capacity.
-/// Incremented by engine handlers; read and reset by the background warning task.
-pub static CAPACITY_REQUEST_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Build a `ConsumedCapacity` for a read operation with real CU, or `None` if not requested.
 #[must_use]
@@ -28,7 +22,6 @@ pub fn read_capacity(
     match rcc {
         ReturnConsumedCapacity::None => None,
         rcc => {
-            CAPACITY_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let indexes = rcc == ReturnConsumedCapacity::Indexes;
             Some(ConsumedCapacity::read(table_name, cu, indexes))
         }
@@ -45,7 +38,6 @@ pub fn write_capacity(
     match rcc {
         ReturnConsumedCapacity::None => None,
         rcc => {
-            CAPACITY_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let indexes = rcc == ReturnConsumedCapacity::Indexes;
             Some(ConsumedCapacity::write(table_name, cu, indexes))
         }
@@ -62,7 +54,6 @@ pub fn batch_read_capacity<'a>(
     match rcc {
         ReturnConsumedCapacity::None => None,
         rcc => {
-            CAPACITY_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let indexes = rcc == ReturnConsumedCapacity::Indexes;
             Some(
                 table_cus
@@ -83,7 +74,6 @@ pub fn batch_write_capacity<'a>(
     match rcc {
         ReturnConsumedCapacity::None => None,
         rcc => {
-            CAPACITY_REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let indexes = rcc == ReturnConsumedCapacity::Indexes;
             Some(
                 table_cus

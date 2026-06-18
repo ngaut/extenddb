@@ -1,5 +1,5 @@
 # RFCs
-``
+
 Substantial changes go through the RFC process before implementation.
 ADRs ([`docs/adr/`](../adr/)) record decisions; RFCs solicit input on
 proposals.
@@ -9,7 +9,7 @@ proposals.
 Open an RFC if your change touches any of:
 
 - DynamoDB wire-protocol response shapes or new API operations
-- The `Storage` trait or any storage backend contract
+- The `Storage` trait or storage contract
 - SigV4 authentication or the authorization model
 - On-disk format, schema, or migration semantics
 - Public CLI flags or the configuration file format

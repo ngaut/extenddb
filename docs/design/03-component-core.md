@@ -7,7 +7,7 @@
 
 ## 1. Purpose
 
-The `core` crate contains all DynamoDB-specific business logic that is independent of the storage backend, HTTP server, and async runtime. It is pure synchronous Rust — types, expression parsing/evaluation, validation, capacity calculation, and error types.
+The `core` crate contains all DynamoDB-specific business logic that is independent of TiDB, the HTTP server, and the async runtime. It is pure synchronous Rust — types, expression parsing/evaluation, validation, capacity calculation, and error types.
 
 **Dependencies:** serde, serde_json, thiserror, time, uuid, base64, bigdecimal (no tokio, no sqlx, no axum, no async runtime)
 
@@ -26,7 +26,6 @@ crates/core/src/
 ├── validation/               # Table/item/expression/request validation
 ├── provisioning.rs           # Provisioned-throughput metadata helpers
 ├── serde_helpers.rs          # Wire-format serialization helpers
-├── throttle.rs               # Capacity token-bucket primitives
 └── version.rs                # Catalog version type
 ```
 
@@ -249,7 +248,7 @@ pub enum UpdateAction {
 
 The evaluator takes an AST and an `EvalContext` (the current item + attribute name/value maps) and returns a boolean (for conditions/filters) or a modified item (for updates).
 
-> **Important:** `ConditionExpression` evaluation for write operations (PutItem, UpdateItem, DeleteItem) must happen inside the storage backend's transaction, not in the core handler after a round-trip. The core crate provides the `evaluate_condition` function, but the storage backend calls it within its transaction after `SELECT FOR UPDATE` to prevent TOCTOU races. `FilterExpression` evaluation (for Query/Scan) happens in the core handler after items are returned from storage — this is safe because filters are read-only.
+> **Important:** `ConditionExpression` evaluation for write operations (PutItem, UpdateItem, DeleteItem) must happen inside the TiDB transaction, not in the core handler after a round-trip. The core crate provides the `evaluate_condition` function, but TiDB storage calls it within its transaction after `SELECT FOR UPDATE` to prevent TOCTOU races. `FilterExpression` evaluation (for Query/Scan) happens in the core handler after items are returned from storage — this is safe because filters are read-only.
 
 ```rust
 pub struct EvalContext<'a> {
@@ -291,7 +290,7 @@ The `engine` crate depends on `core` (for types, expressions, validation) and `s
 
 ### 5.1 UpdateItem Transaction Flow
 
-For `UpdateItem`, the storage backend must execute the following steps inside a single transaction to prevent TOCTOU races:
+For `UpdateItem`, TiDB storage must execute the following steps inside a single transaction to prevent TOCTOU races:
 
 ```
 1. BEGIN transaction
@@ -303,13 +302,13 @@ For `UpdateItem`, the storage backend must execute the following steps inside a 
 5. Call core::expression::apply_update(actions, &mut item, ctx) → modified item
 6. Validate modified item (size limits, key attributes unchanged)
 7. INSERT/UPDATE the modified item
-8. If GSIs exist: update backend-specific secondary-index state
+8. If GSIs exist: let TiDB maintain generated-column native secondary indexes
 9. If stream_capture provided: construct full StreamRecord (with old_image/new_image
    based on stream_view_type), INSERT stream record (within same transaction)
 10. COMMIT
 ```
 
-Both `evaluate_condition` and `apply_update` are sync functions from `core` — they operate on in-memory data and are called by the storage backend inside its transaction.
+Both `evaluate_condition` and `apply_update` are sync functions from `core` — they operate on in-memory data and are called by TiDB storage inside its transaction.
 
 ## 6. Validation
 

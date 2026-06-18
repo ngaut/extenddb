@@ -130,6 +130,14 @@ pub(crate) const CATALOG_MIGRATIONS: &[(&str, &str)] = &[
         "029_drop_role_permissions_boundary_column.sql",
         include_str!("../../storage-tidb/migrations/029_drop_role_permissions_boundary_column.sql"),
     ),
+    (
+        "030_auth_cache_epoch.sql",
+        include_str!("../../storage-tidb/migrations/030_auth_cache_epoch.sql"),
+    ),
+    (
+        "031_ttl_table_work_index.sql",
+        include_str!("../../storage-tidb/migrations/031_ttl_table_work_index.sql"),
+    ),
 ];
 
 const DATA_SCHEMA_MIGRATION: &str =
@@ -655,7 +663,7 @@ fn incompatible_dynamodb_hash_key_column_error(
     OpError::Internal(format!(
         "TiDB data table {table_name}.{column_name} uses incompatible{generated} \
          hash-key column type {column_type}; recreate the table with raw \
-         {DYNAMODB_HASH_KEY_COLUMN_TYPE} hash-key columns before using this backend version"
+         {DYNAMODB_HASH_KEY_COLUMN_TYPE} hash-key columns before using this TiDB storage version"
     ))
 }
 
@@ -1143,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_catalog_migration_shards_login_attempt_row_ids() {
+    fn catalog_migration_shards_login_attempt_row_ids() {
         let (filename, sql) = CATALOG_MIGRATIONS
             .iter()
             .find(|(filename, _)| *filename == "019_shard_login_attempt_row_ids.sql")
@@ -1273,14 +1281,41 @@ mod tests {
     }
 
     #[test]
-    fn latest_catalog_migration_drops_role_permissions_boundary_column() {
-        let (filename, sql) = CATALOG_MIGRATIONS.last().expect("latest migration");
+    fn catalog_migration_drops_role_permissions_boundary_column() {
+        let (filename, sql) = CATALOG_MIGRATIONS
+            .iter()
+            .find(|(filename, _)| *filename == "029_drop_role_permissions_boundary_column.sql")
+            .expect("role permissions boundary migration");
 
         assert_eq!(*filename, "029_drop_role_permissions_boundary_column.sql");
         assert!(
             sql.contains("ALTER TABLE iam_roles DROP COLUMN IF EXISTS permissions_boundary_arn")
         );
         assert!(sql.contains("0.0.29"));
+    }
+
+    #[test]
+    fn catalog_migration_adds_auth_cache_epoch() {
+        let (filename, sql) = CATALOG_MIGRATIONS
+            .iter()
+            .find(|(filename, _)| *filename == "030_auth_cache_epoch.sql")
+            .expect("auth cache epoch migration");
+
+        assert_eq!(*filename, "030_auth_cache_epoch.sql");
+        assert!(sql.contains(
+            "INSERT IGNORE INTO settings (`key`, value) VALUES ('auth_cache_epoch', '0')"
+        ));
+        assert!(sql.contains("0.0.30"));
+    }
+
+    #[test]
+    fn latest_catalog_migration_adds_ttl_table_work_index() {
+        let (filename, sql) = CATALOG_MIGRATIONS.last().expect("latest migration");
+
+        assert_eq!(*filename, "031_ttl_table_work_index.sql");
+        assert!(sql.contains("CREATE INDEX IF NOT EXISTS idx_tables_ttl_work"));
+        assert!(sql.contains("ON tables (ttl_status, table_id, table_status)"));
+        assert!(sql.contains("0.0.31"));
     }
 
     #[test]
@@ -1341,9 +1376,14 @@ mod tests {
             "INSERT IGNORE INTO settings (`key`, value) VALUES ('catalog_version', '{}')",
             CATALOG_VERSION
         )));
+        assert!(sql.contains(
+            "INSERT IGNORE INTO settings (`key`, value) VALUES ('auth_cache_epoch', '0')"
+        ));
         assert!(!sql.contains("idx_tables_pending_transition"));
         assert!(sql.contains("idx_tables_control_plane_work"));
         assert!(sql.contains("ON tables (status_transition_at, table_name, table_status)"));
+        assert!(sql.contains("idx_tables_ttl_work"));
+        assert!(sql.contains("ON tables (ttl_status, table_id, table_status)"));
         assert!(sql.contains("CREATE TABLE IF NOT EXISTS stream_generations"));
         assert!(sql.contains("TTL = `expires_at` + INTERVAL 0 SECOND"));
         assert!(!sql.contains("permissions_boundary_arn"));
@@ -1408,7 +1448,7 @@ mod tests {
                 .contains("ALTER TABLE stream_records ATTRIBUTES 'merge_option=deny'")
         );
         assert!(DATA_SCHEMA_MIGRATION.contains("shard_id VARCHAR(128) NOT NULL"));
-        assert!(DATA_SCHEMA_MIGRATION.contains("TiDB MVCC commit_ts"));
+        assert!(DATA_SCHEMA_MIGRATION.contains("TiDB transaction TSO"));
         assert!(DATA_SCHEMA_MIGRATION.contains("commit_sequence_number VARCHAR(64)"));
     }
 

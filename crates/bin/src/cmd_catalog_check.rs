@@ -1,14 +1,14 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `extenddb catalog-check` — backend-owned catalog/data integrity checks.
+//! `extenddb catalog-check` — TiDB-owned catalog/data integrity checks.
 //!
 //! The CLI handles config loading, server-liveness protection, and reporting.
-//! Physical integrity rules live in backend crates because storage-native
-//! artifacts have backend-specific invariants.
+//! Physical integrity rules live in the TiDB crate because storage-native
+//! artifacts have TiDB-specific invariants.
 
 use clap::Args;
-use extenddb_storage::operations::{CatalogCheckFix, CatalogCheckIssue, CatalogCheckReport};
+use extenddb_storage::catalog_check::{CatalogCheckFix, CatalogCheckIssue, CatalogCheckReport};
 
 use crate::config;
 
@@ -32,7 +32,6 @@ pub async fn run(args: CatalogCheckArgs) -> anyhow::Result<()> {
         );
     }
     let app_config = config::load(&args.config)?;
-    let backend = &app_config.storage._backend;
     let port = app_config.server.port;
     let run_dir = config::expand_tilde(&app_config.server.run_dir);
 
@@ -48,15 +47,13 @@ pub async fn run(args: CatalogCheckArgs) -> anyhow::Result<()> {
     }
 
     println!("=== extenddb catalog-check ===");
-    println!("Backend: {backend}");
+    println!("Storage: TiDB");
     println!();
 
-    let operations = extenddb_storage::operations::get_operations_engine(backend)
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-    let report = operations
-        .catalog_check(app_config.storage.connection_config(), args.fix)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    let report =
+        extenddb_storage_tidb::catalog_check(app_config.storage.connection_config(), args.fix)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
     print_report(&report, args.fix);
 
     let errors = report.issue_count();

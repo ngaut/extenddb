@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::future::join_all;
 use serde_json::Value;
 
 use extenddb_core::error::DynamoDbError;
@@ -121,7 +120,7 @@ pub async fn handle_transact_get_items(
         .await
         .map_err(storage_err_to_dynamo)?;
 
-    // Capacity metering: RCU rounded per item, then summed (M-1).
+    // Capacity metering rounds RCU per item, then sums.
     // Capacity metering: TransactGetItems costs 2 RCU per item (transactions
     // double the read cost). Missing items still cost 2 RCU.
     let mut per_table_rcu: std::collections::HashMap<String, f64> =
@@ -240,19 +239,7 @@ async fn transact_get_table_infos(
     table_names.sort();
     table_names.dedup();
 
-    let results = join_all(table_names.iter().map(|table_name| async move {
-        (
-            table_name.clone(),
-            ctx.table_key_info(table_name)
-                .await
-                .map_err(storage_err_to_dynamo),
-        )
-    }))
-    .await;
-
-    let mut table_infos = HashMap::with_capacity(results.len());
-    for (table_name, result) in results {
-        table_infos.insert(table_name, result?);
-    }
-    Ok(table_infos)
+    ctx.table_key_infos(&table_names)
+        .await
+        .map_err(storage_err_to_dynamo)
 }

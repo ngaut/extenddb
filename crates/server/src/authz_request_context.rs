@@ -23,7 +23,6 @@ use extenddb_core::types::{
     TransactWriteItem, TransactWriteItemsInput, UpdateItemInput,
 };
 use extenddb_storage::error::StorageError;
-use futures::future::join_all;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -496,7 +495,7 @@ fn auth_metadata_error_to_dynamo(error: StorageError) -> DynamoDbError {
             tracing::error!(
                 internal_error = %message,
                 context = "authorization metadata lookup",
-                "storage backend unavailable"
+                "storage unavailable"
             );
             DynamoDbError::ServiceUnavailable("Service is temporarily unavailable".to_owned())
         }
@@ -507,7 +506,7 @@ fn auth_metadata_error_to_dynamo(error: StorageError) -> DynamoDbError {
             tracing::error!(
                 internal_error = %message,
                 context = "authorization metadata lookup",
-                "storage backend unavailable"
+                "storage unavailable"
             );
             DynamoDbError::ServiceUnavailable("Service is temporarily unavailable".to_owned())
         }
@@ -554,21 +553,20 @@ async fn key_infos_for_tables(
     table_names.sort();
     table_names.dedup();
 
-    let results = join_all(table_names.into_iter().map(|table_name| async move {
-        let key_info = optional_auth_metadata(
-            state
-                .table_key_info_cache
-                .get(account_id, &table_name)
-                .await,
-        )?;
-        Ok::<_, DynamoDbError>((table_name, key_info))
-    }))
-    .await;
+    let infos = optional_auth_metadata(
+        state
+            .storage
+            .table_key_infos(account_id, &table_names)
+            .await,
+    )?
+    .unwrap_or_default();
 
-    let mut key_infos = HashMap::with_capacity(results.len());
-    for result in results {
-        let (table_name, key_info) = result?;
-        key_infos.insert(table_name, key_info);
+    let mut key_infos = HashMap::with_capacity(table_names.len());
+    for table_name in table_names {
+        key_infos.insert(table_name, None);
+    }
+    for info in infos {
+        key_infos.insert(info.table_name.clone(), Some(info));
     }
     Ok(key_infos)
 }

@@ -19,13 +19,7 @@ use crate::tidb_util::{current_tidb_transaction_tso, current_tidb_tso};
 const STREAM_SEQUENCE_TSO_WIDTH: usize = 21;
 const STREAM_SEQUENCE_ORDINAL_WIDTH: usize = 6;
 const STREAM_SEQUENCE_MAX_ORDINAL: u32 = 999_999;
-const STREAM_COMMIT_SEQUENCE_SQL: &str = "CONCAT(\
-    LPAD(CAST(JSON_UNQUOTE(JSON_EXTRACT(\
-        TIDB_MVCC_INFO(TIDB_ENCODE_RECORD_KEY(DATABASE(), 'stream_records', record_id)), \
-        '$[0].mvcc.info.writes[0].commit_ts'\
-    )) AS CHAR), 21, '0'), \
-    RIGHT(sequence_number, 6)\
-)";
+const STREAM_COMMIT_SEQUENCE_SQL: &str = "sequence_number";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PendingStreamRecord {
@@ -35,7 +29,7 @@ pub(crate) struct PendingStreamRecord {
 }
 
 #[derive(Default)]
-pub(super) struct StreamSequenceAllocator {
+pub(crate) struct StreamSequenceAllocator {
     transaction_tso: Option<u64>,
     next_ordinal: u32,
     pending_records: Vec<PendingStreamRecord>,
@@ -69,15 +63,7 @@ impl StreamSequenceAllocator {
         Ok(format_tso_sequence_number(transaction_tso, ordinal))
     }
 
-    fn push_pending(&mut self, record_id: i64, shard_id: String, storage_sequence_number: String) {
-        self.pending_records.push(PendingStreamRecord {
-            record_id,
-            shard_id,
-            storage_sequence_number,
-        });
-    }
-
-    pub(super) fn pending_records(&self) -> &[PendingStreamRecord] {
+    pub(crate) fn pending_records(&self) -> &[PendingStreamRecord] {
         &self.pending_records
     }
 }
@@ -236,7 +222,7 @@ pub(super) async fn delete_item_in_tx(
 /// Returns `true` only when TiDB actually removed a row, which is enough to
 /// decide whether a stream `REMOVE` record is needed for views that do not
 /// expose old images.
-pub(super) async fn delete_item_without_old_item_in_tx(
+pub(crate) async fn delete_item_without_old_item_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     key_info: &TableKeyInfo,
     key: &Item,
@@ -301,7 +287,7 @@ pub(super) async fn delete_item_without_old_item_in_tx(
 ///
 /// For Delete operations where the item didn't exist, no stream record is written.
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn write_stream_record_in_tx(
+pub(crate) async fn write_stream_record_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     sequence_allocator: &mut StreamSequenceAllocator,
     key_info: &TableKeyInfo,
@@ -388,9 +374,9 @@ pub(super) async fn write_stream_record_for_event_in_tx(
     })?;
     let shard_id = stream_shard_id_for_partition_key(&key_info.table_id, stream_label, &pk);
 
-    // Use transaction TSO only as the clustered storage key while the row is
-    // committed atomically with the item write. After commit, TiDB MVCC
-    // commit_ts becomes the user-visible stream sequence base.
+    // Use the TiDB transaction TSO plus an in-transaction ordinal. The row is
+    // invisible until commit, so this is already a stable user-visible stream
+    // sequence without requiring privileged MVCC inspection after commit.
     let seq = sequence_allocator.next_in_tx(tx).await?;
 
     let record = StreamRecord {
@@ -420,10 +406,12 @@ pub(super) async fn write_stream_record_for_event_in_tx(
     let record_json =
         serde_json::to_value(&record).map_err(|e| StorageError::Internal(e.to_string()))?;
 
-    let result = sqlx::query(
-        "INSERT INTO stream_records (sequence_number, shard_id, table_id, event_name, record_data) \
-         VALUES (?, ?, ?, ?, ?)",
+    sqlx::query(
+        "INSERT INTO stream_records \
+         (sequence_number, commit_sequence_number, shard_id, table_id, event_name, record_data) \
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
+    .bind(&record.dynamodb.sequence_number)
     .bind(&record.dynamodb.sequence_number)
     .bind(&shard_id)
     .bind(&key_info.table_id)
@@ -432,15 +420,6 @@ pub(super) async fn write_stream_record_for_event_in_tx(
     .execute(&mut **tx)
     .await
     .map_err(|e| StorageError::Internal(e.to_string()))?;
-
-    let record_id = result.last_insert_id();
-    let record_id = i64::try_from(record_id).map_err(|_| {
-        StorageError::Internal(format!(
-            "TiDB AUTO_RANDOM stream record id exceeds signed range: {record_id}"
-        ))
-    })?;
-
-    sequence_allocator.push_pending(record_id, shard_id, record.dynamodb.sequence_number);
 
     Ok(())
 }
@@ -752,11 +731,12 @@ mod tests {
     }
 
     #[test]
-    fn autorandom_stream_sequence_uses_record_handle_mvcc_key() {
+    fn stream_finalization_uses_stored_sequence_without_privileged_mvcc() {
         let sql = STREAM_COMMIT_SEQUENCE_SQL;
 
-        assert!(sql.contains("TIDB_ENCODE_RECORD_KEY(DATABASE(), 'stream_records', record_id)"));
-        assert!(!sql.contains("shard_id, sequence_number"));
+        assert_eq!(sql, "sequence_number");
+        assert!(!sql.contains("TIDB_MVCC_INFO"));
+        assert!(!sql.contains("TIDB_ENCODE_RECORD_KEY"));
     }
 
     #[test]

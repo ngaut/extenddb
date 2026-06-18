@@ -125,7 +125,7 @@ def get_extenddb_version() -> str:
 
 
 def get_catalog_version() -> str:
-    """Extract CATALOG_VERSION from the default TiDB backend."""
+    """Extract CATALOG_VERSION from TiDB storage."""
     lib_rs = ROOT / "crates" / "storage-tidb" / "src" / "lib.rs"
     text = lib_rs.read_text()
     m = re.search(r"CatalogVersion::new\((\d+),\s*(\d+),\s*(\d+)\)", text)

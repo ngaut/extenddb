@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `put_item` and `get_item` implementations for the `TiDB` backend.
+//! `put_item` and `get_item` implementations for `TiDB` storage.
 
 use extenddb_core::expression::{Expr, ExpressionMaps};
 use extenddb_core::types::{Item, StreamEventName, TableKeyInfo};

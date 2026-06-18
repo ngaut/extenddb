@@ -78,37 +78,6 @@ config_for_target() {
     fi
 }
 
-storage_backend_from_config() {
-    local config="$1"
-    local backend="${EXTENDDB_STORAGE_BACKEND:-${EXTENDDB__STORAGE__BACKEND:-}}"
-
-    if [[ -z "$backend" && -f "$config" ]]; then
-        backend=$(
-            awk '
-                /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
-                /^[[:space:]]*\[/ {
-                    section = $0
-                    gsub(/^[[:space:]]*\[/, "", section)
-                    gsub(/\][[:space:]]*$/, "", section)
-                    next
-                }
-                section == "storage" && /^[[:space:]]*backend[[:space:]]*=/ {
-                    line = $0
-                    sub(/^[^=]*=[[:space:]]*/, "", line)
-                    sub(/[[:space:]]*#.*/, "", line)
-                    gsub(/"/, "", line)
-                    gsub(/[[:space:]]/, "", line)
-                    print tolower(line)
-                    exit
-                }
-            ' "$config"
-        )
-    fi
-
-    backend="$(printf '%s' "$backend" | tr '[:upper:]' '[:lower:]')"
-    echo "${backend:-tidb}"
-}
-
 usage() {
     cat <<'EOF'
 Usage: devtools/run-tests --extenddb|--real-dynamodb SUITES [OPTIONS]
@@ -246,10 +215,14 @@ if $NEEDS_INTEGRATION; then
     esac
 fi
 
+RUST_INTEGRATION_SELF_PROVISIONING=false
+if [[ "$TARGET" == "extenddb" ]] && $RUN_RUST_INTEGRATION && ! $RUN_PYTEST && ! $RUN_EXTERNAL && ! $RUN_COMPREHENSIVE && ! $RUN_CATALOG_CHECK && [[ "$FILTER" == *cache_coherence* ]]; then
+    RUST_INTEGRATION_SELF_PROVISIONING=true
+fi
+
 CONFIG_FOR_TARGET="$(config_for_target)"
 if [[ "$TARGET" != "real-dynamodb" ]]; then
     export EXTENDDB_CONFIG="$CONFIG_FOR_TARGET"
-    export EXTENDDB_STORAGE_BACKEND="$(storage_backend_from_config "$CONFIG_FOR_TARGET")"
 fi
 
 # --- Echo target info (D3: always, before any tests) ---
@@ -260,9 +233,13 @@ if [[ "$TARGET" == "real-dynamodb" ]]; then
     echo "  AWS_ACCESS_KEY_ID  = ${AWS_ACCESS_KEY_ID:-(from ~/.aws)}"
 else
     echo "  EXTENDDB_TEST_ENDPOINT = ${EXTENDDB_TEST_ENDPOINT:-}"
-    echo "  AWS_ACCESS_KEY_ID  = ${AWS_ACCESS_KEY_ID:-(will be provisioned)}"
+    if $RUST_INTEGRATION_SELF_PROVISIONING; then
+        echo "  AWS_ACCESS_KEY_ID  = ${AWS_ACCESS_KEY_ID:-(not needed for Rust cache_coherence)}"
+    else
+        echo "  AWS_ACCESS_KEY_ID  = ${AWS_ACCESS_KEY_ID:-(will be provisioned)}"
+    fi
     echo "  config             = $EXTENDDB_CONFIG"
-    echo "  storage backend    = $EXTENDDB_STORAGE_BACKEND"
+    echo "  storage            = TiDB"
 fi
 echo ""
 
@@ -299,19 +276,24 @@ if $NEEDS_INTEGRATION && [[ "$TARGET" != "real-dynamodb" ]]; then
     fi
 
     # Provision test credentials
-    echo "=== Provisioning test credentials ==="
     export EXTENDDB_ADMIN_USER="${EXTENDDB_ADMIN_USER:-admin}"
-    CRED_FILE=$(mktemp)
-    if python3 devtools/provision-test-credentials > "$CRED_FILE"; then
-        eval "$(cat "$CRED_FILE")"
-        echo "  ✓ Credentials provisioned: AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+    if $RUST_INTEGRATION_SELF_PROVISIONING; then
+        echo "=== Provisioning test credentials ==="
+        echo "  ✓ skipped: Rust cache_coherence self-provisions through the management API"
     else
-        echo "  ✗ Credential provisioning failed"
-        cat "$CRED_FILE"
+        echo "=== Provisioning test credentials ==="
+        CRED_FILE=$(mktemp)
+        if python3 devtools/provision-test-credentials > "$CRED_FILE"; then
+            eval "$(cat "$CRED_FILE")"
+            echo "  ✓ Credentials provisioned: AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+        else
+            echo "  ✗ Credential provisioning failed"
+            cat "$CRED_FILE"
+            rm -f "$CRED_FILE"
+            exit 1
+        fi
         rm -f "$CRED_FILE"
-        exit 1
     fi
-    rm -f "$CRED_FILE"
 
     # Post-provisioning: validate key prefix matches target
     local_prefix=""
@@ -319,7 +301,7 @@ if $NEEDS_INTEGRATION && [[ "$TARGET" != "real-dynamodb" ]]; then
         extenddb) local_prefix="EXTENDDB" ;;
     esac
     aki="${AWS_ACCESS_KEY_ID:-}"
-    if [[ -n "$local_prefix" && -n "$aki" ]]; then
+    if ! $RUST_INTEGRATION_SELF_PROVISIONING && [[ -n "$local_prefix" && -n "$aki" ]]; then
         if [[ "$aki" != AKIA${local_prefix}* && "$aki" != ASIA${local_prefix}* ]]; then
             echo "error: --${TARGET} requires AWS_ACCESS_KEY_ID to start with AKIA${local_prefix} or ASIA${local_prefix}."
             echo "  Got: $aki"
@@ -329,7 +311,7 @@ if $NEEDS_INTEGRATION && [[ "$TARGET" != "real-dynamodb" ]]; then
     fi
 
     # JVM truststore for HTTPS Maven/Gradle suites.
-    if [[ "$EXTENDDB_TEST_ENDPOINT" == https://* ]]; then
+    if ! $RUST_INTEGRATION_SELF_PROVISIONING && [[ "$EXTENDDB_TEST_ENDPOINT" == https://* ]]; then
         CERT_PATH="$HOME/.${TARGET}/tls/cert.pem"
         if [[ -f "$CERT_PATH" ]] && command -v keytool >/dev/null 2>&1; then
             TRUSTSTORE=$(mktemp -u).jks
@@ -348,15 +330,13 @@ if $NEEDS_INTEGRATION && [[ "$TARGET" != "real-dynamodb" ]]; then
     fi
     CONFIG_FOR_SETTINGS="$CONFIG_FOR_TARGET"
     if [[ -x "$BINARY" && -f "$CONFIG_FOR_SETTINGS" ]]; then
-        if [[ "$EXTENDDB_STORAGE_BACKEND" != "tidb" ]]; then
-            echo "  ✗ unsupported storage backend: $EXTENDDB_STORAGE_BACKEND (ExtendDB is TiDB-only)"
-            exit 1
-        fi
-        echo "  ✓ TiDB native online DDL, indexes, TTL, reads, and Resource Control own backend behavior"
+        echo "  ✓ TiDB native online DDL, indexes, TTL, reads, and Resource Control own storage behavior"
     fi
 
     # Import/export paths
-    if [[ -f "$CONFIG_FOR_SETTINGS" ]]; then
+    if $RUST_INTEGRATION_SELF_PROVISIONING; then
+        echo "  ✓ Import/export config skipped for Rust cache_coherence"
+    elif [[ -f "$CONFIG_FOR_SETTINGS" ]]; then
         NEED_RESTART=false
         if ! grep -qE '^\[import\]' "$CONFIG_FOR_SETTINGS" || \
            ! grep -A1 '^\[import\]' "$CONFIG_FOR_SETTINGS" | grep -q '/tmp'; then
@@ -577,7 +557,11 @@ fi
 # --- Test table cleanup (runs after integration suites, pass or fail) ---
 if $NEEDS_INTEGRATION; then
     echo "=== Post-test table cleanup ==="
-    python3 "$SCRIPT_DIR/cleanup-test-tables" || echo "  ⚠ cleanup script returned non-zero (non-fatal)"
+    if $RUST_INTEGRATION_SELF_PROVISIONING; then
+        echo "  ✓ skipped: Rust cache_coherence deletes its own temporary accounts"
+    else
+        python3 "$SCRIPT_DIR/cleanup-test-tables" || echo "  ⚠ cleanup script returned non-zero (non-fatal)"
+    fi
     echo ""
 fi
 

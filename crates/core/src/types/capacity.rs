@@ -16,7 +16,10 @@ pub enum ReturnConsumedCapacity {
     None,
     /// Only aggregate table-level capacity.
     Total,
-    /// Table-level plus per-index breakdown.
+    /// Aggregate plus table breakdown.
+    ///
+    /// TiDB-native secondary indexes do not expose per-index request-unit
+    /// attribution, so ExtendDB leaves per-index maps empty.
     Indexes,
 }
 
@@ -68,13 +71,21 @@ pub struct ConsumedCapacity {
     /// Capacity consumed by the base table (present when `INDEXES` is requested).
     #[serde(rename = "Table", skip_serializing_if = "Option::is_none")]
     pub table: Option<Capacity>,
-    /// Per-index capacity breakdown (present when `INDEXES` is requested).
+    /// Per-GSI capacity breakdown.
+    ///
+    /// Reserved for DynamoDB wire compatibility. The TiDB backend currently
+    /// leaves this empty because TiDB does not expose per-index request-unit
+    /// attribution for native secondary indexes.
     #[serde(
         rename = "GlobalSecondaryIndexes",
         skip_serializing_if = "Option::is_none"
     )]
     pub global_secondary_indexes: Option<HashMap<String, Capacity>>,
-    /// Per-LSI capacity breakdown (present when `INDEXES` is requested).
+    /// Per-LSI capacity breakdown.
+    ///
+    /// Reserved for DynamoDB wire compatibility. The TiDB backend currently
+    /// leaves this empty because TiDB does not expose per-index request-unit
+    /// attribution for native secondary indexes.
     #[serde(
         rename = "LocalSecondaryIndexes",
         skip_serializing_if = "Option::is_none"

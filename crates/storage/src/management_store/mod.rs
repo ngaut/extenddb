@@ -4,7 +4,7 @@
 //! Trait definitions for non-DynamoDB storage subsystems.
 //!
 //! These traits abstract the IAM management, settings, metrics, rate limiting,
-//! admin user, and authorization storage. The TiDB backend implements these
+//! admin user, and authorization storage. TiDB storage implements these
 //! traits alongside the existing `TableEngine`, `DataEngine`,
 //! `MetadataEngine`, and `StreamEngine` traits in `lib.rs`.
 //!
@@ -46,7 +46,7 @@ pub type RoleListEntry = (
 
 // ── Settings store ─────────────────────────────────────────────────────
 
-/// Runtime settings storage (e.g. `control_plane_delay_seconds`, `log_level`).
+/// Runtime settings storage (for example, `log_level` and `sqlx_log_level`).
 pub trait SettingsStore: Send + Sync {
     /// Get a single setting value. Returns `None` if the key does not exist.
     fn get_setting(&self, key: &str) -> BoxFuture<'_, OpResult<Option<String>>>;
@@ -57,8 +57,19 @@ pub trait SettingsStore: Send + Sync {
     /// List all settings as `(key, value)` pairs, ordered by key.
     fn list_settings(&self) -> BoxFuture<'_, OpResult<Vec<(String, String)>>>;
 
+    /// Read the distributed auth-cache epoch.
+    ///
+    /// Frontends poll this setting and flush local auth/authz caches when it
+    /// changes, so IAM mutations on one frontend become visible on every other
+    /// frontend without waiting for cache TTL expiry.
+    fn auth_cache_epoch(&self) -> BoxFuture<'_, OpResult<u64>>;
+
+    /// Atomically increment the distributed auth-cache epoch and return the
+    /// current value after the bump.
+    fn bump_auth_cache_epoch(&self) -> BoxFuture<'_, OpResult<u64>>;
+
     /// Get the cached encryption key if available. Returns `None` by default;
-    /// backends that cache the key at startup override this.
+    /// stores that cache the key at startup override this.
     fn cached_encryption_key(&self) -> Option<String> {
         None
     }

@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Native `BatchWriteItem` support for the `TiDB` backend.
+//! Native `BatchWriteItem` support for `TiDB` storage.
 
 use extenddb_core::types::{Item, ScalarAttributeType, StreamEventName, TableKeyInfo};
 use extenddb_storage::error::StorageError;

@@ -115,6 +115,22 @@ impl TableEngine for TidbEngine {
         Box::pin(async move { self.fetch_table_write_info(&account_id, &table_name).await })
     }
 
+    fn table_key_infos<'a>(
+        &'a self,
+        account_id: &'a str,
+        table_names: &'a [String],
+    ) -> BoxFuture<'a, Result<Vec<TableKeyInfo>, StorageError>> {
+        Box::pin(async move { self.fetch_table_key_infos(account_id, table_names).await })
+    }
+
+    fn table_write_infos<'a>(
+        &'a self,
+        account_id: &'a str,
+        table_names: &'a [String],
+    ) -> BoxFuture<'a, Result<Vec<TableKeyInfo>, StorageError>> {
+        Box::pin(async move { self.fetch_table_write_infos(account_id, table_names).await })
+    }
+
     fn table_read_info(
         &self,
         account_id: &str,

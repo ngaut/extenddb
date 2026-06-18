@@ -1,7 +1,7 @@
 // Copyright 2026 ExtendDB contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! `delete_item` implementation for the `TiDB` backend.
+//! `delete_item` implementation for `TiDB` storage.
 
 use extenddb_core::expression::{Expr, ExpressionMaps};
 use extenddb_core::types::{Item, StreamEventName, TableKeyInfo};
